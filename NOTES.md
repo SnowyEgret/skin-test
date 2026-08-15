@@ -1,0 +1,282 @@
+# skin-test — state of play
+
+Offsetting a **substrate** (an assembly of solid parts) outward by a fixed distance to
+produce **skins**: open surfaces that cover a chosen subset of faces.
+
+Last worked: 2026-08-14.
+
+`CLAUDE.md` has the commands, the architecture and its invariants, and the tolerance
+rationale. This file is the running log: what the geometry currently is, what was tried
+and rejected, and what is still open.
+
+## Why this exists
+
+A ground-up replacement for the student-house skinning module, which had grown too large
+and brittle to refactor. This substrate is **synthetic**: four clipped parts assembled to
+pose every condition where facade meets roof, which is where the old module struggled.
+Parts 1, 2 and 4 are wall panels, part 3 is a roof. Their end and bottom faces are section
+cuts and are never skinned; the real substrate has none. Prefer the general rule over the
+one that fits these four parts.
+
+## Where we got to (end of 2026-08-14)
+
+The geometry is right and the rules are now **derived rather than listed**. `build.py`
+holds no plane coordinates and no part-index sets: exterior/interior comes off each
+wall's own top slope, climb-or-flange from which face the roof runs into, wall-vs-roof
+from `substrate.classify`, and cladding system from `part.metadata`. 19 tests, ~1 s.
+
+Agreed order for what remains, from the migration discussion:
+
+1. ~~non-degenerate seeds~~ — done
+2. ~~exterior/interior derived from the slope~~ — done
+3. ~~per-face offsets in `planar_offset`~~ — **deleted, not deferred.** There is never
+   more than one offset in a cladding mesh: a different allowance is a different skin,
+   which `SKINS` already supports. A scalar `distance` is correct, not a limitation.
+4. **YAML + JSON Schema parameters, next.** The knobs have settled, so the schema can be
+   written once. STRICT-COMPLETE (student-house `bim/phase1/parameters.py`): the file
+   specifies *every* knob, no built-in defaults, a what-if is a full diffable copy.
+   That forbids the defaults now hiding in `_skin_from`'s `spec.get("out", 0.0)` and in
+   `classify(margin=0.05, aspect=0.85)`. Five distances, `FALL`, `UPSTAND`, and
+   `classify`'s two thresholds are the current set.
+
+## Layout
+
+| file | what |
+|---|---|
+| `skin/offset.py` | the solver. `planar_offset` (one constrained system), `skin_over` (union → offset → select faces → skirt → flange), `Faces` (what a predicate may ask) |
+| `skin/measure.py` | `clearance` (skin to substrate), `separation` (skin to skin) |
+| `skin/substrate.py` | `polyhedron` (from vertex/face lists), `prism`, `cube`, `l_block`, `u_block`, and `classify` / `horizontality` (WALL vs ROOF from shape) |
+| `skin/export.py` | OBJ writer that emits n-gons, not triangles |
+| `build.py` | the substrate as transcribed data, the `SKINS` spec, and the build |
+| `blender/display.py` | the only file that imports bpy. Loads, never authors |
+| `tests/test_offset.py` | the test suite |
+
+## The two skins
+
+Defined by the `SKINS` tuple in `build.py`. Adding a third is a dict, not a code path.
+
+| | Membrane (20 mm) | Cladding (85 mm) |
+|---|---|---|
+| part 3's roof | covers | — |
+| interior (step) walls | climbs | skirts 225 mm |
+| sloped tops of parts 1 & 2 | covers | covers |
+| exterior walls | skirts 145 mm | climbs |
+| part 4's exterior face | stops against it; every panel turns out 310 mm | climbs |
+| part 4's sloped top | bare (membrane stops on the wall) | wraps over |
+| part 4's interior face | — | skirts 225 mm |
+| part 4's ends and bottom | bare | bare |
+
+Measured separation 64.215 mm — the offsets differ by 65 mm, less the opposing slope
+deviations. Checked on every build. It dropped to 20.4 mm while part 4's exterior face
+was skinned by the membrane alone; giving the cladding the same face restored it.
+
+**Skin distances are non-degenerate seeds** (student-house CLAUDE.md, hard rule): no two
+of the five are equal and none is an integer multiple of another. `Membrane.drop` and
+`Cladding.distance` were both 0.100 until 2026-08-14, which meant a bug swapping a skirt
+depth for an offset distance produced identical geometry — invisible to the tests and to
+the eye. Keep them distinct when tuning.
+
+**Exterior and interior are named off the slope on the part's own top**: the wall under
+the high edge is the exterior face, the wall under the low edge is the interior. Parts 1
+and 2 already followed this; part 4 does too, which puts its *exterior* face at
+y = -7.673195, facing back into the substrate. Ends and bottoms are neither.
+
+**That rule is now derived rather than listed** (2026-08-14). `uphill` reads each wall's
+fall off its own top and `wall_faces` sorts its vertical faces by it, which retired
+`STEP_X`, `STEP_Y`, `FACE_4_EXTERIOR`, `FACE_4_INTERIOR`, `NOT_OUTSIDE`, `_part_face` and
+every `owner`-index set — all of them this rule worked out by hand. Verified by comparing
+all five face masks against the hand-fitted predicates: identical, face for face.
+
+Two things the naive form got wrong, both now handled:
+
+- **A facade wraps a corner.** Part 1's +X face is an *end* by its own fall, but it is
+  coplanar with and joins part 2's +X facade, so it is a return of that facade and is
+  grown into the exterior set. Its -X face has no such neighbour and stays bare.
+- **Climb-or-flange is per wall, not per face.** Only one triangle of a step wall shares
+  an edge with the roof, but the membrane climbs the whole face. Touching faces elect the
+  wall; the wall then carries all of its own faces. Testing per face skinned half a step
+  wall and left the flange plane too small to miter the skirt against — which read as a
+  0.0001 mm clearance.
+
+The skirt's drop is measured from the **substrate** edge, not from the skin surface —
+the pre-existing convention, pinned by a test. The turn-out is different: it is measured
+from the **skin** edge it springs off, because it is defined on the skin's own panels
+rather than on a substrate feature. All four turns are therefore exactly 310 mm.
+
+**The turn-out rule.** Where the membrane stops against part 4's exterior face, every
+panel that ends there turns out 310 mm along the axis it faces, so the whole termination
+folds outward as one collar rather than the roof alone climbing:
+
+| panel | normal | turns |
+|---|---|---|
+| part 3's roof | (-0.078, 0, 0.997) | +Z |
+| part 2's top | (-0.119, 0, 0.993) | +Z |
+| the step-wall climb | (-1, 0, 0) | -X |
+| the exterior-wall skirt | (+1, 0, 0) | +X |
+
+The direction is the **dominant axis** of the panel's own normal, not the normal
+verbatim: that keeps a turn off a shallow slope exactly vertical, matching the priority
+the solver gives level planes.
+
+Those four panels form one chain around the wall, and their outer edges are **mitered**
+where they meet — the intersection of the two outer lines, exactly as `planar_offset`
+treats a corner, but in the wall's plane. The miter cuts both ways: two of the joints
+were gaps that it extends, one was an overlap that it trims.
+
+| joint | miter (x, z) | before |
+|---|---|---|
+| roof \| step wall | (0.420966, 1.751187) | panels overlapped ~276 mm |
+| step wall \| top | (0.420966, 2.236081) | open corner |
+| top \| skirt | (1.893496, 2.411995) | open corner |
+
+**Cladding system is authored, not derived** (2026-08-14). Geometry says which faces
+are facades; the *part* says which system clads them, via `part.metadata["facade"]` and
+`Faces.tagged`. This is a different kind of fact from the plane coordinates that were
+just retired: those encoded a rule the slope could derive, whereas no property of a
+wall's shape implies brick. The student-house has a brick street front at X = 0 and a
+rainscreen headhouse set well back — **both facing -X** — so neither a compass direction
+nor "the frontmost plane" can separate them. Material can, and it is authored anyway.
+
+`check_facades` refuses any facade claimed by no declared system, which is the failure
+that would otherwise be silent: an unstamped part drops out of every skin and leaves a
+bare wall, or a whole system emits as an empty mesh. The sample cannot pose the brick
+condition at all — it has no -X-facing facade — so a purpose-built two-facade fixture in
+the tests carries it.
+
+## Why the offset is over-determined
+
+A sloped top over a concave plan puts **four planes at a corner**, and four offset planes
+are not generally concurrent. Worse, the two ends of a hip impose contradictory demands:
+
+    0.9929·o₁ − 0.9961·o₂ = ∓0.003148
+
+Offsetting the walls moves the hip's endpoints in plan, but two planes parallel to their
+originals can only intersect along a line parallel to the original hip. **No choice of
+offset distances resolves it** — hence the constraint priority in `CLAUDE.md`, which
+lands the error on the sloped planes.
+
+Solved as one KKT system. A nullspace basis was tried first and leaked ~2 mm of
+constraint violation through near-null directions; KKT holds them to ~1e-16. `RIDGE`
+keeps it non-singular where the soft equations underdetermine a vertex.
+
+## Hard-won facts
+
+- **manifold3d computes in float32.** Every vertex it returns survives a float32
+  round-trip bit-for-bit, so a union's faces sit up to ~5e-7 m off their true planes at
+  metre-scale coordinates. Don't set tolerances tighter than the boolean kernel can
+  deliver — an earlier 1 nm threshold produced a bogus self-intersection warning.
+- **Booleans do not repair a self-intersecting offset.** `trimesh.boolean.union([bad])`
+  is a no-op: the mesh is topologically manifold, only *geometrically* self-intersecting,
+  so manifold3d has nothing to resolve. `clearance()` detects the condition; nothing
+  fixes it yet.
+- **Nothing in the stack ships a planar offset.** Not trimesh, not manifold3d (it has
+  `minkowski_sum`/`minkowski_difference` — rounded, not mitered). The solver is ours.
+- **`trimesh.util.concatenate` + `closest_point` crashes** when parts share a face —
+  coincident duplicate triangles produce ties. `clearance` queries per part instead.
+- **`clearance()` cannot see a skin buried inside a part.** `closest_point` returns an
+  unsigned distance, so a panel sitting *within* a solid still reports its distance to the
+  nearest surface — a healthy-looking gap. An upstand extension that ran back into part 2
+  read 19.4399 mm with no warning; only `part.contains()` caught it. Anything that
+  generates geometry sideways rather than outward must test containment itself.
+- **`separation()` cannot prove two skins are apart.** It samples vertices and face
+  centroids only, so a surface can pass clean through another between samples and still
+  read positive. An earlier out-of-plane version of the membrane's return pierced the
+  cladding in 12 places while `separation()` reported a reassuring 4.126 mm — the fault
+  was found by segment-vs-triangle, not by this. Its docstring always said it was an
+  upper bound; treat
+  it as a smoke alarm, not a proof. A real test is segment-vs-triangle (Möller-Trumbore)
+  over both edge sets — see the open item.
+- **Bounds cannot tell a wall from a roof.** A 10 × 0.3 × 3 wall rotated 45° in plan has
+  AABB extents `[7.283, 7.283, 3.0]` — thinnest vertically, so a bounds test calls it a
+  slab. Face normals and the *oriented* box both still read it correctly.
+  `substrate.classify` uses both and raises when they disagree. Measured horizontality:
+  parts 1/2/4 (walls) 0.311 / 0.260 / 0.098, part 3 (roof) 0.602. The roof's margin is
+  the thinnest of the set, and only because it is a section-cut fragment — 1.456 m of cut
+  face is posing as slab edge. A real slab of that plan at 300 mm scores about 0.94, so
+  the sample understates the separation.
+- **A "top" is a face that points up, not one that is off-axis.** `_upward` tests the
+  sign of `n_z`. Testing `abs(n_z)` asks a different question and is wrong twice: a
+  sloped soffit reads as a top, a flat top is missed. This substrate can prove neither —
+  every top here slopes, every underside is exactly horizontal — so a purpose-built part
+  in the tests carries it. Both cases are ordinary in the student-house.
+- **`polyhedron()` cannot re-wind an inconsistent face list here.** Its docstring
+  promises any winding works, but `trimesh.repair.fix_winding` needs **networkx, which is
+  not installed**. It returns early when `is_winding_consistent`, so the four transcribed
+  parts never reach it and the gap stays hidden. The first inconsistently-wound part
+  raises `ModuleNotFoundError`. Either install networkx or wind transcribed lists
+  outward — this will bite when parts start arriving from IFC.
+- **Occlusion needs no code.** Where one part stands against another's face, that region
+  is interior to the union and never reaches a skin, so a face predicate that selects a
+  whole plane still yields only the exposed remainder. Part 4's exterior face is selected
+  in full and comes back trimmed to the profile above parts 2 and 3's tops, plus the
+  full-height +X overhang. Do not write occluder lists.
+- **Reflex corners miter exactly.** Three planes always meet at a point; an outward
+  offset at a concave corner is sharp and correct. The real failure mode is a concave
+  *pocket* narrower than 2× the offset, where opposing walls cross.
+- **trimesh is triangles-only.** `skin/export.py` regroups coplanar triangles via
+  `mesh.facets` and writes boundary loops, so Blender shows quads. Collinear vertices
+  on a loop are kept deliberately: dropping one that a neighbouring facet corners on
+  would leave a T-junction.
+- **Face indices quoted in conversation** ("face 0 of 1") have so far matched between
+  Blender's polygon order and the transcribed lists — but check both before acting on
+  one.
+- **A near-identity rotation can split one coordinate across the snap grid.** Part 4
+  ("Cube") carries a ~4.4e-8 skew in `matrix_world`, which spread what is a single local
+  coordinate over 2.4e-7 m of world values — straddling a 1 µm boundary, so rounding the
+  world values independently gave 2.321662 and 2.321661 for the same plane. Read
+  `matrix_world` and the local `co` when transcribed coordinates disagree in the last
+  digit; cluster before snapping rather than rounding each vertex on its own.
+
+## Open items
+
+- **The brick skin is not built.** Everything it needs exists — `BRICK`,
+  `facades_of(faces, BRICK)`, `CLADDING_SYSTEMS` — but no part in the sample is stamped
+  brick, so adding the `SKINS` dict would emit an empty mesh and test nothing. It needs a
+  substrate that poses the condition: two walls whose tops fall +X, one at the front
+  plane and one set well back, only the front one brick. The two-facade fixture in
+  `tests/test_offset.py` is that condition in miniature.
+- **Which skin caps a brick wall?** `cladding_faces` takes *every* wall top regardless of
+  facade system, so a brick wall would get a rainscreen coping. Plausible — brick with a
+  metal cap is normal — but it is an assumption, not a rule Duncan gave.
+- **A flat-topped wall panel cannot name its own facade.** `uphill` raises on one, by
+  design. In the student-house a flat top always has another panel stacked on it, so the
+  top is occluded and only parapets are exposed — but the *panel* still needs its
+  exterior/interior for cladding, and must inherit the direction from the parapet above
+  it. That propagation is unbuilt; the error message says so.
+- **The substrate reader for the student-house side does not exist yet.**
+  `current_substrate()` returns transcribed literals. Its replacement must pull evaluated
+  meshes in world space off the Bonsai IFC objects, snap to 1 µm **clustering before
+  rounding** (see the `Cube` rotation-skew entry — real IFC parts nearly all carry
+  placement transforms), and write nothing back. Emission is already safe: `build()`
+  emits skins only unless `emit_substrate=True`, and `display.reload()` skips substrate
+  entries unless asked.
+- **No exact skin-vs-skin intersection test exists.** `separation()` missed a genuine
+  12-place intersection during the turn-out work. Worth promoting the Möller-Trumbore
+  check from the scratch script into `skin/measure.py` as `intersects(a, b)` and asserting
+  it in the build.
+- **The cladding overhangs part 4's bare ends by the offset**, reaching x = -3.169769 and
+  x = 2.421661 where the wrapped top mitres with the unskinned end planes. Same family as
+  the z = −0.1 item below — every skin edge does this against an unskinned neighbour.
+- **Cladding hangs to z = −0.1**, below the substrate's base, because the exterior wall
+  faces mitre with the unskinned underside. Consistent with how every skin edge behaves,
+  but Duncan may want it trimmed to z = 0. **Awaiting his call.**
+- **Part 3's top is not planar** — three corners at z = 1.456084 and one at 1.156084,
+  300 mm out of plane, held as two triangles. Skinned faithfully as two planes. He
+  described it as "prismatic with a sloped top", so this may be unintended.
+- **Sparse solver.** The dense KKT is roughly cubic: 0.195 s at 128 verts, 2.33 s at
+  256, 19.65 s at 512. Substrate expected to reach hundreds, not thousands. Plan:
+  build rows as COO triplets rather than dense `np.zeros(3V)` vectors (that alone is
+  O(V²)), assemble with `scipy.sparse.bmat`, solve with `spsolve`, and regularise the
+  zero block with `−δI` so redundant constraint rows don't make it singular. ~20–30
+  lines. Verify against the residual, don't assume.
+- **Shapely refactor is on hold.** The idea was that vertical faces are exactly a 2D
+  mitred buffer (`buffer(d, join_style="mitre")` — verified sharp, exact). It fails
+  because the substrate is not a single extruded polygon but a **2.5D stepped solid**:
+  the step walls above part 3's roof are vertical faces *interior* to the plan, which
+  a buffer of the outer outline cannot see. Would need per-height-region buffering plus
+  reconciliation, and the over-determination reappears at the reconciliation.
+- **Self-intersection repair** is unsolved. Detection works; the likely construction is
+  offsetting each face into its own half-space solid and unioning those.
+- **T-vertices** appear where a skirt stops beside a fully-covered neighbouring face.
+  Currently none, since the two walls that caused it were excluded — but it returns if
+  a skirt again abuts a full-height face.
