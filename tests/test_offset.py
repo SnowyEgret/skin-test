@@ -2,9 +2,29 @@ import numpy as np
 import pytest
 import trimesh
 
-from skin import clearance, planar_offset, skin_over, substrate, write_obj
+from skin import clearance, parameters, planar_offset, skin_over, substrate, write_obj
 
 D = 0.1
+
+# The authored parameters, read once. Nothing under test defaults them any more,
+# so a test that exercises a rule has to bind them the way `build.skins()` does.
+PARAMS = parameters.load_validated()
+FALL = PARAMS["fall"]
+
+
+def _faces(parts, body=None):
+    """`Faces` over the union of `parts`, with the authored classifier bound."""
+    from build import classifier
+    from skin.offset import Faces, _owner
+
+    body = trimesh.boolean.union(parts) if body is None else body
+    return Faces(body, parts, _owner(body, parts), classifier(PARAMS))
+
+
+def _classify(part):
+    from skin.substrate import classify
+
+    return classify(part, **PARAMS["classify"])
 
 
 def test_convex_offset_is_exact():
@@ -96,12 +116,12 @@ def test_classify_reads_wall_or_roof_from_geometry_alone():
     recover that from geometry alone so the rules survive a substrate with
     hundreds of parts.
     """
-    from skin.substrate import ROOF, WALL, classify, horizontality
+    from skin.substrate import ROOF, WALL, horizontality
 
     from build import current_substrate
 
     parts = current_substrate()
-    assert [classify(p) for p in parts] == [WALL, WALL, ROOF, WALL]
+    assert [_classify(p) for p in parts] == [WALL, WALL, ROOF, WALL]
     # the roof is the only part with more horizontal surface than vertical
     assert [horizontality(p) > 0.5 for p in parts] == [False, False, True, False]
 
@@ -113,14 +133,14 @@ def test_classify_survives_a_wall_that_does_not_run_along_an_axis():
     until the height is the smallest of the three, so a bounds test calls it a
     slab. Face normals and the oriented box both still see a wall.
     """
-    from skin.substrate import WALL, classify
+    from skin.substrate import WALL
 
     wall = trimesh.creation.box(extents=(10.0, 0.3, 3.0))
     wall.apply_transform(
         trimesh.transformations.rotation_matrix(np.pi / 4, [0, 0, 1])
     )
     assert int(np.argmin(wall.extents)) == 2  # AABB thinks it is thin vertically
-    assert classify(wall) == WALL  # and is wrong
+    assert _classify(wall) == WALL  # and is wrong
 
 
 def test_classify_raises_rather_than_guessing():
@@ -129,14 +149,14 @@ def test_classify_raises_rather_than_guessing():
     Silently mislabelling one part inside a large model is the failure mode that
     made the old module hard to debug.
     """
-    from skin.substrate import AmbiguousPart, classify
+    from skin.substrate import AmbiguousPart
 
     for label, solid in (
         ("cube", trimesh.creation.box(extents=(1.0, 1.0, 1.0))),
         ("column", trimesh.creation.box(extents=(0.4, 0.4, 3.0))),
     ):
         with pytest.raises(AmbiguousPart) as raised:
-            classify(solid)
+            _classify(solid)
         assert "thin direction" in str(raised.value), label
         assert "extents" in str(raised.value), label
 
@@ -149,12 +169,11 @@ def test_exterior_and_interior_are_read_off_each_wall_s_own_slope():
     plane or a part index.
     """
     from build import current_substrate, uphill, wall_faces
-    from skin.offset import Faces, _owner
 
     parts = current_substrate()
     body = trimesh.boolean.union(parts)
-    faces = Faces(body, parts, _owner(body, parts))
-    exterior, interior = wall_faces(faces)
+    faces = _faces(parts, body)
+    exterior, interior = wall_faces(faces, FALL)
 
     # each wall's top falls toward the interior, so uphill points at the facade
     assert np.allclose(uphill(parts[1]), [1.0, 0.0], atol=1e-3)  # part 2 -> +X
@@ -213,7 +232,6 @@ def test_a_facade_s_cladding_system_comes_from_the_part_not_its_position():
     property of a wall's shape implies brick.
     """
     from build import BRICK, FACADE, RAINSCREEN, check_facades, facades_of, uphill
-    from skin.offset import Faces, _owner
 
     front = _facing_wall(0.0, 0.4, 0.0, 6.0, 3.0, 2.99)  # brick, at x = 0
     headhouse = _facing_wall(3.0, 3.4, 1.0, 4.0, 4.0, 3.99)  # rainscreen, set back
@@ -222,14 +240,14 @@ def test_a_facade_s_cladding_system_comes_from_the_part_not_its_position():
 
     parts = [front, headhouse]
     body = trimesh.boolean.union(parts)
-    faces = Faces(body, parts, _owner(body, parts))
+    faces = _faces(parts, body)
 
     # both walls face the same way, so direction cannot tell them apart
     assert np.allclose(uphill(front), [-1.0, 0.0], atol=1e-3)
     assert np.allclose(uphill(headhouse), [-1.0, 0.0], atol=1e-3)
 
-    brick = facades_of(faces, BRICK)
-    rainscreen = facades_of(faces, RAINSCREEN)
+    brick = facades_of(faces, BRICK, FALL)
+    rainscreen = facades_of(faces, RAINSCREEN, FALL)
     assert brick.any() and rainscreen.any()
     assert not (brick & rainscreen).any()
 
@@ -238,22 +256,20 @@ def test_a_facade_s_cladding_system_comes_from_the_part_not_its_position():
     assert np.allclose(body.vertices[body.faces[rainscreen]][:, :, 0], 3.0, atol=1e-6)
 
     # together they claim every facade, and the check agrees
-    check_facades(faces, systems=(BRICK, RAINSCREEN))
+    check_facades(faces, FALL, systems=(BRICK, RAINSCREEN))
 
 
 def test_an_unclaimed_facade_is_refused():
     """A facade no cladding system claims is a silently bare wall. Fail instead."""
     from build import BRICK, FACADE, RAINSCREEN, check_facades
-    from skin.offset import Faces, _owner
 
     front = _facing_wall(0.0, 0.4, 0.0, 6.0, 3.0, 2.99)
     front.metadata[FACADE] = BRICK  # but only rainscreen is declared below
     parts = [front]
-    body = trimesh.boolean.union(parts)
-    faces = Faces(body, parts, _owner(body, parts))
+    faces = _faces(parts)
 
     with pytest.raises(ValueError, match="claimed by no cladding system"):
-        check_facades(faces, systems=(RAINSCREEN,))
+        check_facades(faces, FALL, systems=(RAINSCREEN,))
 
 
 def test_build_does_not_emit_the_substrate_unless_asked():
@@ -264,14 +280,14 @@ def test_build_does_not_emit_the_substrate_unless_asked():
     scene beside the original. Opting in has to be deliberate.
     """
     import build as build_module
-    from build import SKINS, build, current_substrate
+    from build import build, current_substrate, skins
 
     parts = current_substrate()
     before = [(p.vertices.copy(), p.faces.copy()) for p in parts]
 
     manifest = build(parts)
     roles = {e["name"]: e["role"] for e in manifest}
-    assert set(roles) == {s["name"] for s in SKINS}
+    assert set(roles) == {s["name"] for s in skins()}
     assert set(roles.values()) == {"skin"}
     assert not list(build_module.BUILD_DIR.glob("Substrate_*.obj"))
 
@@ -322,21 +338,19 @@ def test_sloped_substrate_keeps_axis_planes_and_horizontals_exact():
 def test_partial_skin_is_an_open_surface_with_constraints_intact():
     import trimesh
 
-    from build import SKINS, current_substrate
+    from build import current_substrate, skins
 
     parts = current_substrate()
     body = trimesh.boolean.union(parts)
-    membrane = SKINS[0]
-    surface = skin_over(parts, D, keep=membrane["keep"])
+    membrane = skins()[0]
+    surface = skin_over(parts, D, keep=membrane["keep"],
+                        classify=membrane["classify"])
 
     assert not surface.is_watertight  # a surface, not a solid
     border = trimesh.grouping.group_rows(surface.edges_sorted, require_count=1)
     assert len(border) and len(set(surface.edges_sorted[border].ravel())) == len(border)
 
-    from skin.offset import Faces, _owner
-
-    owner = _owner(body, parts)
-    kept = membrane["keep"](Faces(body, parts, owner))
+    kept = membrane["keep"](_faces(parts, body))
     assert kept.sum() < len(kept)  # something is left bare
     assert surface.faces.shape[0] == kept.sum()
 
@@ -352,27 +366,28 @@ def test_partial_skin_is_an_open_surface_with_constraints_intact():
 def test_skirt_hangs_the_right_walls_to_the_right_depth():
     import trimesh
 
-    from build import SKINS, current_substrate, wall_faces
-    from skin.offset import Faces, _owner
+    from build import current_substrate, skins, wall_faces
+    from skin.offset import _owner
 
-    membrane = SKINS[0]
+    membrane = skins()[0]
     drop = membrane["drop"]
     parts = current_substrate()
     body = trimesh.boolean.union(parts)
     owner = _owner(body, parts)
-    faces = Faces(body, parts, owner)
+    faces = _faces(parts, body)
     walls = membrane["turn_down"](faces)
 
     # the membrane skirts down the walls it carried over, and only those: parts 1
     # and 2, the two whose interior face the roof runs into
     assert set(owner[walls].tolist()) <= {0, 1}
     # every skirted face is a facade -- never an end, never an interior face
-    exterior, interior = wall_faces(faces)
+    exterior, interior = wall_faces(faces, FALL)
     assert (walls & exterior).sum() == walls.sum()
     assert not (walls & interior).any()
 
     surface = skin_over(parts, D, keep=membrane["keep"],
-                        turn_down=membrane["turn_down"], drop=drop)
+                        turn_down=membrane["turn_down"], drop=drop,
+                        classify=membrane["classify"])
     tops = {round(float(z), 6) for z in body.vertices[:, 2] if z > 1.5}
     hems = {round(float(z), 6) for z in surface.vertices[:, 2]} & {
         round(t - drop, 6) for t in tops
@@ -388,16 +403,12 @@ def test_skirt_hangs_the_right_walls_to_the_right_depth():
 def test_cladding_and_membrane_cover_complementary_walls_and_never_meet():
     import trimesh
 
-    from build import SKINS, current_substrate, separation_check
+    from build import current_substrate, separation_check, skins
 
     parts = current_substrate()
-    body = trimesh.boolean.union(parts)
-    from skin.offset import Faces, _owner
+    faces = _faces(parts)
 
-    owner = _owner(body, parts)
-    faces = Faces(body, parts, owner)
-
-    membrane, cladding = SKINS
+    membrane, cladding = skins()
     # the membrane climbs the interior walls and skirts the exterior; the
     # cladding does the reverse
     assert (membrane["keep"](faces) & cladding["turn_down"](faces)).any()

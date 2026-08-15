@@ -45,8 +45,14 @@ def _thinnest_side(part: trimesh.Trimesh):
     return extents[order], abs(float(axis[2] / np.linalg.norm(axis)))
 
 
-def classify(part: trimesh.Trimesh, margin: float = 0.05, aspect: float = 0.85) -> str:
+def classify(part: trimesh.Trimesh, margin: float, aspect: float) -> str:
     """WALL or ROOF, decided from the part's own geometry. Never guesses.
+
+    `margin` and `aspect` are required, not defaulted: they are authored
+    parameters (`classify` in `skin-parameters.yaml`), and a default pair here
+    would be exactly the hidden default the parameter layer exists to abolish —
+    the thresholds that decide whether a part raises or silently skins would then
+    have two sources. `build.classifier()` binds them once.
 
     Two independent measures must agree: `horizontality`, and whether the
     thinnest side of the oriented bounding box points up — a slab is thin

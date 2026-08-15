@@ -1,0 +1,51 @@
+# skin-test parameters — every tunable number in the rig, in one file.
+#
+# STRICT-COMPLETE (student-house `bim/phase1/parameters.py`, Duncan 2026-06-11):
+# this file specifies EVERY knob. There are no built-in defaults and no partial
+# overlay, because a hidden default is exactly what masks a bug. A what-if is a
+# full, diffable copy of this file, not an override of it. There is no CLI flag:
+# build one with `build(params=parameters.load_validated("what-if.yaml"))`.
+# A dict passed that way is schema-validated too — see `parameters.resolve`.
+#
+# All lengths are METRES. Nothing here is converted at the load seam — the
+# student-house converts metres to u/v grid fractions there, and this rig has no
+# fractional coordinates to convert to, so a number reaching the geometry is the
+# number written here.
+#
+# What is NOT here, and why:
+#   * the face rules (`keep` / `turn_down` / `turn_out`) — code, not numbers. They
+#     live in `build.py` keyed by skin name; `skins()` joins the two by name and
+#     raises if either side names something the other does not.
+#   * `TOL` / `PLANE_TOL` / `RIDGE` — the float32 accuracy floor of manifold3d and
+#     the KKT ridge. Not knobs: they describe the arithmetic, not the design.
+
+# `substrate.classify`'s two thresholds — WALL or ROOF from geometry alone.
+classify:
+  # a horizontality this close to the halfway mark is ambiguous and raises
+  margin: 0.05
+  # the two smallest OBB extents within this ratio means "block-like": no clear
+  # thin direction, so neither panel nor slab, and it raises
+  aspect: 0.85
+
+# cos 45 deg. A wall's vertical face counts as exterior or interior when it faces
+# along the fall of that wall's own top, and as an end when it lies across it.
+fall: 0.707
+
+# The five skin distances. NON-DEGENERATE SEEDS (student-house CLAUDE.md, hard
+# rule, enforced by `parameters.check_seeds`): no two are equal and none is an
+# integer multiple of another. `Membrane.drop` and `Cladding.distance` were both
+# 0.100 until 2026-08-14, which meant a bug swapping a skirt depth for an offset
+# distance produced identical geometry — invisible to the tests and to the eye.
+# Keep them distinct when tuning. A zero `out` is exempt: it means the skin has
+# no turn-out at all, which is a feature being off, not a seed.
+skins:
+  - name: Membrane
+    distance: 0.020
+    drop: 0.145      # skirt down the exterior walls
+    out: 0.310       # every panel stopping on part 4's exterior face turns out
+    display: solid
+  - name: Cladding
+    distance: 0.085
+    drop: 0.225      # skirt down the interior walls, part 4's included
+    out: 0.0         # no turn-out: the cladding stops against nothing
+    display: wire

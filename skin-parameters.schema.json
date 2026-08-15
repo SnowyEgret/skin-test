@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "skin-test parameters",
+  "description": "Every tunable number in the rig. STRICT-COMPLETE: every property is required and additionalProperties is false everywhere, so a missing knob and a misspelt one both fail at the load seam rather than silently taking a default. Per-field validity (types, ranges, required, no strays) is enforced here; the cross-field residue a schema cannot express — non-degenerate seeds, out-vs-turn_out agreement, names matching the rule table — lives in Python (skin/parameters.py and build.py).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["classify", "fall", "skins"],
+  "properties": {
+    "classify": {
+      "description": "substrate.classify's two thresholds — WALL or ROOF from geometry alone.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["margin", "aspect"],
+      "properties": {
+        "margin": {
+          "description": "A horizontality within this of the halfway mark raises AmbiguousPart. Must stay below 0.5, or every part is ambiguous.",
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 0.5
+        },
+        "aspect": {
+          "description": "The two smallest oriented-bounding-box extents within this ratio means block-like — no clear thin direction — and raises AmbiguousPart. Strictly below 1: classify raises when extents[0] > aspect * extents[1] and extents is sorted ascending, so aspect = 1 makes that test unreachable and switches the block-like guard off entirely — a 1x1x1 cube then classifies as a wall.",
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1
+        }
+      }
+    },
+    "fall": {
+      "description": "A wall's vertical face is exterior or interior when its normal's dot with the wall's own uphill direction exceeds this, and an end otherwise. A direction cosine, so within (0, 1); 0.707 is 45 deg.",
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "exclusiveMaximum": 1
+    },
+    "skins": {
+      "description": "One entry per skin, in build order. Each name must match a rule set in build.py's RULES exactly — no defaults, either way.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "distance", "drop", "out", "display"],
+        "properties": {
+          "name": {
+            "description": "Joins these numbers to a rule set in build.py, and names the emitted OBJ and its manifest entry.",
+            "type": "string",
+            "minLength": 1
+          },
+          "distance": {
+            "description": "Planar offset outward from the substrate, metres. Strictly positive — a zero-offset skin is coincident with the substrate.",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "drop": {
+            "description": "Skirt depth below the substrate's top edge, metres, on the walls turn_down selects.",
+            "type": "number",
+            "minimum": 0
+          },
+          "out": {
+            "description": "How far a panel ending on a wall turn_out selects is folded outward, metres, measured from the skin edge. Zero means the skin has no turn-out; build.py raises if that disagrees with whether its rule set defines turn_out.",
+            "type": "number",
+            "minimum": 0
+          },
+          "display": {
+            "description": "How blender/display.py shows it.",
+            "type": "string",
+            "enum": ["solid", "wire"]
+          }
+        }
+      }
+    }
+  }
+}

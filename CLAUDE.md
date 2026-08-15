@@ -11,9 +11,14 @@ This file covers commands and structure; `NOTES.md` covers why the code is the w
 
 ```bash
 python3 build.py              # headless build: writes build/*.obj + build/manifest.json
-python3 -m pytest tests -q    # ~1 s
+python3 -m pytest tests -q    # ~1.5 s
 python3 -m pytest tests -q -k skirt        # single test by name
 ```
+
+Every tunable number is in `skin-parameters.yaml`, validated against
+`skin-parameters.schema.json`. `build.py` reads it and prints which file it used. A what-if is a
+full copy of the file passed as `build(params=parameters.load_validated(path))` — never an
+override of individual knobs. See **Parameters** below.
 
 Run pytest from the repo root — `tests/test_offset.py` imports `build` as a top-level module.
 
@@ -39,6 +44,25 @@ leave two sources of truth in the scene. Manifest entries carry a `role` (`skin`
 `clear()` removes only objects tagged `skin_generated`, so nothing here can delete or
 overwrite geometry it did not itself import.
 
+## Code review
+
+Run `/code-review high` before a meaningful chunk of work lands — not per commit, and `high`
+rather than the default because the changes here introduce seams rather than tweak lines. It
+reviews the **current diff** by default, and also takes a path or branch target: use
+`/code-review high skin/` to reach code that is committed and therefore outside any diff.
+
+`git diff` does not see untracked files, so **`git add -N` any new file first** or it is invisible
+to the review. A whole new module went unreviewed this way once before it was caught.
+
+Two things that review catches and the rest of the stack cannot. The tests and the build both
+exercise the happy path, so a knob that is only wrong when *supplied* passes everything —
+`build(params=...)` skipped schema validation entirely and separation went 64.215 → 558.849 mm
+with no error. And documentation that asserts a property the code does not have is invisible to a
+test by construction. Both were found by an independent reader checking claims against code.
+
+`--fix` applies findings to the working tree; omit it to see them first. Findings are a starting
+point, not a verdict — verify each against the code before acting, because some are wrong.
+
 ## Architecture
 
 The problem: offset a **substrate** (an assembly of solid parts) outward by a fixed distance to
@@ -48,6 +72,10 @@ geometry stack ships a planar (mitered) offset, so `skin/offset.py` is ours.
 Data flows one way:
 
 ```
+skin-parameters.yaml                    every tunable number, JSON-Schema validated
+   → skin/parameters.load_validated()   → dict; the ONLY file that reads it
+   → build.skins(params)                joins the numbers to the RULES by name
+
 build.py  PART_N vertex/face literals   (transcribed from Blender, snapped to 1 µm)
    → substrate.polyhedron()             list[Trimesh], one per part
    → skin_over()                        union → planar_offset → keep() → skirt
@@ -73,16 +101,66 @@ Key invariants, each of which spans several files:
   horizontal, and solves one KKT system over all vertex displacements. The test is on `|n_z|`,
   **not** axis-alignment: a wall at any plan angle must still come out exact.
 
+## Parameters
+
+`skin-parameters.yaml` holds every tunable number: `classify`'s two thresholds, `fall`, and the
+five skin distances. `skin/parameters.py` is the **only** module that imports `yaml` or
+`jsonschema`, and nothing else takes a path — the core takes a params *dict*. That is the
+student-house seam exactly: `skin_pipeline.run(manifest, props, topo)` takes plain data and its
+sub-modules read `topo["cladding"]["allowance"]` without parsing anything. Keep it that way, or
+integration means writing an adapter.
+
+Three rules carried over from student-house `bim/phase1/parameters.py`:
+
+- **STRICT-COMPLETE.** The file specifies *every* knob. No built-in defaults, no partial overlay
+  — a hidden default is what masks a bug. `substrate.classify` therefore **requires** `margin`
+  and `aspect`, `_skin_from` uses no `.get`, and `Faces` has no default classifier: `Faces.roles`
+  raises if none was passed. Do not "fix" any of those by restoring a default.
+- **Schema does per-field, Python does cross-field.** Types, ranges, `required` and
+  `additionalProperties: false` are in the JSON Schema. What a schema cannot express stays in
+  Python: `parameters.check_seeds` (non-degenerate distances) and `build.skins`'s name join.
+- **Fail at the seam, addressed.** Every raise names the field to edit, not the geometry that
+  consumed it.
+
+`parameters.check_seeds` enforces the **non-degenerate seed** rule: no two distances equal, none
+an integer multiple of another. A zero `out` is exempt — it means the turn-out is off, and zero
+is an integer multiple of everything. It is a named function the caller opts into, not part of
+`validate`, because it is a discipline for a test rig rather than a code requirement.
+
+Blender's python needs neither PyYAML nor jsonschema: `blender/display.py` imports only `bpy`,
+`json` and `pathlib`, and never touches `skin/`.
+
+**On migration** the `classify` / `fall` / `skins` block moves into
+`student-house-parameters.yaml` under a `skin:` key, its schema is pasted into that repo's
+schema, and the caller passes `topo["skin"]` where `build.py` passes `load_validated()`.
+`skin/parameters.py` is then dead code there and should be deleted rather than ported — the
+student-house already owns the read, via `topology_yaml.load` → `parameters.load_merged`.
+
 ## Adding a skin
 
-A skin is a dict in the `SKINS` tuple in `build.py`, not a new code path:
+A skin is an entry in `skins:` in `skin-parameters.yaml` plus a rule set in `RULES` in
+`build.py`, not a new code path. `build.skins()` joins them by name, and raises if either side
+names something the other does not — a skin with no rules cannot be built, and a rule set no
+skin names would sit there looking maintained while emitting nothing.
+
+```yaml
+# skin-parameters.yaml — the numbers
+- name: ...
+  distance: m
+  drop: m          # skirt: hangs below the wall's top edge
+  out: m           # collar: folds outward where it stops; 0.0 for none
+  display: solid | wire
+```
 
 ```python
-{"name": ..., "distance": m, "keep": fn,
- "turn_down": fn, "drop": m,          # skirt: hangs below the wall's top edge
- "turn_out": fn, "out": m,            # collar: folds outward where it stops (optional)
- "display": "solid"|"wire"}
+# build.py RULES — the predicates, keyed by the same name
+"...": {"keep": fn, "turn_down": fn, "turn_out": fn or None}
 ```
+
+`out` and `turn_out` must agree: a non-zero `out` with `turn_out: None`, or the reverse, raises.
+The rules take `(Faces, fall)`; `skins()` binds `fall` from the file, so what `skin/` receives
+still has the `Faces -> bool[nfaces]` signature it expects. A built spec is *exactly*
+`skin_over`'s argument list plus `name` and `display`.
 
 `keep`, `turn_down` and `turn_out` are predicates `Faces -> bool[nfaces]` over the union's
 faces. `Faces` (in `skin/offset.py`) carries `body`, `parts`, `owner`, `normals`, `centres`, plus
@@ -110,8 +188,10 @@ needed. Segments that continue the same panel are parallel and are left unmitere
 
 ## Classifying parts
 
-`substrate.classify(part)` returns `WALL` or `ROOF` **from geometry alone** — no IFC, no part
-indices — so the rules survive a substrate with hundreds of parts. It is deliberately not
+`substrate.classify(part, margin, aspect)` returns `WALL` or `ROOF` **from geometry alone** — no
+IFC, no part indices — so the rules survive a substrate with hundreds of parts. The two thresholds
+are authored (`classify` in the parameter file) and **required**; `build.classifier(params)` binds
+them once and the bound callable is what `Faces` and `skin_over` are handed. It is deliberately not
 derived from bounds: an axis-aligned box around a wall running diagonally in plan inflates both
 horizontal extents until the height is the smallest of the three, and the wall reads as a slab.
 Two independent measures must agree instead:
@@ -127,7 +207,8 @@ precisely the failure the loud version exists to prevent.
 
 `Faces.roles` caches the per-part result for the substrate being skinned, so a predicate reads
 the classification of the parts actually passed to `skin_over` rather than of a module-level
-default.
+default. It calls the classifier `Faces` was constructed with, and raises if there is none —
+there is deliberately no fallback pair of thresholds.
 
 ## The face rules
 
@@ -137,15 +218,17 @@ listed — there are no plane coordinates and no part indices in them:
 - **exterior / interior** — a wall's top falls toward its interior, so the face under the high
   edge is the facade and the one under the low edge is the interior (`uphill` + `wall_faces`). A
   vertical face across the fall is an **end** and is neither, which is how section cuts drop out
-  without being enumerated. The exception is a facade wrapping a corner: an end coplanar with and
-  joined to a neighbour's facade is grown into the exterior set.
+  without being enumerated. `fall` is the authored direction cosine that separates the two from an
+  end (0.707 = 45°); every rule below takes it as an argument and `skins()` binds it. The
+  exception is a facade wrapping a corner: an end coplanar with and joined to a neighbour's facade
+  is grown into the exterior set.
 - **climb or flange** — whichever face of a wall the roof runs into decides it. Into the interior
   face and the membrane climbs and carries over the top; into the exterior face and it stops and
   flanges. Tested per **wall**, not per face: only one triangle of a step wall touches the roof,
   but the membrane climbs the whole face, so touching faces elect the wall and the wall carries
   all of its own faces.
 - **which cladding system a facade takes** — read off the part, not derived. `facades_of(faces,
-  system)` intersects the geometric facade set with `Faces.tagged(FACADE, system)`. No property
+  system, fall)` intersects the geometric facade set with `Faces.tagged(FACADE, system)`. No property
   of a wall's shape implies brick, and neither a compass direction nor a named plane separates a
   brick street front from a rainscreen headhouse facing the same way at a different setback. A
   substrate reader stamps `part.metadata["facade"]`; in the student-house that is one read of the
@@ -156,10 +239,22 @@ listed — there are no plane coordinates and no part indices in them:
 
 ## Substrate changes
 
-Duncan models in Blender and asks for it to be skinned. Objects placed there do **not** survive
-`reload()`. The routine: read the scene out, snap coordinates to 1 µm, transcribe into `build.py`
-as `PART_N` vertex/face lists, rebuild. Faces may be given in any winding — `polyhedron()`
-fan-triangulates and calls `fix_normals()`.
+Duncan models in Blender and asks for it to be skinned. The routine: read the scene out, snap
+coordinates to 1 µm, transcribe into `build.py` as `PART_N` vertex/face lists, rebuild. Faces may
+be given in any winding — `polyhedron()` fan-triangulates and calls `fix_normals()`.
+
+**Hand-modelled objects survive `reload()`.** `clear()` removes only objects carrying the
+`skin_generated` key, so anything Duncan models is untouched — that is the same safety property
+that protects lights, cameras and live Bonsai IFC parts, and it is why `build.py`'s docstring
+notes that `Cube` has to be *hidden* to see `Substrate_4`. (This paragraph replaces a line
+claiming the opposite, which was wrong and had Duncan saving `skin-test.blend` defensively.)
+
+**The substrate cannot be lost, and the `.blend` is not what protects it.** It lives in `build.py`
+as the `PART_N` literals, in git. `python3 build.py` opts into `emit_substrate=True`, so
+`build/Substrate_*.obj` are always current; `reload(substrate=True)` brings them back into the
+scene. To add a part: `reload(substrate=True)` for reference, model the new part as **its own new
+object**, then transcribe. Never model into an imported `Substrate_N` — those *are* tagged, so the
+next `reload()` deletes them.
 
 Snapping is not optional. Blender meshes are float32 and modelled faces miss each other by tens
 to hundreds of nanometres, which become sliver faces in a union and near-parallel plane pairs in

@@ -117,17 +117,33 @@ class Faces:
     coordinates need both, so they get the whole thing.
     """
 
-    def __init__(self, body, parts, owner):
+    def __init__(self, body, parts, owner, classify=None):
         self.body = body
         self.parts = parts
         self.owner = owner
         self.normals = body.face_normals
         self.centres = body.triangles.mean(axis=1)
+        self.classify = classify
 
     @cached_property
     def roles(self) -> list:
-        """WALL or ROOF per part, from geometry. Raises on a part it cannot read."""
-        return [substrate.classify(p) for p in self.parts]
+        """WALL or ROOF per part, from geometry. Raises on a part it cannot read.
+
+        `classify` is supplied by the caller rather than being
+        `substrate.classify` with its thresholds defaulted: the thresholds are
+        authored parameters, and a default here would be one of the hidden
+        defaults the parameter layer exists to abolish. `None` is not a default
+        value standing in for them — it is their absence, and it raises here, at
+        the first predicate that asks what a part is.
+        """
+        if self.classify is None:
+            raise ValueError(
+                "Faces has no classifier: a predicate asked what a part is, but "
+                "`classify` was not passed to Faces (usually from skin_over). Pass "
+                "`partial(substrate.classify, margin=..., aspect=...)` with the "
+                "authored thresholds — there is deliberately no default pair."
+            )
+        return [self.classify(p) for p in self.parts]
 
     def of_role(self, role) -> np.ndarray:
         """Mask of faces belonging to a part of this role."""
@@ -348,6 +364,7 @@ def skin_over(
     drop: float = 0.0,
     turn_out=None,
     out: float = 0.0,
+    classify=None,
 ) -> trimesh.Trimesh:
     """Offset an assembly of parts as a single body.
 
@@ -368,13 +385,18 @@ def skin_over(
     `turn_out` selects walls the surface stops against rather than covers. Every
     panel that ends on such a wall is turned `out` metres along the axis it faces,
     so the termination folds outward as one piece instead of ending on a bare edge.
+
+    `classify(part) -> role` is handed to `Faces` for the predicates to read. It
+    is the caller's, thresholds already bound, because those thresholds are
+    authored parameters — see `Faces.roles`. Only predicates that ask about roles
+    need it, so a plain closed-shell offset can leave it out.
     """
     body = parts[0] if len(parts) == 1 else trimesh.boolean.union(parts)
     skin = planar_offset(body, distance)
     if keep is None:
         return skin
 
-    surface = Faces(body, parts, _owner(body, parts))
+    surface = Faces(body, parts, _owner(body, parts), classify)
     kept = keep(surface)
 
     verts = list(skin.vertices)

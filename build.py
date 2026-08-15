@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import json
+from functools import partial
 from pathlib import Path
 
 import numpy as np
 import trimesh
 
-from skin import clearance, separation, skin_over, substrate, write_obj
+from skin import clearance, parameters, separation, skin_over, substrate, write_obj
 from skin.offset import Faces, _owner
 
 BUILD_DIR = Path(__file__).parent / "build"
@@ -75,20 +76,13 @@ PART_4 = (
 )
 
 
-# The membrane stops against a wall's exterior face rather than covering it. Every
-# panel that ends there turns out this far along the axis it faces: the roof panels
-# turn up, the step-wall climb turns -X, the exterior-wall skirt turns +X.
+# Every number this module used to hold is now authored in `skin-parameters.yaml`
+# and validated against `skin-parameters.schema.json` — the five skin distances,
+# `fall`, and `classify`'s two thresholds. See `skin/parameters.py` for why, and
+# for how the block migrates into `student-house-parameters.yaml` under `skin:`.
 #
-# Seeds here are deliberately non-degenerate (student-house CLAUDE.md, hard rule):
-# no two of the five skin distances are equal, and none is an integer multiple of
-# another. `Membrane.drop` used to be 0.100 and so did `Cladding.distance`, which
-# meant a bug swapping a skirt depth for an offset produced identical geometry —
-# invisible to both the tests and the eye.
-UPSTAND = 0.310
-
-# cos 45 deg. A wall's vertical face counts as exterior or interior when it faces
-# along the fall of that wall's own top, and as an end when it lies across it.
-FALL = 0.707
+# What stays here are the RULES, which are code and not numbers: predicates over
+# the union's faces. `skins()` joins the two by name.
 
 
 # Which cladding system a wall's facade takes. Not derivable — no property of a
@@ -167,13 +161,19 @@ def _grow_coplanar(faces, seed, candidates):
         grown |= added
 
 
-def wall_faces(faces):
+def wall_faces(faces, fall):
     """Every wall's exterior and interior faces, read off its own top.
 
     A wall's top falls toward its interior, so the face under the high edge is
     the exterior — the facade — and the one under the low edge is the interior.
     A vertical face lying across the fall is an end, and is neither: that is how
     this sample's section cuts drop out without anything having to list them.
+
+    `fall` is the authored direction cosine separating the two from an end. It is
+    passed rather than read from a module constant so that every rule below can
+    be bound to the parameter file's value by `skins()` — the predicates `skin/`
+    calls still have the `Faces -> bool[nfaces]` signature it expects, because
+    `skins()` hands them over already bound.
 
     Except that a facade wraps a corner. Where one wall's end is coplanar with
     and joins its neighbour's facade, it is a return of that facade rather than
@@ -189,14 +189,14 @@ def wall_faces(faces):
             continue
         facing = faces.normals[:, :2] @ uphill(part)
         mine = vertical & (faces.owner == index)
-        exterior |= mine & (facing > FALL)
-        interior |= mine & (facing < -FALL)
+        exterior |= mine & (facing > fall)
+        interior |= mine & (facing < -fall)
 
     ends = vertical & faces.of_role(substrate.WALL) & ~exterior & ~interior
     return _grow_coplanar(faces, exterior, ends), interior
 
 
-def _rules(faces):
+def _rules(faces, fall):
     """The whole face classification, derived once from the substrate.
 
     Which face of a wall the roof runs into decides how the membrane treats that
@@ -211,7 +211,7 @@ def _rules(faces):
     whole face — so the touching faces elect the wall, and the wall carries all
     of its own faces.
     """
-    exterior, interior = wall_faces(faces)
+    exterior, interior = wall_faces(faces, fall)
     roof = _upward(faces.normals) & faces.of_role(substrate.ROOF)
     meets = faces.touching(roof)
     climbed = np.isin(faces.owner, np.unique(faces.owner[interior & meets]))
@@ -219,27 +219,27 @@ def _rules(faces):
     return exterior, interior, roof, climbed, flanged
 
 
-def membrane_faces(faces):
+def membrane_faces(faces, fall):
     """Membrane: the roof, the interior faces it climbs, and those walls' tops."""
-    exterior, interior, roof, climbed, flanged = _rules(faces)
+    exterior, interior, roof, climbed, flanged = _rules(faces, fall)
     return roof | (interior & climbed) | (_upward(faces.normals) & climbed)
 
 
-def membrane_skirts(faces):
+def membrane_skirts(faces, fall):
     """Down the exterior face of every wall the membrane carried over."""
-    exterior, interior, roof, climbed, flanged = _rules(faces)
+    exterior, interior, roof, climbed, flanged = _rules(faces, fall)
     # a wall with a roof on both sides is carried over from one side and met from
     # the other; meeting wins, because that face gets a flange rather than a skirt
     return exterior & climbed & ~flanged
 
 
-def membrane_flanges(faces):
+def membrane_flanges(faces, fall):
     """Where the membrane runs into a wall's exterior face, it stops and turns out."""
-    exterior, interior, roof, climbed, flanged = _rules(faces)
+    exterior, interior, roof, climbed, flanged = _rules(faces, fall)
     return exterior & flanged
 
 
-def facades_of(faces, system):
+def facades_of(faces, system, fall):
     """The facade faces of every wall whose facade takes this cladding system.
 
     Geometry says which faces are facades; the part says which system clads them.
@@ -247,21 +247,21 @@ def facades_of(faces, system):
     in different planes, so neither a compass direction nor a named plane can
     separate them — but the material can, and it is authored anyway.
     """
-    exterior, _ = wall_faces(faces)
+    exterior, _ = wall_faces(faces, fall)
     return exterior & faces.tagged(FACADE, system)
 
 
-def check_facades(faces, systems=CLADDING_SYSTEMS):
+def check_facades(faces, fall, systems=CLADDING_SYSTEMS):
     """Every facade claimed by exactly one cladding system, or raise.
 
     Without this a mis-stamped or unstamped part simply drops out of every skin:
     a facade silently left bare, or a whole system emitted as an empty mesh. That
     is the failure this module is being rewritten to stop making.
     """
-    exterior, _ = wall_faces(faces)
+    exterior, _ = wall_faces(faces, fall)
     claimed = np.zeros(len(faces.owner), dtype=bool)
     for system in systems:
-        claimed |= facades_of(faces, system)
+        claimed |= facades_of(faces, system, fall)
 
     # double-claiming needs no check: a part carries one FACADE value, so it can
     # match at most one system. That stops being true the day a system is defined
@@ -275,66 +275,152 @@ def check_facades(faces, systems=CLADDING_SYSTEMS):
         )
 
 
-def cladding_faces(faces):
+def cladding_faces(faces, fall):
     """Cladding: every rainscreen facade, plus every wall top it wraps over."""
-    return facades_of(faces, RAINSCREEN) | (
+    return facades_of(faces, RAINSCREEN, fall) | (
         _upward(faces.normals) & faces.of_role(substrate.WALL)
     )
 
 
-def cladding_skirts(faces):
+def cladding_skirts(faces, fall):
     """Down every wall's interior face."""
-    exterior, interior, roof, meets, climbed = _rules(faces)
+    exterior, interior, roof, climbed, flanged = _rules(faces, fall)
     return interior
 
 
-# The two skins. Their offsets differ so they cannot collide: everywhere both
-# exist they are 80 mm apart, normal to a shared substrate face.
-SKINS = (
-    {
-        "name": "Membrane",
-        "distance": 0.020,
-        "drop": 0.145,  # skirt down the exterior walls
+# The face rules, keyed by skin name. Code, not numbers — this is the half of a
+# skin spec that cannot go in a parameter file, and the half `skin/` never learns.
+# `turn_out` is spelled `None` rather than omitted: the parameter file authors an
+# `out` for every skin, so a skin with no turn-out has to say so on both sides,
+# and `skins()` raises if the two disagree.
+RULES = {
+    "Membrane": {
         "keep": membrane_faces,
         "turn_down": membrane_skirts,
         # every panel that stops on part 4's exterior face turns out there
-        "out": UPSTAND,
         "turn_out": membrane_flanges,
-        "display": "solid",
     },
-    {
-        "name": "Cladding",
-        "distance": 0.085,
-        "drop": 0.225,  # skirt down the interior walls, part 4's included
+    "Cladding": {
         "keep": cladding_faces,
         "turn_down": cladding_skirts,
-        "display": "wire",
+        "turn_out": None,
     },
-)
+}
+
+
+def classifier(params: dict):
+    """`part -> WALL|ROOF`, with the authored thresholds bound.
+
+    `substrate.classify` no longer defaults them, so this is the only place they
+    are supplied. Every spec carries the same one — a classification is a fact
+    about the substrate, not about a skin — but it rides in the spec anyway so
+    that a spec is *exactly* `skin_over`'s argument list and nothing is assembled
+    at the call site.
+    """
+    return partial(substrate.classify, **params["classify"])
+
+
+def skins(params: dict | None = None) -> tuple[dict, ...]:
+    """The skin specs: the authored numbers joined to `RULES` by name.
+
+    One spec per skin, holding exactly what `skin_over` takes plus `name` and
+    `display`. The predicates come out already bound to the authored `fall`, and
+    the classifier to the authored thresholds, so what `skin/` receives still has
+    the `Faces -> bool[nfaces]` and `part -> role` signatures it expects — the
+    parameter layer stops at this function and no geometry code sees a knob.
+
+    `params` defaults to reading `skin-parameters.yaml`, the same way the
+    student-house's loaders default their paths. It is an *argument* rather than
+    a module-level constant baked at import so that a what-if is a different file
+    passed in at the call, which is the whole point of a full diffable copy.
+
+    On migration this is where `topo["skin"]` arrives.
+
+    The name join is a loud seam, in both directions. A skin authored with no
+    rule set cannot be built, and a rule set no skin authors would otherwise sit
+    there looking maintained while emitting nothing — the silent-omission failure
+    `check_facades` exists to stop, one layer up.
+    """
+    params = parameters.resolve(params)
+    fall = params["fall"]
+    classify = classifier(params)
+
+    authored = [spec["name"] for spec in params["skins"]]
+    if len(set(authored)) != len(authored):
+        raise parameters.ParameterError(
+            f"parameter skins: duplicate name(s) in {authored} — a name is the join "
+            f"to RULES, so it has to identify exactly one skin"
+        )
+    stray = [name for name in authored if name not in RULES]
+    if stray:
+        raise parameters.ParameterError(
+            f"parameter skins: {stray} name no rule set in RULES ({sorted(RULES)}) — "
+            f"a skin's numbers cannot be built without its face rules"
+        )
+    unbuilt = [name for name in RULES if name not in authored]
+    if unbuilt:
+        raise parameters.ParameterError(
+            f"parameter skins: rule set(s) {unbuilt} are defined in RULES but named by "
+            f"no skin in the parameter file, so they would emit nothing"
+        )
+
+    specs = []
+    for spec in params["skins"]:
+        rules = RULES[spec["name"]]
+        if (rules["turn_out"] is None) != (float(spec["out"]) == 0.0):
+            raise parameters.ParameterError(
+                f"parameter skins.{spec['name']}.out={spec['out']} disagrees with its "
+                f"rule set, whose turn_out is {rules['turn_out']} — a skin either stops "
+                f"against something and turns out, or does neither"
+            )
+        specs.append(
+            {
+                "name": spec["name"],
+                "distance": spec["distance"],
+                "drop": spec["drop"],
+                "out": spec["out"],
+                "display": spec["display"],
+                "keep": partial(rules["keep"], fall=fall),
+                "turn_down": partial(rules["turn_down"], fall=fall),
+                "turn_out": None
+                if rules["turn_out"] is None
+                else partial(rules["turn_out"], fall=fall),
+                "classify": classify,
+            }
+        )
+    return tuple(specs)
 
 
 def _skin_from(spec, parts, distance=None):
-    """Build one skin from its spec. `turn_out`/`out` are optional."""
+    """Build one skin from its spec — every `skin_over` argument, none defaulted."""
     return skin_over(
         parts,
         spec["distance"] if distance is None else distance,
         keep=spec["keep"],
         turn_down=spec["turn_down"],
         drop=spec["drop"],
-        turn_out=spec.get("turn_out"),
-        out=spec.get("out", 0.0),
+        turn_out=spec["turn_out"],
+        out=spec["out"],
+        classify=spec["classify"],
     )
 
 
-def separation_check(parts=None):
+def separation_check(parts=None, params=None):
     """Both skins plus the smallest distance between them."""
     parts = current_substrate() if parts is None else parts
-    skins = [_skin_from(s, parts) for s in SKINS]
-    return separation(*skins), skins
+    built = [_skin_from(spec, parts) for spec in skins(params)]
+    return separation(*built), built
 
 
-def build(parts: list | None = None, emit_substrate: bool = False) -> list[dict]:
+def build(
+    parts: list | None = None,
+    emit_substrate: bool = False,
+    params: dict | None = None,
+) -> list[dict]:
     """Build the skins and write them to `build/`.
+
+    `params` defaults to the committed `skin-parameters.yaml`; pass a loaded
+    what-if copy to build a variant. See `skins()`.
 
     The module **reads** the substrate and never writes it. `emit_substrate`
     additionally dumps the parts as OBJ so they can be looked at in Blender; it
@@ -346,9 +432,15 @@ def build(parts: list | None = None, emit_substrate: bool = False) -> list[dict]
     here is throwaway — but it still duplicates whatever was modelled, which is
     why `Cube` has to be hidden to see `Substrate_4`.
     """
+    source = str(parameters.DEFAULT_PATH) if params is None else "(supplied)"
+    params = parameters.resolve(params)
+    specs = skins(params)
+    print(f"  params     {source}")
     parts = current_substrate() if parts is None else parts
     body = trimesh.boolean.union(parts)
-    check_facades(Faces(body, parts, _owner(body, parts)))
+    check_facades(
+        Faces(body, parts, _owner(body, parts), classifier(params)), params["fall"]
+    )
 
     named = []
     if emit_substrate:
@@ -357,11 +449,11 @@ def build(parts: list | None = None, emit_substrate: bool = False) -> list[dict]
             for i, part in enumerate(parts)
         ]
 
-    skins = {}
-    for spec in SKINS:
+    built = {}
+    for spec in specs:
         distance = spec["distance"]
         skin = _skin_from(spec, parts)
-        skins[spec["name"]] = skin
+        built[spec["name"]] = skin
         named.append((spec["name"], skin, spec["display"], "skin"))
 
         gap = clearance(parts, skin)
@@ -383,8 +475,8 @@ def build(parts: list | None = None, emit_substrate: bool = False) -> list[dict]
                 f" requested offset — self-intersecting"
             )
 
-    if len(skins) == 2:
-        a, b = skins.values()
+    if len(built) == 2:
+        a, b = built.values()
         print(f"           skin separation {separation(a, b) * 1000:.3f} mm")
 
     manifest = []

@@ -3,7 +3,7 @@
 Offsetting a **substrate** (an assembly of solid parts) outward by a fixed distance to
 produce **skins**: open surfaces that cover a chosen subset of faces.
 
-Last worked: 2026-08-14.
+Last worked: 2026-08-15.
 
 `CLAUDE.md` has the commands, the architecture and its invariants, and the tolerance
 rationale. This file is the running log: what the geometry currently is, what was tried
@@ -18,12 +18,14 @@ Parts 1, 2 and 4 are wall panels, part 3 is a roof. Their end and bottom faces a
 cuts and are never skinned; the real substrate has none. Prefer the general rule over the
 one that fits these four parts.
 
-## Where we got to (end of 2026-08-14)
+## Where we got to (end of 2026-08-15)
 
-The geometry is right and the rules are now **derived rather than listed**. `build.py`
-holds no plane coordinates and no part-index sets: exterior/interior comes off each
-wall's own top slope, climb-or-flange from which face the roof runs into, wall-vs-roof
-from `substrate.classify`, and cladding system from `part.metadata`. 19 tests, ~1 s.
+The geometry is right, the rules are **derived rather than listed**, and the numbers are
+now **authored rather than coded**. `build.py` holds no plane coordinates, no part-index
+sets and no magic constants: exterior/interior comes off each wall's own top slope,
+climb-or-flange from which face the roof runs into, wall-vs-roof from
+`substrate.classify`, cladding system from `part.metadata`, and every tunable number from
+`skin-parameters.yaml`. 32 tests, ~1.5 s.
 
 Agreed order for what remains, from the migration discussion:
 
@@ -31,13 +33,99 @@ Agreed order for what remains, from the migration discussion:
 2. ~~exterior/interior derived from the slope~~ — done
 3. ~~per-face offsets in `planar_offset`~~ — **deleted, not deferred.** There is never
    more than one offset in a cladding mesh: a different allowance is a different skin,
-   which `SKINS` already supports. A scalar `distance` is correct, not a limitation.
-4. **YAML + JSON Schema parameters, next.** The knobs have settled, so the schema can be
-   written once. STRICT-COMPLETE (student-house `bim/phase1/parameters.py`): the file
-   specifies *every* knob, no built-in defaults, a what-if is a full diffable copy.
-   That forbids the defaults now hiding in `_skin_from`'s `spec.get("out", 0.0)` and in
-   `classify(margin=0.05, aspect=0.85)`. Five distances, `FALL`, `UPSTAND`, and
-   `classify`'s two thresholds are the current set.
+   which the `skins:` list already supports. A scalar `distance` is correct, not a
+   limitation.
+4. ~~YAML + JSON Schema parameters~~ — done 2026-08-15. See below.
+
+Nothing is queued after 4. The next move is Duncan's.
+
+## The parameter layer (2026-08-15)
+
+Written after reading how the student-house actually does it, so the two match rather
+than merely resemble each other:
+
+- **`bim/phase1/parameters.py` is the parser there**, and `topology_yaml.load()` is the
+  single public entry — structure YAML + validated params merged into one `topo` dict.
+- **Sub-modules never parse.** `skin_pipeline.run(manifest, props, topo)` takes plain
+  data; `skin_assembly.py` is 2480 lines with exactly *one* `topo[...]` read
+  (`topo["cladding"]["allowance"]`, line 2402). That is what lets the pipeline run and be
+  profiled outside Blender, and it is the seam this module has to land on.
+- **Five parallel loader modules, no shared helper.** `parameters`, `topology_yaml`,
+  `unit_plan_yaml`, `mapping_yaml`, `code_constraints` each repeat the ~15-line
+  load/validate pattern, because each owns its own schema and error class. So copying the
+  *pattern* here is correct; copying the *parameter file* would not be.
+
+What that dictated:
+
+- `skin/parameters.py` mirrors `bim/phase1/parameters.py` (`load` / `validate` /
+  `load_validated`, `ParameterError` naming the field). No `merge` — this rig has no
+  separate structure file for numbers to be injected into.
+- **The core takes a dict, never a path.** `skins(params)` is where the parameter layer
+  stops; below it, nothing has heard of a knob.
+- **On migration**: the `classify` / `fall` / `skins` block moves into
+  `student-house-parameters.yaml` under `skin:`, the schema fragment is pasted into that
+  repo's schema, and the caller passes `topo["skin"]`. `skin/parameters.py` is then dead
+  code there and gets deleted, not ported.
+
+Three defaults had to die for STRICT-COMPLETE, all of them the "hidden default masks a
+bug" kind:
+
+- `_skin_from`'s `spec.get("out", 0.0)` → `out` is authored for every skin, and `skins()`
+  raises if it disagrees with whether the rule set defines `turn_out`.
+- `classify(margin=0.05, aspect=0.85)` → both required. `build.classifier(params)` binds
+  them once; `Faces` is constructed with the bound callable and `Faces.roles` raises if it
+  has none. `skin_over` gained a `classify=` passthrough. It stays optional there because
+  a plain closed-shell offset selects no faces and so runs no predicate — the `None` is
+  the *absence* of thresholds, raising at the point of use, not a stand-in pair.
+- the rule predicates read `FALL` from module scope → they take `(Faces, fall)` and
+  `skins()` binds it, so what `skin/` receives still has the `Faces -> bool[nfaces]`
+  signature it expects.
+
+`check_seeds` is separate from `validate` on purpose: non-degenerate seeds are a
+discipline for a **test rig**, not a code requirement, so a production what-if that
+genuinely wants two skins 100 mm apart calls `validate` alone. Zero is exempt — it means a
+turn-out is off, and zero is an integer multiple of everything.
+
+The build output is unchanged by the refactor, which is the oracle for it: separation
+still 64.215 mm, residuals still ~1e-16.
+
+### What `/code-review high` caught (2026-08-15)
+
+First formal review in either repo. Two findings were real defects in the new layer, and
+both were invisible to the 32 tests and to the build:
+
+- **A supplied `params` dict was never validated.** `load_validated() if params is None
+  else params` runs the schema only on the default path — and the what-if workflow is
+  exactly "hand-edit a copy and pass it". Measured: `build(params=<fall: 1.4>)` wrote both
+  skins, separation 64.215 → **558.849 mm**, no error, while `validate` rejects that value.
+  `check_facades` missed it too: `fall > 1` empties the exterior set, so "every facade is
+  claimed" holds vacuously. Fixed by `parameters.resolve`, which every `params` entry point
+  now goes through. It does **not** run `check_seeds` — that stays opt-in.
+- **`aspect: 1.0` switched the block-like guard off.** `classify` raises when `extents[0] >
+  aspect * extents[1]` with `extents` sorted ascending, so `aspect = 1` is unreachable and a
+  1x1x1 cube returns `WALL`. The schema said `"maximum": 1` and its description invited it.
+  Now `exclusiveMaximum`. `margin` has a softer version of this at its lower end (`1e-12`
+  narrows the ambiguity band to nothing) but no single value is a clean off switch, so it is
+  left alone.
+
+Also: the YAML header promised a `--params` CLI that does not exist, and `cladding_skirts`
+unpacked `_rules` with `meets`/`climbed` bound to `climbed`/`flanged` (pre-existing, harmless
+only because it returns `interior` alone). Both fixed; two regression tests added; 34 tests.
+
+**Still open, Duncan's call:** nothing declares dependencies. `skin/parameters.py` adds `yaml`
+and `jsonschema`, and `build.py` imports it at module scope, so a fresh checkout now fails at
+test collection rather than at first use. Consistent with the already-undeclared trimesh and
+numpy, so it is a repo-wide gap rather than a fault in this change — a `requirements.txt`
+would close it.
+
+The lesson worth keeping: tests and the build both exercise the happy path, so a knob that is
+only wrong when *supplied* passes both. And a docstring asserting a property the code lacks
+cannot fail a test by construction. Those are the two things review reaches and the rest of
+the stack does not.
+
+Blender's python needs neither PyYAML nor jsonschema here — `blender/display.py` imports
+only `bpy`, `json` and `pathlib`. The student-house had to install both into Blender's
+python; this rig does not, because nothing on the bpy side touches `skin/`.
 
 ## Layout
 
@@ -47,13 +135,18 @@ Agreed order for what remains, from the migration discussion:
 | `skin/measure.py` | `clearance` (skin to substrate), `separation` (skin to skin) |
 | `skin/substrate.py` | `polyhedron` (from vertex/face lists), `prism`, `cube`, `l_block`, `u_block`, and `classify` / `horizontality` (WALL vs ROOF from shape) |
 | `skin/export.py` | OBJ writer that emits n-gons, not triangles |
-| `build.py` | the substrate as transcribed data, the `SKINS` spec, and the build |
+| `skin/parameters.py` | the parameter layer. `load` / `validate` / `check_seeds` / `load_validated`. The only module that imports yaml or jsonschema |
+| `skin-parameters.yaml` | every tunable number: `classify`'s thresholds, `fall`, the five distances |
+| `skin-parameters.schema.json` | the JSON Schema it is validated against |
+| `build.py` | the substrate as transcribed data, the `RULES` table, `skins()`, and the build |
 | `blender/display.py` | the only file that imports bpy. Loads, never authors |
-| `tests/test_offset.py` | the test suite |
+| `tests/test_offset.py` | the geometry suite |
+| `tests/test_parameters.py` | the parameter-layer suite |
 
 ## The two skins
 
-Defined by the `SKINS` tuple in `build.py`. Adding a third is a dict, not a code path.
+Numbers in `skin-parameters.yaml`, face rules in `build.py`'s `RULES`, joined by name by
+`skins()`. Adding a third is a YAML entry plus a rule set, not a code path.
 
 | | Membrane (20 mm) | Cladding (85 mm) |
 |---|---|---|
@@ -230,8 +323,9 @@ keeps it non-singular where the soft equations underdetermine a vertex.
 ## Open items
 
 - **The brick skin is not built.** Everything it needs exists — `BRICK`,
-  `facades_of(faces, BRICK)`, `CLADDING_SYSTEMS` — but no part in the sample is stamped
-  brick, so adding the `SKINS` dict would emit an empty mesh and test nothing. It needs a
+  `facades_of(faces, BRICK, fall)`, `CLADDING_SYSTEMS` — but no part in the sample is
+  stamped brick, so adding the `skins:` entry and its rule set would emit an empty mesh
+  and test nothing. It needs a
   substrate that poses the condition: two walls whose tops fall +X, one at the front
   plane and one set well back, only the front one brick. The two-facade fixture in
   `tests/test_offset.py` is that condition in miniature.
