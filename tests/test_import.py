@@ -108,6 +108,38 @@ def test_an_imported_substrate_skins(tmp_path):
     assert np.allclose(skin.bounds, [[-1.1, -1.1, -1.1], [4.1, 1.1, 1.1]])
 
 
+def test_the_union_is_computed_about_the_origin():
+    """manifold3d is float32, whose resolution scales with magnitude, so a boolean
+    far from the origin resolves less finely — and where two nearly-coplanar faces
+    meet, that error is amplified by the shallow angle between them.
+
+    The artifact itself is **not** reproduced here. It needs sloped faces mitring
+    at a shallow angle 15 m out, which this substrate has no way to pose; the
+    evidence is the headhouse parapets, where the union returned a second body,
+    a 359 mm sliver of mean thickness 0.04 µm — an order of magnitude below
+    manifold3d's own accuracy floor, so arithmetic rather than geometry. Centred
+    on the origin the same parts return one clean body. See NOTES.md.
+
+    What is pinned here is the mechanism, which is what could silently break: the
+    shift is undone, so callers get the substrate where they left it.
+    """
+    near = [substrate.cube(2.0), substrate.cube(2.0, center=(2, 0, 0))]
+    far = [substrate.cube(2.0, center=(0, 0, 1e5)),
+           substrate.cube(2.0, center=(2, 0, 1e5))]
+
+    here, there = substrate.union(near), substrate.union(far)
+    assert np.allclose(here.bounds, [[-1, -1, -1], [3, 1, 1]])
+    assert np.allclose(there.bounds - np.array([[0, 0, 1e5]] * 2), here.bounds)
+    assert np.isclose(here.volume, there.volume)
+    assert here.body_count == there.body_count == 1
+
+    # the shift is snapped, so the substrate stays on the 1 um lattice
+    assert np.allclose(here.vertices, np.round(here.vertices, 6), atol=0)
+    # one part needs no union at all, and is passed straight through
+    only = substrate.cube(2.0)
+    assert substrate.union([only]) is only
+
+
 def test_a_degenerate_sliver_is_refused_rather_than_flung_away(tmp_path):
     """A detached boolean fragment offsets to nonsense, and nothing else notices.
 

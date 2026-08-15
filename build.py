@@ -437,7 +437,7 @@ def build(
     specs = skins(params)
     print(f"  params     {source}")
     parts = current_substrate() if parts is None else parts
-    body = trimesh.boolean.union(parts)
+    body = substrate.union(parts)
     check_facades(
         Faces(body, parts, _owner(body, parts), classifier(params)), params["fall"]
     )

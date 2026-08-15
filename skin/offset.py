@@ -415,7 +415,7 @@ def skin_over(
     authored parameters — see `Faces.roles`. Only predicates that ask about roles
     need it, so a plain closed-shell offset can leave it out.
     """
-    body = parts[0] if len(parts) == 1 else trimesh.boolean.union(parts)
+    body = substrate.union(parts)   # about the origin; see substrate.union
     skin = planar_offset(body, distance)
     if keep is None:
         return skin

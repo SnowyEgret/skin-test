@@ -88,6 +88,12 @@ Key invariants, each of which spans several files:
 
 - **Geometry is headless.** `blender/display.py` is the only file that imports `bpy`, and it only
   loads — it never authors geometry. Everything else is trimesh/numpy and runs without Blender.
+- **The union is computed about the origin.** `substrate.union` shifts the parts to the origin,
+  unions, and shifts back — manifold3d is float32, whose resolution scales with magnitude, and
+  where two nearly-coplanar faces meet that error is amplified by the shallow angle between them.
+  Measured: the headhouse parapets at 15 m out unioned into **two** bodies, the second a 359 mm
+  sliver of mean thickness 0.04 µm, well under manifold3d's own accuracy floor. Centred, one clean
+  body. The shift is snapped to the same 1 µm lattice so coordinates do not drift off it.
 - **The union is a throwaway.** `skin_over` unions the parts solely to find the outer surface
   (faces where parts touch vanish, so no skin is generated between them), then discards it.
   `parts` is never mutated and stays the substrate. Tests assert this.

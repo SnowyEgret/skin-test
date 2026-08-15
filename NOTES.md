@@ -231,7 +231,34 @@ regrouping can never change the body being offset. Every simplification has to b
 leaf/cap split is a *rules* problem — it is what makes cap plates classify `ROOF` and denies
 parapets a readable `uphill` — and should be decided on those merits.
 
-**The detached sliver, and the guard it produced.** The no-scupper export still leaves one
+**The detached sliver was float32, not the model.** Asked where it came from, the answer is
+neither the export nor a bug in the reader: `trimesh.boolean.union` produced it. Three
+measurements settle it. The wedge is 359 mm long with a mean thickness of **0.04 µm** —
+an order of magnitude below the ~5e-7 m accuracy floor manifold3d's float32 arithmetic
+gives at metre scale, so it is thinner than the arithmetic that made it can resolve.
+Unioning the identical parts **centred on the origin** returns one clean body. And the
+two overlapping corner caps alone (`N.5` + `N.7`) union to one body — it takes the whole
+assembly, 15 m from the origin, to produce it.
+
+The mechanism: float32 resolution scales with magnitude, so at ~15 m a coordinate resolves
+to roughly 1 µm; where the mitred caps meet nearly coplanar, that error is amplified by the
+shallow angle between the faces into millimetres of in-plane displacement. Hence
+`substrate.union` now shifts to the origin, unions, and shifts back, with the shift snapped
+to the 1 µm lattice. `skin_over` and `build.build` both go through it. The synthetic build is
+unchanged to 1e-16, and the headhouse parapets now skin through `skin_over` directly:
+120 faces, watertight, residual 2.26e-16, clearance 19.702 mm.
+
+Leave-one-out was misleading here and is recorded so it is not repeated: dropping any of
+seven parts, at all four corners, collapsed the union to one body. That looks like a
+modelling defect with many contributors; it is actually the signature of a result sitting
+on a numerical knife edge.
+
+Not reproduced in the suite. It needs sloped faces mitring at a shallow angle 15 m out, and
+the synthetic substrate cannot pose that; an attempt to build the fixture produced a
+non-volume. `test_the_union_is_computed_about_the_origin` pins the mechanism — that the
+shift is undone and the lattice preserved — and says so in its docstring.
+
+**The runaway guard.** The no-scupper export still leaves one
 four-vertex wedge orphaned at a mitred parapet corner, by about 6 mm of overshoot past the
 leaf boundary. Offset 20 mm, it landed **20 km out**, while the 120-face body it came from
 offset exactly. `offset_residual` stayed at 7e-12 — the hard constraints *were* all satisfied

@@ -349,13 +349,41 @@ def prism(lo, hi, snap: float | None = 1e-6) -> trimesh.Trimesh:
     return _box(hi - lo, (lo + hi) / 2.0)
 
 
-def union(parts: list[trimesh.Trimesh]) -> trimesh.Trimesh:
-    """Merge parts into one substrate.
+def union(parts: list[trimesh.Trimesh], grid: float = 1e-6) -> trimesh.Trimesh:
+    """Merge parts into one substrate, **computed about the origin**.
 
     Faces where parts touch are interior to the result and disappear here, so
     the offset never sees them and no skin is generated between parts.
+
+    manifold3d works in float32, whose resolution is proportional to magnitude:
+    at 15 m from the origin a coordinate resolves to roughly 1 µm, and where two
+    nearly-coplanar faces meet, that error is amplified by the shallow angle
+    between them. Measured on the headhouse parapets, whose caps mitre at the
+    corners: the union came back in **two** pieces, the second a 359 mm sliver of
+    mean thickness **0.04 µm** — an order of magnitude below manifold3d's own
+    accuracy floor, so provably arithmetic rather than geometry. It offset to
+    20 km and crashed the OBJ writer. Unioning the same parts centred on the
+    origin returns one clean body.
+
+    The shift is snapped to `grid` so coordinates stay on the same 1 µm lattice
+    `snapped` puts them on, and is undone on the way out, so callers see the
+    substrate where they left it.
     """
-    return trimesh.boolean.union(parts)
+    if len(parts) == 1:
+        return parts[0]
+    lo = np.min([p.bounds[0] for p in parts], axis=0)
+    hi = np.max([p.bounds[1] for p in parts], axis=0)
+    centre = snapped((lo + hi) / 2.0, grid)
+
+    shifted = []
+    for part in parts:
+        moved = part.copy()
+        moved.vertices = moved.vertices - centre
+        shifted.append(moved)
+
+    body = trimesh.boolean.union(shifted)
+    body.vertices = body.vertices + centre
+    return body
 
 
 def l_block(arm: float = 2.0, width: float = 1.0, height: float = 1.0) -> trimesh.Trimesh:
