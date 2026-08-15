@@ -78,6 +78,7 @@ skin-parameters.yaml                    every tunable number, JSON-Schema valida
 
 build.py  PART_N vertex/face literals   (transcribed from Blender, snapped to 1 µm)
    → substrate.polyhedron()             list[Trimesh], one per part
+     ...or substrate.from_obj()         a baked export, one part per `o` group
    → skin_over()                        union → planar_offset → keep() → skirt
    → write_obj()                        build/*.obj as n-gons + manifest.json
    → blender/display.py                 imports, tags, displays
@@ -95,6 +96,12 @@ Key invariants, each of which spans several files:
   selection filters on `owner`, not on the plane.
 - **The offset is solved over the whole body, then faces are selected.** Vertices on the edge of
   a selection therefore sit on the miter they would have had if the neighbours were skinned too.
+- **A runaway vertex is refused.** `planar_offset` places each vertex where its offset planes
+  intersect; if that lands further out than the body's own diagonal, those planes are effectively
+  parallel and the intersection means nothing. It raises, naming the vertex. Not a tolerance to
+  tune — it says the result is not a skin of this mesh. The cause is always a degenerate sliver,
+  in practice a fragment a boolean left detached: the residual stays clean (the hard constraints
+  *are* satisfied), so nothing else notices. `metadata["max_displacement"]` reports the worst.
 - **Vertical/horizontal exact, sloped absorbs the error.** A sloped top over a concave plan
   over-determines the offset. `planar_offset` splits the plane equations into hard (|n_z| ≈ 0 or
   ≈ 1) and least-squares (sloped), plus hard equations keeping substrate-horizontal edges
@@ -242,6 +249,20 @@ listed — there are no plane coordinates and no part indices in them:
 Duncan models in Blender and asks for it to be skinned. The routine: read the scene out, snap
 coordinates to 1 µm, transcribe into `build.py` as `PART_N` vertex/face lists, rebuild. Faces may
 be given in any winding — `polyhedron()` fan-triangulates and calls `fix_normals()`.
+
+**Transcription is for small substrates only.** Four parts as literals is reviewable; the
+student-house's exterior walls, parapets and roof layers run to roughly eighty. Those arrive
+through `substrate.from_obj(path, metadata=...)` instead — one OBJ export out of Blender, one part
+per `o` group, snapped to 1 µm on the way in. Blender cannot be the reader: a `.blend` needs
+`bpy`, and geometry here is headless. The `PART_N` parts stay regardless — they are the synthetic
+worst case the tests run on, not a stand-in for a real substrate.
+
+`from_obj` parses the OBJ itself rather than calling `trimesh.load`, which in trimesh 5.0.0
+silently merges every `o` group into one mesh named after the first. It raises, naming the object,
+on a group with no faces, a face loop the fan triangulation would tile wrongly (concave from its
+first vertex — export that object triangulated), and a part that is not a closed solid. That last
+one matters because `skin_over` unions the parts: a union over an open shell produces nonsense
+rather than an error.
 
 **Hand-modelled objects survive `reload()`.** `clear()` removes only objects carrying the
 `skin_generated` key, so anything Duncan models is untouched — that is the same safety property

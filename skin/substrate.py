@@ -6,6 +6,8 @@ couple of lines and no hand-written triangulation.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import trimesh
 from trimesh.transformations import translation_matrix
@@ -113,18 +115,237 @@ def polyhedron(vertices, faces) -> trimesh.Trimesh:
     return mesh
 
 
+def _parse_obj(text: str):
+    """`(vertices, [(name, [face loops])])` from an OBJ, indices resolved 0-based.
+
+    Hand-written rather than handed to `trimesh.load`, which in trimesh 5.0.0
+    silently merges every `o` group into one mesh named after the *first* group:
+    a two-object file comes back as one geometry called `Wall_A` holding both
+    bodies. A loader that mislabels parts without saying so is the exact failure
+    this codebase raises about everywhere else, and object identity is load
+    bearing here — `_owner` maps union faces back to parts, and `classify` runs
+    per part. Parsing the three directives we need is cheaper than the check
+    that would be required to trust the alternative.
+
+    Everything else in the file — `vn`, `vt`, `usemtl`, `g`, `s` — is ignored.
+    """
+    vertices, groups = [], []
+    for number, line in enumerate(text.splitlines(), start=1):
+        fields = line.split()
+        if not fields:
+            continue
+        tag = fields[0]
+        if tag == "v":
+            vertices.append([float(c) for c in fields[1:4]])
+        elif tag == "o":
+            groups.append((" ".join(fields[1:]), []))
+        elif tag == "f":
+            if not groups:
+                raise ValueError(
+                    f"{number}: face before any `o` group. Every part needs a name — "
+                    f"export from Blender with objects preserved, not merged."
+                )
+            # OBJ indices are 1-based and global across the file; negative ones
+            # count back from the vertices seen so far
+            loop = [int(t.split("/")[0]) for t in fields[1:]]
+            groups[-1][1].append([i - 1 if i > 0 else len(vertices) + i for i in loop])
+    return vertices, groups
+
+
+def _bodies(loops: list) -> list:
+    """Split one `o` group's face loops into edge-connected components.
+
+    **A group is not a part; a body is.** A baked wall arrives as its inner leaf,
+    its outer leaf and — on a parapet — a cap plate, modelled as separate solids
+    inside one Blender object and *touching*. Their shared corners are written as
+    distinct vertex indices at identical coordinates, so merging the group into
+    one mesh fuses those into edges with four incident faces: non-manifold, and
+    rejected as an open shell though every solid in it is closed.
+
+    Splitting is not a workaround for that, it is the correct reading. `parts` is
+    a list of solids that touch, and `skin_over` unions them precisely so the
+    faces where they touch vanish — a leaf boundary must dissolve exactly like
+    the boundary between two separate objects. Grouping them into one part would
+    also hand `classify` and `uphill` a multi-body mesh, whose oriented bounding
+    box and area-weighted fall describe nothing.
+
+    Components are found over the OBJ's own indices, before any snapping, so
+    coincident-but-distinct vertices keep the bodies apart.
+    """
+    owner = list(range(len(loops)))
+
+    def root(i):
+        while owner[i] != i:
+            owner[i] = owner[owner[i]]
+            i = owner[i]
+        return i
+
+    seen = {}
+    for face, loop in enumerate(loops):
+        for a, b in zip(loop, loop[1:] + loop[:1]):
+            edge = (min(a, b), max(a, b))
+            if edge in seen:
+                left, right = root(face), root(seen[edge])
+                owner[left] = right
+            else:
+                seen[edge] = face
+
+    grouped = {}
+    for face in range(len(loops)):
+        grouped.setdefault(root(face), []).append(loops[face])
+    return [grouped[key] for key in sorted(grouped)]
+
+
+def _collapsed(loops: list, points: np.ndarray):
+    """Fuse each loop's coincident corners; drop loops left with fewer than three.
+
+    A baked solid arrives with faces whose corners repeat — `Roof_Headhouse_
+    InsulationTaper` writes a triangle as a six-sided loop with every corner
+    doubled, and a zero-area sliver as a four-sided one with two. They are
+    distinct OBJ indices at one position, which is what a boolean leaves behind.
+
+    Cleaned rather than raised on, unlike a concave loop: a doubled corner has
+    exactly one sensible reading, so there is nothing here for a person to
+    decide. It has to happen *before* the fan test, which measures triangle
+    orientation and reads a repeated corner as a zero-area inversion.
+
+    Dropping a fully collapsed loop keeps the body closed: `[A, A, B, B]`
+    contributes the edge `A-B` twice, so removing it removes both.
+
+    Returns `(loops, number collapsed)`.
+    """
+    canonical, seen = {}, {}
+    for index, point in enumerate(points):
+        canonical[index] = seen.setdefault(tuple(point), index)
+
+    kept, touched = [], 0
+    for loop in loops:
+        merged = [canonical[i] for i in loop]
+        trimmed = [
+            v for i, v in enumerate(merged) if v != merged[(i - 1) % len(merged)]
+        ]
+        if len(trimmed) != len(loop):
+            touched += 1
+        if len(trimmed) >= 3:
+            kept.append(trimmed)
+    return kept, touched
+
+
+def _fan_is_valid(points: np.ndarray) -> bool:
+    """Whether `polyhedron`'s fan triangulation is faithful for this loop.
+
+    A fan from vertex 0 tiles a polygon exactly when the polygon is star-shaped
+    from that vertex; otherwise triangles fall outside it and overlap. Area does
+    not detect this — signed triangle areas telescope to the true polygon area
+    whatever the shape — so the test is that no triangle is *inverted* relative
+    to the loop's own normal.
+
+    Transcribed parts are hand-checked, but a baked wall with a notch in it is
+    an ordinary thing to arrive in an export, and a silently inverted triangle
+    inside a substrate is close to undebuggable downstream.
+    """
+    normal = np.cross(points, np.roll(points, -1, axis=0)).sum(axis=0)  # Newell
+    scale = np.linalg.norm(normal)
+    if scale < 1e-18:
+        return False  # degenerate: no plane, so no triangulation to be faithful to
+    normal = normal / scale
+    edges = points[1:] - points[0]
+    signed = np.cross(edges[:-1], edges[1:]) @ normal
+    return bool((signed > 0).all())
+
+
+def snapped(points, grid: float = 1e-6) -> np.ndarray:
+    """Quantise coordinates to a grid — 1 µm by default.
+
+    Modelled parts arrive with faces that miss each other by tens to hundreds of
+    nanometres, and those near-misses become sliver faces in a union and
+    near-parallel plane pairs in the offset solve. Snapping makes
+    intended-coincident faces exactly coincident.
+
+    It is not a cure-all: a coordinate sitting within a nanometre of a grid
+    *boundary* can be split across it by rounding rather than joined, which is
+    what `PART_4`'s transcription note in `build.py` records. Rounding cannot
+    tell that case from two features genuinely 1 µm apart, so nothing here tries.
+    """
+    return np.round(np.asarray(points, dtype=float) / grid) * grid
+
+
+def from_obj(path, metadata: dict | None = None, grid: float = 1e-6) -> list:
+    """Read a multi-object OBJ as one part per `o` group.
+
+    The import path for a substrate too large to transcribe: `build.py` carries
+    four parts as `PART_N` literals, and the student-house's exterior walls,
+    parapets and roof layers run to roughly eighty. Coordinates are snapped to
+    `grid` on the way in, which is where transcription used to do it.
+
+    Blender cannot be the reader — a `.blend` needs `bpy`, and geometry here is
+    headless — so the handoff is one OBJ export, which trimesh loads without it.
+
+    `metadata` is merged into every part. It is a plain dict rather than anything
+    named, because `skin/` does not know what a facade is: `build.py` passes
+    `{FACADE: RAINSCREEN}` the same way `current_substrate()` stamps its four.
+    Each part also carries its `o` name as `metadata["name"]`, so a raise
+    downstream can say which object it meant.
+
+    Raises on a group with no faces, a face loop `polyhedron`'s fan cannot
+    triangulate faithfully, and a part that is not a closed solid — the last
+    because `skin_over` unions the parts, and a union of open shells produces
+    nonsense rather than an error. Each names the object.
+    """
+    vertices, groups = _parse_obj(Path(path).read_text())
+    if not groups:
+        raise ValueError(f"{path}: no `o` groups, so the file names no parts")
+
+    points = snapped(vertices, grid)
+    parts = []
+    for group, loops in groups:
+        if not loops:
+            raise ValueError(f"{path}: object {group!r} has no faces")
+
+        solids = _bodies(loops)
+        for number, body in enumerate(solids, start=1):
+            name = group if len(solids) == 1 else f"{group}.{number}"
+            used = sorted({index for loop in body for index in loop})
+            local = {whole: part for part, whole in enumerate(used)}
+            corners = points[used]
+            faces, collapsed = _collapsed(
+                [[local[index] for index in loop] for loop in body], corners
+            )
+            if not faces:
+                raise ValueError(f"{path}: {name!r} has no face left after collapsing")
+
+            for loop in faces:
+                if len(loop) > 3 and not _fan_is_valid(corners[loop]):
+                    raise ValueError(
+                        f"{path}: {name!r} has a {len(loop)}-sided face that fan "
+                        f"triangulation would tile wrongly — it is concave from its "
+                        f"first vertex, or degenerate. Triangulate it on export."
+                    )
+
+            part = polyhedron(corners, faces)
+            if not part.is_watertight:
+                raise ValueError(
+                    f"{path}: {name!r} is not a closed solid. `skin_over` unions the "
+                    f"parts to find the outer surface, and an open shell makes that "
+                    f"union meaningless rather than failing — so it is refused here."
+                )
+            part.metadata["name"] = name
+            part.metadata["object"] = group  # the leaves of one wall share this
+            part.metadata["collapsed_faces"] = collapsed  # export noise, for inspection
+            part.metadata.update(metadata or {})
+            parts.append(part)
+    return parts
+
+
 def prism(lo, hi, snap: float | None = 1e-6) -> trimesh.Trimesh:
     """Axis-aligned rectangular prism from its bounds.
 
-    `snap` quantises the bounds to a grid (1 µm by default). Modelled parts
-    arrive with faces that miss each other by a few hundred nanometres, and
-    those near-misses become sliver faces in a union and near-parallel plane
-    pairs in the offset solve; snapping makes intended-coincident faces exactly
-    coincident. Pass `snap=None` to keep the bounds verbatim.
+    `snap` quantises the bounds to a grid (1 µm by default) — see `snapped`.
+    Pass `snap=None` to keep the bounds verbatim.
     """
     lo, hi = np.asarray(lo, dtype=float), np.asarray(hi, dtype=float)
     if snap:
-        lo, hi = np.round(lo / snap) * snap, np.round(hi / snap) * snap
+        lo, hi = snapped(lo, snap), snapped(hi, snap)
     return _box(hi - lo, (lo + hi) / 2.0)
 
 

@@ -5,6 +5,7 @@ build/
 
 # Blender's save-alongside backup
 *.blend1
+*.blend
 
 __pycache__/
 *.py[cod]

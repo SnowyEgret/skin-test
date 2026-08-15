@@ -54,10 +54,36 @@ def faces_as_ngons(mesh: trimesh.Trimesh) -> list[list[int]]:
     return ngons
 
 
+def _object_lines(mesh: trimesh.Trimesh, name: str, offset: int) -> list[str]:
+    """One `o` group. `offset` is how many vertices precede it in the file, since
+    OBJ face indices are 1-based and global rather than per-object."""
+    return (
+        [f"o {name}"]
+        + [f"v {x:.9g} {y:.9g} {z:.9g}" for x, y, z in mesh.vertices]
+        + [
+            "f " + " ".join(str(i + 1 + offset) for i in face)
+            for face in faces_as_ngons(mesh)
+        ]
+    )
+
+
 def write_obj(mesh: trimesh.Trimesh, path: str | Path, name: str = "mesh") -> Path:
     path = Path(path)
-    lines = [f"o {name}"]
-    lines += [f"v {x:.9g} {y:.9g} {z:.9g}" for x, y, z in mesh.vertices]
-    lines += ["f " + " ".join(str(i + 1) for i in face) for face in faces_as_ngons(mesh)]
+    path.write_text("\n".join(_object_lines(mesh, name, 0)) + "\n")
+    return path
+
+
+def write_objs(named, path: str | Path) -> Path:
+    """Several meshes into one OBJ as `o` groups — what `substrate.from_obj` reads.
+
+    `named` is `[(name, mesh), ...]`. The single-mesh `write_obj` stays the
+    writer for `build/`, where one file per object plus a manifest is what
+    `display.reload()` consumes; this is for handing a whole substrate across in
+    one file, which is how it arrives from Blender.
+    """
+    path, lines, offset = Path(path), [], 0
+    for name, mesh in named:
+        lines += _object_lines(mesh, name, offset)
+        offset += len(mesh.vertices)
     path.write_text("\n".join(lines) + "\n")
     return path

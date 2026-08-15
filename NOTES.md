@@ -25,7 +25,7 @@ now **authored rather than coded**. `build.py` holds no plane coordinates, no pa
 sets and no magic constants: exterior/interior comes off each wall's own top slope,
 climb-or-flange from which face the roof runs into, wall-vs-roof from
 `substrate.classify`, cladding system from `part.metadata`, and every tunable number from
-`skin-parameters.yaml`. 32 tests, ~1.5 s.
+`skin-parameters.yaml`. 42 tests, ~1.6 s.
 
 Agreed order for what remains, from the migration discussion:
 
@@ -36,8 +36,23 @@ Agreed order for what remains, from the migration discussion:
    which the `skins:` list already supports. A scalar `distance` is correct, not a
    limitation.
 4. ~~YAML + JSON Schema parameters~~ — done 2026-08-15. See below.
+5. **Skin the real substrate**, agreed 2026-08-15. Duncan bakes the student-house's
+   exterior walls, parapets and roofs to solids, exports one OBJ, and we skin it here.
+   If it will not skin, the **first** move is reversing decisions upstream to reduce the
+   substrate's complexity — he has two targets in mind — and only if that fails do we
+   adapt this side. A condition that does not exist needs no rule, no test and no
+   debugging; that lever exists only because he owns both repos.
 
-Nothing is queued after 4. The next move is Duncan's.
+   The import reader is built and waiting (`substrate.from_obj`). Not yet done: it has
+   only been run on round-tripped synthetic parts, never on a bake.
+
+   Rejected on the way: reading `skin_assembly.py` to infer what conditions the real
+   substrate poses. The substrate **is** the requirement and the old module is one failed
+   attempt at meeting it, so deriving the requirement from the attempt mixes real
+   conditions with accumulated workarounds and cannot tell them apart. Do that pass —
+   categorising `skin_inputs`' thirteen inputs as dissolved / needs a `Faces` addition /
+   needs a new part — only once the whole substrate skins, when there is ground truth to
+   check it against.
 
 ## The parameter layer (2026-08-15)
 
@@ -127,14 +142,128 @@ Blender's python needs neither PyYAML nor jsonschema here — `blender/display.p
 only `bpy`, `json` and `pathlib`. The student-house had to install both into Blender's
 python; this rig does not, because nothing on the bpy side touches `skin/`.
 
+## The OBJ import path (2026-08-15)
+
+`substrate.from_obj(path, metadata=...)` — one part per `o` group, snapped to 1 µm on the
+way in, which is where transcription used to do it. Built ahead of the bake so it is
+waiting; **only exercised on round-tripped synthetic parts so far.**
+
+Three things it refuses, each naming the object, and each for a measured reason:
+
+- **`trimesh.load` is not used.** In trimesh 5.0.0 it merges every `o` group into one mesh
+  named after the *first*: a two-object file comes back as one geometry called `Wall_A`
+  holding both bodies. Object identity is load bearing — `_owner` maps union faces back to
+  parts and `classify` runs per part — so `_parse_obj` reads `o`/`v`/`f` itself. A test
+  pins the merging behaviour so we notice if a trimesh upgrade changes it.
+- **An open shell.** `skin_over` unions the parts, and a union over an open shell produces
+  nonsense rather than raising, so it has to stop here.
+- **A face the fan cannot tile.** `polyhedron` fan-triangulates, which is faithful only
+  when the loop is star-shaped from its first vertex; a baked wall with a notch is not.
+  Area does **not** detect this — signed triangle areas telescope to the true polygon area
+  whatever the shape, which is why the first check written was wrong — so the test is that
+  no triangle is inverted relative to the loop's own normal. Fix on the Blender side by
+  exporting that object triangulated; there is no earcut available to do it here.
+
+Decisions made with Duncan before the bake:
+
+- The `.blend` cannot be the input — it needs `bpy`, and geometry is headless. One OBJ
+  export is the handoff.
+- The four `PART_N` parts **stay**. They are the synthetic worst case the tests run on,
+  and the brick condition belongs there where it can be posed deliberately.
+- The bake carries no IFC metadata, and it does not need to: the reader stamps one
+  cladding system across every part, exactly as `current_substrate()` does. `skin/` still
+  never learns what a facade is — `metadata` is a plain dict the caller fills.
+- Roof layer stacks (`Roof_Deck9_CLT` / `_InsulationFlat` / `_InsulationTaper`) can all
+  come across. The union discards the internal faces and skins the composite outer surface.
+
+Expected to bite first, both by design and both wanting a decision rather than a fallback:
+`uphill` raises on a flat top (real walls are stacked panels — the parapet in the bake is
+what finally makes that rule writable), and `classify` raises `AmbiguousPart` on anything
+block-like.
+
+## Skinning the real substrate (2026-08-15)
+
+Three exports from the student-house, each simpler than the last. The reader took two
+fixes to read the first one and has been unchanged since; the geometry took longer.
+
+**What the reader needed** (both were bugs here, not in the exports — every object in every
+export is a closed polygonal solid, every edge exactly twice):
+
+- **A group is not a part; a body is.** A baked wall arrives as inner leaf, outer leaf and
+  cap plate, modelled as separate solids inside one Blender object and *touching*. Their
+  shared corners are distinct indices at identical coordinates, so merging the group fuses
+  them into edges with four incident faces — non-manifold, and refused as an open shell
+  though every solid in it is closed. `_bodies` splits over the OBJ's own indices, before
+  snapping, so coincident-but-distinct corners keep the bodies apart.
+- **Degenerate faces.** The insulation taper writes triangles as six-sided loops with every
+  corner doubled, and zero-area slivers as quads with two — 11 faces, boolean residue.
+  `_collapsed` fuses them; unlike a concave loop there is nothing for a person to decide.
+
+**What the geometry needed.** Failures were all *self-contact*: a vertex carrying a plane and
+its exact opposite, `n·t = d` and `−n·t = d`, which the solve can only split, leaving a
+residual of the whole offset distance. Three sources, measured:
+
+1. **A knife corner** — `Headhouse-E` and `Headhouse-N` are diagonal neighbours meeting only
+   along a vertical line, with E's bottom landing partway up N's uncut corner edge. Fixed by
+   extending the Tail bodies down to cover the wall end. **Costs no design decisions** — the
+   Tail's job is to cap that end and it merely stopped short. The split-level bottoms can stay.
+2. **The scupper**, modelled by decomposing the parapet around a void rather than punching a
+   hole (which is why the union came back genus 0). The one change that unblocks skinning, on
+   both exports. Duncan's plan is to punch it later from IFC opening data, as windows and
+   doors already are.
+3. **A detached sliver** — see below.
+
+**Measured, so it is not re-argued:**
+
+| | residual | note |
+|---|---|---|
+| walls+parapets as exported | 2.00e-02 | 5 self-contacts |
+| leaves and caps merged | 2.00e-02 | *unchanged* — union is associative |
+| tails cover the wall end | 2.00e-02 | knife corner gone |
+| \+ scupper punched later | 7.40e-12 | **solves**, bottoms untouched |
+| parapets+CLT, no scupper | 7.63e-17 | **solves**, skin exactly 20 mm out |
+
+**Merging objects buys nothing.** `skin_over` unions the parts, and union is associative, so
+regrouping can never change the body being offset. Every simplification has to be a
+*re-modelling*. This caught out two of the three candidate targets.
+
+**So of the three simplifications, only the scupper is needed to skin.** Eliminating the
+leaf/cap split is a *rules* problem — it is what makes cap plates classify `ROOF` and denies
+parapets a readable `uphill` — and should be decided on those merits.
+
+**The detached sliver, and the guard it produced.** The no-scupper export still leaves one
+four-vertex wedge orphaned at a mitred parapet corner, by about 6 mm of overshoot past the
+leaf boundary. Offset 20 mm, it landed **20 km out**, while the 120-face body it came from
+offset exactly. `offset_residual` stayed at 7e-12 — the hard constraints *were* all satisfied
+— so nothing in the stack noticed; it surfaced as a crash in the OBJ writer. Hence the runaway
+check in `planar_offset` (see CLAUDE.md). Its test transcribes the real wedge as a literal: a
+made-up sliver will not reproduce it, because an acute plan wedge saturates at a bounded
+displacement once `_vertex_normals` snaps its faces onto the axis.
+
+Two corrections that came out of the same fragment, recorded because both were reported to
+Duncan before being caught: the 44.8 mm slope deviation and the 19.70 mm clearance were **the
+chip**, not the mitred corners over-determining the offset. Without it, 0.298 mm and a clean
+20 mm. The mitred corner caps are fine — and removing them makes things far worse (residual
+2.69e-02), because they are what covers the corners.
+
+**Also corrected:** parapet caps fall **inward**, toward the roof, high edge outboard. An
+earlier note here said outward; that was `uphill` (the *rise* direction) misread as fall. The
+consequence matters — the exterior/interior rule reads the outboard face as the facade, which
+is right. It does not misfire on parapets.
+
+**Next wall.** Every leaf reports `uphill: flat top`; only the caps have a fall. So the
+exterior/interior rule still cannot run on the leaves — it needs to take its direction from
+the cap above, which is the open item this file has carried from the start. The no-scupper
+parapet export is a good dataset to build it against.
+
 ## Layout
 
 | file | what |
 |---|---|
 | `skin/offset.py` | the solver. `planar_offset` (one constrained system), `skin_over` (union → offset → select faces → skirt → flange), `Faces` (what a predicate may ask) |
 | `skin/measure.py` | `clearance` (skin to substrate), `separation` (skin to skin) |
-| `skin/substrate.py` | `polyhedron` (from vertex/face lists), `prism`, `cube`, `l_block`, `u_block`, and `classify` / `horizontality` (WALL vs ROOF from shape) |
-| `skin/export.py` | OBJ writer that emits n-gons, not triangles |
+| `skin/substrate.py` | `polyhedron` (from vertex/face lists), `from_obj` (a baked export, one part per `o` group), `snapped`, `prism`, `cube`, `l_block`, `u_block`, and `classify` / `horizontality` (WALL vs ROOF from shape) |
+| `skin/export.py` | OBJ writer that emits n-gons, not triangles. `write_obj` one per file for `build/`, `write_objs` many as `o` groups for a whole substrate |
 | `skin/parameters.py` | the parameter layer. `load` / `validate` / `check_seeds` / `load_validated`. The only module that imports yaml or jsonschema |
 | `skin-parameters.yaml` | every tunable number: `classify`'s thresholds, `fall`, the five distances |
 | `skin-parameters.schema.json` | the JSON Schema it is validated against |
@@ -142,6 +271,7 @@ python; this rig does not, because nothing on the bpy side touches `skin/`.
 | `blender/display.py` | the only file that imports bpy. Loads, never authors |
 | `tests/test_offset.py` | the geometry suite |
 | `tests/test_parameters.py` | the parameter-layer suite |
+| `tests/test_import.py` | the OBJ import suite |
 
 ## The two skins
 

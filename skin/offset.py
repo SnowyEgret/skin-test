@@ -99,12 +99,36 @@ def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6):
     )
     t = np.linalg.lstsq(k, np.concatenate([S.T @ s, h]), rcond=None)[0][:width]
 
+    # A vertex is placed where its offset planes intersect. If that lands further
+    # away than the whole body is across, those planes are effectively parallel
+    # and the intersection means nothing — the answer has left the building. This
+    # is not a tolerance to tune: it says the result is not a skin of this mesh.
+    #
+    # In practice it is a degenerate sliver, and in practice that sliver is a
+    # detached fragment a boolean left behind. Measured on the headhouse parapets:
+    # a four-vertex wedge orphaned at a mitred corner, 6 mm of overshoot, offset
+    # 20 mm — its vertices landed 20 km out, while the 120-face body it came from
+    # offset exactly. The residual stayed at 7e-12 throughout, so nothing else here
+    # notices; it first showed up as a crash in the OBJ writer.
+    moved = np.linalg.norm(t.reshape(-1, 3), axis=1)
+    span = float(np.linalg.norm(mesh.bounds[1] - mesh.bounds[0]))
+    if (moved > span).any():
+        worst = int(moved.argmax())
+        raise ValueError(
+            f"offset is undetermined at vertex {worst} {np.round(mesh.vertices[worst], 4).tolist()}: "
+            f"it moved {moved[worst]:.3g} m for a {distance} m offset, further than the body's own "
+            f"{span:.3g} m diagonal, so the planes meeting there are effectively parallel. "
+            f"Usually a degenerate sliver — check whether the substrate has a detached "
+            f"fragment ({mesh.body_count} connected component(s) here)."
+        )
+
     out = trimesh.Trimesh(
         vertices=mesh.vertices + t.reshape(-1, 3), faces=mesh.faces.copy(), process=False
     )
     out.metadata["offset_distance"] = distance
     out.metadata["offset_residual"] = float(np.abs(H @ t - h).max()) if H.size else 0.0
     out.metadata["slope_deviation"] = float(np.abs(S @ t - s).max()) if S.size else 0.0
+    out.metadata["max_displacement"] = float(moved.max()) if moved.size else 0.0
     return out
 
 
