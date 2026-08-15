@@ -169,6 +169,29 @@ class Faces:
             )
         return [self.classify(p) for p in self.parts]
 
+    @cached_property
+    def elements(self) -> list:
+        """Part indices grouped by the element each body belongs to.
+
+        A **body** is the right unit for solidity — `from_obj` splits an object
+        into its connected solids because the boolean must keep touching solids
+        apart. It is the wrong unit for what a wall *is*. A baked wall arrives as
+        an inner leaf, an outer leaf and a cap plate; those are not three walls
+        with three directions, they are one wall, and only the cap carries its
+        slope. Anything asking what a wall is *for* has to ask the element.
+
+        `metadata["object"]` names it — the Blender object the bodies were split
+        out of, stamped by `from_obj`. Where it is absent every part is its own
+        element. That is the identity grouping, not a guess: a substrate that
+        declares no grouping has each part standing alone, which is exactly the
+        transcribed `PART_N` case.
+        """
+        groups: dict = {}
+        for index, part in enumerate(self.parts):
+            name = part.metadata.get("object")
+            groups.setdefault(("object", name) if name else ("part", index), []).append(index)
+        return list(groups.values())
+
     def of_role(self, role) -> np.ndarray:
         """Mask of faces belonging to a part of this role."""
         return np.array([r == role for r in self.roles])[self.owner]

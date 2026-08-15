@@ -176,8 +176,8 @@ def test_exterior_and_interior_are_read_off_each_wall_s_own_slope():
     exterior, interior = wall_faces(faces, FALL)
 
     # each wall's top falls toward the interior, so uphill points at the facade
-    assert np.allclose(uphill(parts[1]), [1.0, 0.0], atol=1e-3)  # part 2 -> +X
-    assert np.allclose(uphill(parts[3]), [0.0, 1.0], atol=1e-3)  # part 4 -> +Y
+    assert np.allclose(uphill([parts[1]]), [1.0, 0.0], atol=1e-3)  # part 2 -> +X
+    assert np.allclose(uphill([parts[3]]), [0.0, 1.0], atol=1e-3)  # part 4 -> +Y
 
     def planes(mask):
         return {
@@ -210,7 +210,7 @@ def test_uphill_refuses_a_flat_top():
     from build import uphill
 
     with pytest.raises(ValueError, match="flat top"):
-        uphill(substrate.prism((0, 0, 0), (4.0, 0.3, 3.0)))
+        uphill([substrate.prism((0, 0, 0), (4.0, 0.3, 3.0))])
 
 
 def _facing_wall(x0, x1, y0, y1, high, low):
@@ -243,8 +243,8 @@ def test_a_facade_s_cladding_system_comes_from_the_part_not_its_position():
     faces = _faces(parts, body)
 
     # both walls face the same way, so direction cannot tell them apart
-    assert np.allclose(uphill(front), [-1.0, 0.0], atol=1e-3)
-    assert np.allclose(uphill(headhouse), [-1.0, 0.0], atol=1e-3)
+    assert np.allclose(uphill([front]), [-1.0, 0.0], atol=1e-3)
+    assert np.allclose(uphill([headhouse]), [-1.0, 0.0], atol=1e-3)
 
     brick = facades_of(faces, BRICK, FALL)
     rainscreen = facades_of(faces, RAINSCREEN, FALL)

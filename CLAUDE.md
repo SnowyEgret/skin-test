@@ -229,7 +229,16 @@ there is deliberately no fallback pair of thresholds.
 listed — there are no plane coordinates and no part indices in them:
 
 - **exterior / interior** — a wall's top falls toward its interior, so the face under the high
-  edge is the facade and the one under the low edge is the interior (`uphill` + `wall_faces`). A
+  edge is the facade and the one under the low edge is the interior (`uphill` + `wall_faces`).
+  `uphill` takes the **element**, `Faces.elements` — every body of one wall — not a single part.
+  A baked wall arrives as an inner leaf, an outer leaf and a cap plate; the leaves are
+  flat-topped boxes and only the cap is sloped, so a per-body reading raises on two thirds of a
+  wall that plainly has a high side. A flat face contributes `(0, 0)` to the area-weighted sum,
+  so hidden leaf tops dilute the magnitude and never the direction — even where, as on a real
+  parapet, they match the cap in area. Which faces then get classified is still decided per body,
+  by role. This is deliberately *not* "find the cap part above": that would require a separate cap
+  body to exist, whereas summing over the element gives the same answer whether the leaves are
+  split or merged upstream. A
   vertical face across the fall is an **end** and is neither, which is how section cuts drop out
   without being enumerated. `fall` is the authored direction cosine that separates the two from an
   end (0.707 = 45°); every rule below takes it as an argument and `skins()` binds it. The

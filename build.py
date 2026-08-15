@@ -126,17 +126,36 @@ def _upward(normals):
     return normals[:, 2] > TOL
 
 
-def uphill(part) -> np.ndarray:
-    """The unit horizontal direction a part's top rises in.
+def uphill(element) -> np.ndarray:
+    """The unit horizontal direction an element's top rises in.
 
     A plane of normal `n` carries z uphill along `-(n_x, n_y)`, so the top names
-    its own fall. Area-weighted over the part's upward faces, because a wall
-    carrying a hip has more than one top and the large one should govern.
+    its own fall. Area-weighted over the upward faces, because a wall carrying a
+    hip has more than one top and the large one should govern.
+
+    Takes the **element** — every body of one wall — not a single part. A baked
+    wall arrives as an inner leaf, an outer leaf and a cap plate; the leaves are
+    flat-topped boxes and only the cap is sloped, so a per-body reading raises on
+    two thirds of a wall that plainly has a high side. Summing over the element
+    puts the cap's slope where it belongs, on the wall it caps.
+
+    That works without merging anything and without hunting for "the cap above":
+    a flat face contributes `(0, 0)` to the sum, so the leaf tops dilute the
+    magnitude and never the direction. Measured on the headhouse parapets, each
+    carrying 1.8–2.4 m² of hidden flat leaf top, every element still resolves to
+    a clean outboard direction. It is also indifferent to whether the leaves are
+    split at all: merge them upstream and each element becomes one part with a
+    sloped top, and the same sum gives the same answer.
     """
-    up = part.face_normals[:, 2] > TOL
-    if not up.any():
-        raise ValueError("part has no upward face, so it has no high side")
-    fall = (part.face_normals[up][:, :2] * part.area_faces[up][:, None]).sum(axis=0)
+    fall, seen = np.zeros(2), False
+    for part in element:
+        up = part.face_normals[:, 2] > TOL
+        if not up.any():
+            continue
+        seen = True
+        fall += (part.face_normals[up][:, :2] * part.area_faces[up][:, None]).sum(axis=0)
+    if not seen:
+        raise ValueError("element has no upward face, so it has no high side")
     length = float(np.linalg.norm(fall))
     if length < TOL:
         raise ValueError(
@@ -184,11 +203,16 @@ def wall_faces(faces, fall):
     vertical = np.abs(faces.normals[:, 2]) < TOL
     exterior = np.zeros(len(faces.owner), dtype=bool)
     interior = np.zeros(len(faces.owner), dtype=bool)
-    for index, part in enumerate(faces.parts):
-        if faces.roles[index] != substrate.WALL:
+    for members in faces.elements:
+        walls = [i for i in members if faces.roles[i] == substrate.WALL]
+        if not walls:
             continue
-        facing = faces.normals[:, :2] @ uphill(part)
-        mine = vertical & (faces.owner == index)
+        # the direction comes from the whole element -- the cap plate carries the
+        # slope and is usually a ROOF body, so reading only the wall bodies would
+        # find nothing but flat tops. Which faces get classified is still decided
+        # per body, by role.
+        facing = faces.normals[:, :2] @ uphill([faces.parts[i] for i in members])
+        mine = vertical & np.isin(faces.owner, walls)
         exterior |= mine & (facing > fall)
         interior |= mine & (facing < -fall)
 

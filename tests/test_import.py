@@ -108,6 +108,72 @@ def test_an_imported_substrate_skins(tmp_path):
     assert np.allclose(skin.bounds, [[-1.1, -1.1, -1.1], [4.1, 1.1, 1.1]])
 
 
+def _leaved_parapet():
+    """A baked parapet: inner leaf, outer leaf, and a sloped cap over both."""
+    inner = substrate.prism((0.00, 0, 0.0), (0.25, 4, 0.7))
+    outer = substrate.prism((0.25, 0, 0.0), (0.42, 4, 0.7))
+    cap = substrate.polyhedron(  # 0.75 high at x=0, 0.73 at x=0.42: falls +X
+        [(0, 0, 0.70), (0.42, 0, 0.70), (0.42, 4, 0.70), (0, 4, 0.70),
+         (0, 0, 0.75), (0.42, 0, 0.73), (0.42, 4, 0.73), (0, 4, 0.75)],
+        [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4],
+         [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]],
+    )
+    for part in (inner, outer, cap):
+        part.metadata["object"] = "Parapet"
+    return [inner, outer, cap]
+
+
+def test_a_wall_takes_its_direction_from_the_element_not_the_body():
+    """Only the cap is sloped, so a per-body reading raises on two thirds of a
+    wall that plainly has a high side.
+
+    Summing over the element fixes it without merging anything and without
+    hunting for "the cap above": a flat face contributes (0, 0), so the leaf tops
+    dilute the magnitude and never the direction.
+    """
+    from build import uphill
+
+    inner, outer, cap = _leaved_parapet()
+
+    for leaf in (inner, outer):
+        with pytest.raises(ValueError, match="flat top"):
+            uphill([leaf])                       # a leaf alone has no high side
+
+    assert np.allclose(uphill([cap]), [-1, 0], atol=1e-3)
+    assert np.allclose(uphill([inner, outer, cap]), [-1, 0], atol=1e-3)
+
+    # the cap covers both leaves exactly, so the hidden flat top matches the
+    # sloped one in area — half the upward surface of this wall is flat, and the
+    # direction is still the cap's, because flat contributes (0, 0) not a vote
+    flat = sum(p.area_faces[p.face_normals[:, 2] > 1e-6].sum() for p in (inner, outer))
+    sloped = cap.area_faces[cap.face_normals[:, 2] > 1e-6].sum()
+    assert np.isclose(flat, sloped, rtol=0.01)
+
+    # and merging the leaves upstream would give the same answer, so the rule
+    # does not commit us to the split
+    assert np.allclose(uphill([trimesh.boolean.union([inner, outer, cap])]),
+                       [-1, 0], atol=1e-3)
+
+
+def test_elements_group_by_object_and_fall_back_to_one_part_each():
+    """`metadata["object"]` names the element. Absent, every part is its own —
+    the identity grouping, which is exactly the transcribed `PART_N` case."""
+    from build import classifier, current_substrate
+    from skin.offset import Faces, _owner
+    from skin import parameters
+
+    params = parameters.load_validated()
+    grouped = _leaved_parapet()
+    body = substrate.union(grouped)
+    faces = Faces(body, grouped, _owner(body, grouped), classifier(params))
+    assert faces.elements == [[0, 1, 2]]           # one wall, three bodies
+
+    loose = current_substrate()                    # no `object` stamped
+    body = substrate.union(loose)
+    faces = Faces(body, loose, _owner(body, loose), classifier(params))
+    assert faces.elements == [[0], [1], [2], [3]]  # four elements, one part each
+
+
 def test_the_union_is_computed_about_the_origin():
     """manifold3d is float32, whose resolution scales with magnitude, so a boolean
     far from the origin resolves less finely — and where two nearly-coplanar faces

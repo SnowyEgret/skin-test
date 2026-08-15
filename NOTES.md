@@ -278,10 +278,45 @@ earlier note here said outward; that was `uphill` (the *rise* direction) misread
 consequence matters — the exterior/interior rule reads the outboard face as the facade, which
 is right. It does not misfire on parapets.
 
-**Next wall.** Every leaf reports `uphill: flat top`; only the caps have a fall. So the
-exterior/interior rule still cannot run on the leaves — it needs to take its direction from
-the cap above, which is the open item this file has carried from the start. The no-scupper
-parapet export is a good dataset to build it against.
+**The flat-top rule, closed 2026-08-15.** The open item this file carried from the start —
+"a stacked wall panel must take its direction from the parapet above it" — is done, and the
+answer was a change of *unit* rather than a search.
+
+`uphill` now takes the **element** (`Faces.elements`, grouped by `metadata["object"]`), not a
+part. The insight: `_bodies` established that the **body** is the right unit for solidity,
+because the boolean must keep touching solids apart. It is the wrong unit for what a wall
+*is*. An inner leaf and an outer leaf are not two walls with two directions; they are one
+wall, and only the cap carries its slope.
+
+Duncan's question was whether this commits the module to the student-house leaf/cap
+geometry. It does not, and that is the point of the shape chosen. "Find the sloped part
+sitting on top" would commit us — it needs a separate cap body to exist. Summing the
+element's upward faces does not: leaves split, the cap in the group supplies the direction;
+leaves merged upstream, each element is one part with a sloped top and the same sum gives
+the same answer. A test asserts both readings agree. So target 1 stays an optimisation
+rather than becoming a prerequisite.
+
+It works because a flat face contributes `(0, 0)` to the area-weighted sum — it dilutes
+magnitude, never direction. On the real parapets the cap covers both leaves exactly, so
+*half* the upward surface of each wall is hidden flat top, and the direction is still clean.
+Where absent, `metadata["object"]` falls back to one element per part — the identity
+grouping, not a guess, and exactly the transcribed `PART_N` case.
+
+**Both skins now build on the real substrate** (headhouse parapets, no scupper):
+
+| | faces | residual | clearance |
+|---|---|---|---|
+| Membrane | 24 | 2.26e-16 | 19.702 mm |
+| Cladding | 41 | 9.58e-16 | 85.000 mm |
+
+7 elements from 25 parts; `wall_faces` finds 41 exterior and 9 interior of 120 faces.
+Separation 81.691 mm — larger than the synthetic rig's 64.215 because the two skins here
+cover disjoint substrate faces, so their closest approach is corner-to-corner rather than
+across a shared face.
+
+**Still open:** role is still read per body, so parapet cap plates classify `ROOF`. Element
+grouping is now available to fix that the same way, but it is a separate decision — see the
+leaf/cap discussion above.
 
 ## Layout
 
