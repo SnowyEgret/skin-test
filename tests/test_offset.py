@@ -419,3 +419,164 @@ def test_cladding_and_membrane_cover_complementary_walls_and_never_meet():
     for skin in skins:
         assert not skin.is_watertight
         assert skin.metadata["offset_residual"] < 1e-9
+
+
+def test_both_skins_cover_the_coping_and_stack_rather_than_collide():
+    """A wall top the membrane carries over is claimed by the cladding too, and
+    that double cover is intended — Duncan's call, 2026-08-16.
+
+    It is what a real parapet is: a membrane upstand carried over the top, and a
+    metal coping laid over that. The two alternatives were giving the top to one
+    skin or the other; both were rejected, so neither `membrane_faces` nor
+    `cladding_faces` should be narrowed to make the skins disjoint.
+
+    What has to hold is not separation but **order**: the cladding coping sits
+    outboard of the membrane's everywhere, by the difference of the two offsets.
+    A coping is sloped, so it is a least-squares plane rather than a hard one and
+    the gap is the offset difference only to within each skin's slope deviation
+    — checked against the deviations the skins themselves report, not a constant.
+    """
+    from build import _upward, cladding_faces, current_substrate, membrane_faces, skins
+
+    parts = current_substrate()
+    faces = _faces(parts)
+    membrane, cladding = skins()
+
+    shared = membrane["keep"](faces) & cladding["keep"](faces)
+    assert shared.any(), "the coping should be claimed by both skins"
+
+    # and only the coping: a facade or a roof face in here would be two skins
+    # covering the same surface for no reason, which is not what was decided
+    tops = _upward(faces.normals) & faces.of_role(substrate.WALL)
+    assert not (shared & ~tops).any()
+    assert (shared & _sloped(faces.normals)).sum() == shared.sum()
+
+    patches = [
+        skin_over(parts, spec["distance"], keep=lambda f: shared,
+                  classify=spec["classify"])
+        for spec in (membrane, cladding)
+    ]
+    inner, outer = patches
+    assert len(inner.faces) == len(outer.faces) == shared.sum()
+
+    # plane offset of each patch face along its own normal: the cladding's must
+    # be the further out, by distance difference +/- what the slopes absorbed
+    def carried(patch):
+        return (patch.triangles.mean(axis=1) * patch.face_normals).sum(axis=1)
+
+    gap = carried(outer) - carried(inner)
+    expected = cladding["distance"] - membrane["distance"]
+    slack = sum(p.metadata["slope_deviation"] for p in patches)
+    assert gap.min() > 0, "the cladding coping must sit outboard of the membrane's"
+    assert np.abs(gap - expected).max() <= slack, (
+        f"coping gap {gap.min():.6f}..{gap.max():.6f} m is not {expected} m "
+        f"to within the {slack:.6f} m the sloped planes absorbed"
+    )
+
+
+def _sloped(normals):
+    """Neither vertical nor horizontal — the planes the solve leaves soft."""
+    return (np.abs(normals[:, 2]) > 1e-6) & (np.abs(normals[:, 2]) < 1 - 1e-6)
+
+
+def test_the_cladding_is_cut_at_its_datum_rather_than_clamped_to_it():
+    """The cladding stops at ground level — Duncan's call, 2026-08-16.
+
+    Untrimmed it mitres with the substrate's unskinned underside and hangs
+    `distance` below it, which is what every skin edge does against an unskinned
+    neighbour. `base: 0.0` cuts that off.
+
+    The point of the test is *how* it stops. A clamp — pushing the low vertices
+    up to the datum — would give the same silhouette while tilting the bottom of
+    every sloped panel off its offset plane, and the residual would not notice
+    because the solve has already run. So the assertions are that the surviving
+    geometry is untouched and its planes are unmoved, not merely that nothing is
+    below zero.
+    """
+    from build import _skin_from, current_substrate, skins
+
+    parts = current_substrate()
+    cladding = skins()[1]
+    assert cladding["base"] == 0.0
+
+    whole = dict(cladding, base=None)
+    untrimmed = _skin_from(whole, parts)
+    trimmed = _skin_from(cladding, parts)
+
+    # the control: without the trim it really does hang below, by the offset
+    assert np.isclose(untrimmed.vertices[:, 2].min(), -cladding["distance"], atol=1e-6)
+
+    z = trimmed.vertices[:, 2]
+    assert z.min() == 0.0, "the datum is a coordinate, not a tolerance"
+    assert (z == 0.0).sum() >= 4, "the cut should leave an edge lying on the datum"
+
+    # every vertex that survived is exactly where the offset put it
+    survivors = untrimmed.vertices[untrimmed.vertices[:, 2] > 1e-9]
+    moved = [np.abs(trimmed.vertices - v).max(axis=1).min() for v in survivors]
+    assert max(moved) == 0.0
+
+    # and every remaining face is still on a plane the offset produced
+    def planes(mesh):
+        carried = (mesh.triangles.mean(axis=1) * mesh.face_normals).sum(axis=1)
+        return np.column_stack([mesh.face_normals, carried])
+
+    apart = np.abs(planes(trimmed)[:, None] - planes(untrimmed)[None]).max(axis=2)
+    assert apart.min(axis=1).max() < 1e-9
+
+    # the cut must not crack: the two triangles sharing a crossed edge have to
+    # land on one vertex, not on two that agree to nine places
+    datum = trimmed.vertices[z == 0.0]
+    assert len(np.unique(np.round(datum, 9), axis=0)) == len(datum)
+    assert trimmed.area_faces.min() > 1e-9, "no zero-area slivers shed by the cut"
+
+    assert trimmed.metadata["offset_residual"] == untrimmed.metadata["offset_residual"]
+    assert clearance(parts, trimmed) > cladding["distance"] - 0.007
+
+
+def test_a_cut_vertex_never_lands_outside_the_edge_it_cut():
+    """The cut classifies against the datum exactly, with no tolerance band.
+
+    A band reads well and is wrong: `crossing` interpolates to exactly z = base,
+    so a vertex inside the band but *below* the plane would be called above, and
+    the interpolation — solving for a plane that vertex is already past — runs
+    its parameter negative and puts the cut vertex outside the edge. This is the
+    case that produced a 333 mm triangle out of a 1 mm one.
+    """
+    from skin.offset import _trim_below
+
+    verts = [np.array(v) for v in ([0, 0, -5e-7], [1.0, 0, -2e-6], [0, 1.0, -2e-6])]
+    with pytest.raises(ValueError, match="base"):
+        _trim_below(verts, [[0, 1, 2]], 0.0)  # wholly below: nothing survives
+    assert len(verts) == 3, "and no cut vertex was invented on the way"
+
+    # the ordinary straddle still cuts where it should, exactly halfway here
+    verts = [np.array(v) for v in ([0, 0, -1.0], [1.0, 0, 1.0], [0, 1.0, 1.0])]
+    _trim_below(verts, [[0, 1, 2]], 0.0)
+    cut = np.array(verts[3:])
+    assert np.allclose(cut, [[0.5, 0, 0], [0, 0.5, 0]], atol=0)
+
+
+def test_a_datum_above_the_whole_skin_is_refused_at_the_seam():
+    """Authoring `base` in the wrong datum — site elevation for building-local —
+    trims everything away. Before this raised, the empty mesh reached trimesh and
+    came back as `IndexError: too many indices`, which names nothing."""
+    from build import _skin_from, current_substrate, skins
+
+    parts = current_substrate()
+    with pytest.raises(ValueError, match=r"base=100.0 leaves nothing"):
+        _skin_from(dict(skins()[1], base=100.0), parts)
+
+
+def test_a_skin_with_no_datum_is_not_trimmed():
+    """`base: null` is not `base: 0.0`. The membrane authors null — it never
+    reaches the ground — and the two must not be the same code path, or a skin
+    that legitimately goes below zero would be silently cut."""
+    from build import _skin_from, current_substrate, skins
+
+    parts = current_substrate()
+    membrane = skins()[0]
+    assert membrane["base"] is None
+
+    low = _skin_from(dict(membrane, base=1.5), parts)
+    assert np.isclose(_skin_from(membrane, parts).vertices[:, 2].min(), 1.164, atol=1e-3)
+    assert low.vertices[:, 2].min() == 1.5  # the same skin, cut where told

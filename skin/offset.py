@@ -430,6 +430,82 @@ def _turn_out(body, verts, faces, wall, distance, out):
     return new
 
 
+def _trim_below(verts, faces, base):
+    """Cut the surface at the horizontal plane z = `base`, keeping what is above.
+
+    A skin ending against an *unskinned* neighbour sits on the miter it would
+    have had if that neighbour were skinned too, so cladding whose facades miter
+    with the substrate's unskinned underside runs `distance` below the base
+    plane. That is correct as offset geometry and wrong as building: cladding
+    stops at the ground. `base` is the datum it stops at.
+
+    A cut, not a projection or a clamp. Both of those would move vertices off
+    their offset planes — a clamp flattens the bottom of a sloped panel onto the
+    datum and quietly breaks the exactness the solve just bought. Re-cutting the
+    straddling triangles instead leaves every remaining plane where it was and
+    adds an edge lying exactly on z = `base`.
+
+    Crossings are cached per substrate edge so the two triangles sharing one get
+    the same vertex, not two that agree to within a rounding: the seam between
+    them would otherwise crack open.
+
+    Which side a vertex is on is decided against `base` **exactly**, with no
+    tolerance band. A band is the obvious thing to reach for and is wrong here:
+    `crossing` interpolates to exactly `z == base`, so a vertex inside the band
+    but below the plane would be called "above" while the interpolation, solving
+    for a plane it is already past, runs the parameter negative and puts the cut
+    vertex *outside* the edge it was cutting. A near-horizontal panel a fraction
+    of a micron under the datum came out 333 mm wide that way. The tolerance
+    belongs on the positions instead, where the duplicate drop below applies it.
+    """
+    cuts: dict[tuple[int, int], int] = {}
+
+    def crossing(i: int, j: int) -> int:
+        key = (i, j) if i < j else (j, i)
+        if key not in cuts:
+            p, q = np.asarray(verts[key[0]]), np.asarray(verts[key[1]])
+            point = p + (base - p[2]) / (q[2] - p[2]) * (q - p)
+            point[2] = base  # exactly on the datum, not a rounding away from it
+            cuts[key] = len(verts)
+            verts.append(point)
+        return cuts[key]
+
+    kept = []
+    for face in faces:
+        above = [verts[i][2] >= base for i in face]
+        if all(above):
+            kept.append(face)
+            continue
+        if not any(above):
+            continue
+
+        loop: list[int] = []
+        for n, i in enumerate(face):
+            j = face[(n + 1) % len(face)]
+            if above[n]:
+                loop.append(i)
+            if above[n] != above[(n + 1) % len(face)]:
+                loop.append(crossing(i, j))
+
+        # a corner sitting on the datum makes its own crossing a duplicate; drop
+        # those before fanning, or the cut sheds zero-area triangles
+        loop = [
+            v
+            for n, v in enumerate(loop)
+            if np.linalg.norm(np.asarray(verts[v]) - verts[loop[n - 1]]) > PLANE_TOL
+        ]
+        # a triangle cut by a plane is convex, so a fan from any corner is safe
+        kept += [[loop[0], loop[n], loop[n + 1]] for n in range(1, len(loop) - 1)]
+
+    if not kept:
+        raise ValueError(
+            f"trimming at base={base} leaves nothing: every face of this skin is "
+            f"below it. `base` is a height in the model, not a depth below the "
+            f"skin — check the datum authored in skins.<name>.base"
+        )
+    return kept
+
+
 def skin_over(
     parts: list[trimesh.Trimesh],
     distance: float,
@@ -438,6 +514,7 @@ def skin_over(
     drop: float = 0.0,
     turn_out=None,
     out: float = 0.0,
+    base: float | None = None,
     classify=None,
 ) -> trimesh.Trimesh:
     """Offset an assembly of parts as a single body.
@@ -459,6 +536,13 @@ def skin_over(
     `turn_out` selects walls the surface stops against rather than covers. Every
     panel that ends on such a wall is turned `out` metres along the axis it faces,
     so the termination folds outward as one piece instead of ending on a bare edge.
+
+    `base` cuts the finished surface at that height and keeps what is above it,
+    for a skin that stops at a datum rather than at its own miter — the cladding
+    at ground level. `None` is no trim, and is not the same as `0.0`: a height of
+    zero is a height, where a `drop` or an `out` of zero is a feature switched
+    off. It is applied last, after the hems and the turn-outs, so it means "no
+    part of this skin goes below `base`" rather than "the offset stops there".
 
     `classify(part) -> role` is handed to `Faces` for the predicates to read. It
     is the caller's, thresholds already bound, because those thresholds are
@@ -496,6 +580,9 @@ def skin_over(
 
     # last, so that hems terminating on the wall turn out along with the panels
     faces += _turn_out(body, verts, faces, stop, distance, out)
+
+    if base is not None:
+        faces = _trim_below(verts, faces, base)
 
     surface = trimesh.Trimesh(vertices=np.array(verts), faces=faces)
     surface.metadata.update(skin.metadata)

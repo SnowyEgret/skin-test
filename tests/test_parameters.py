@@ -71,6 +71,29 @@ def test_a_zero_out_is_exempt_from_the_seed_rule():
     parameters.check_seeds(params)  # does not raise
 
 
+def test_a_skin_without_a_base_is_refused_rather_than_left_untrimmed():
+    """STRICT-COMPLETE reaches the trim datum too. `null` says "this skin is not
+    trimmed" out loud, and an omitted `base` must not be allowed to mean the
+    same thing quietly — that is the hidden default the rule exists to abolish."""
+    params = _params()
+    del params["skins"][1]["base"]
+    with pytest.raises(parameters.ParameterError, match="skins/1"):
+        parameters.validate(params)
+
+
+def test_a_base_is_a_datum_and_not_a_seed():
+    """`base` is a height in the model rather than a distance between two
+    surfaces, so the non-degenerate rule does not reach it: trimming the cladding
+    at the same number some skin is offset by makes no bug invisible. The
+    committed 0.0 also has to survive, and would not if `base` were seeded."""
+    params = _params()
+    assert params["skins"][1]["base"] == 0.0
+    parameters.check_seeds(params)
+
+    params["skins"][1]["base"] = params["skins"][0]["distance"]
+    parameters.check_seeds(parameters.validate(params))  # neither raises
+
+
 def test_a_skin_with_no_rule_set_cannot_be_built():
     from build import skins
 

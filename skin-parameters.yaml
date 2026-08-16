@@ -38,14 +38,23 @@ fall: 0.707
 # distance produced identical geometry — invisible to the tests and to the eye.
 # Keep them distinct when tuning. A zero `out` is exempt: it means the skin has
 # no turn-out at all, which is a feature being off, not a seed.
+#
+# `base` is a datum, not a seed: it is a height in the model, not a distance
+# between two surfaces, so `check_seeds` ignores it and a `base` equal to some
+# skin's `distance` is not degenerate. `null` means the skin is not trimmed at
+# all — and note that `null` and `0.0` differ here, where for `drop` and `out`
+# zero *is* the off switch. A trim height of zero is a real height.
 skins:
   - name: Membrane
     distance: 0.008
     drop: 0.062      # skirt down the exterior walls
     out: 0.205       # every panel stopping on part 4's exterior face turns out
+    base: null       # nothing of it reaches the ground; nothing to trim
     display: solid
   - name: Cladding
     distance: 0.085
     drop: 0.03      # skirt down the interior walls, part 4's included
     out: 0.0         # no turn-out: the cladding stops against nothing
+    base: 0.0        # stops at ground level rather than at its own miter, which
+                     # would hang `distance` below the substrate's underside
     display: wire

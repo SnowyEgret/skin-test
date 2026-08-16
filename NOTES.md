@@ -3,7 +3,7 @@
 Offsetting a **substrate** (an assembly of solid parts) outward by a fixed distance to
 produce **skins**: open surfaces that cover a chosen subset of faces.
 
-Last worked: 2026-08-15.
+Last worked: 2026-08-16.
 
 `CLAUDE.md` has the commands, the architecture and its invariants, and the tolerance
 rationale. This file is the running log: what the geometry currently is, what was tried
@@ -321,32 +321,105 @@ touches the roof is on the inner leaf while the top the membrane carries over is
 so electing per body climbed a leaf and stopped at its flat top, leaving the cap bare.
 
 Measured on the headhouse parapets: per body each parapet came back as mixed `wall` leaves and
-`roof` caps; per element all four are `wall`, the roof layers stay `roof`, no ambiguity. The
+`roof` caps; per element all four are `wall`, the roof layers stay `roof`, no ambiguity.
+
+A leftover from that move, caught by review on 2026-08-16: `wall_faces` still filtered its
+members per body (`[i for i in members if roles[i] == WALL]`), and both its comment and
+CLAUDE.md said the face selection was still decided per body. It cannot be — `roles` returns
+the element's value for every member, so the filter admits all of `members` or none. Verified
+on all three substrates: no element is mixed. The filter now reads the element's role once and
+says so, and `wall_faces` returns byte-identical masks on the rig and both parapet exports. The
 membrane's face set is *identical* either way — so the old answer was accidentally right, for
 the wrong reason. The membrane skirt goes 8 → 62 faces, covering all four parapets rather than
 the single leaf body that happened to touch the roof, which is a fix.
 
-**Open, and the last thing outstanding: who caps the parapet.** With role on the element,
-`cladding_faces`' "every wall top" now claims the coping the membrane is already carrying over
-— **12 faces belong to both skins** (4 + 4 + 2 + 2 across N/S/W/E). That is this file's
-long-standing "which skin caps a wall?" question arriving for real. It is no longer a geometry
-failure: after Duncan re-tuned the parameters on 2026-08-15 the two skins sit 77.000 mm apart,
-exactly their offset difference, so nothing collides. It is a modelling decision. Three
-readings:
+**Who caps the parapet: both, decided 2026-08-16.** With role on the element, `cladding_faces`'
+"every wall top" claims the coping the membrane is already carrying over — **12 faces belong to
+both skins** (4 + 4 + 2 + 2 across N/S/W/E). That was this file's long-standing "which skin caps
+a wall?" question arriving for real. It was never a geometry failure: after Duncan re-tuned the
+parameters on 2026-08-15 the two skins sit 77.000 mm apart, exactly their offset difference, so
+nothing collides. It was a modelling decision, and the answer is the third of the three readings
+that were on the table:
 
-1. membrane caps it — `facades | (up & of_role(WALL) & ~climbed)`, smallest change, keeps the
-   two skins disjoint;
-2. cladding caps it — the membrane stops at the top and turns out, using the existing flange;
-3. both, deliberately — which is what real parapet construction does (membrane upstand, metal
-   coping over) and what the rig already does on the sloped tops of parts 1 and 2.
+1. ~~membrane caps it~~ — `facades | (up & of_role(WALL) & ~climbed)`, smallest change, would
+   have kept the two skins disjoint;
+2. ~~cladding caps it~~ — the membrane stops at the top and turns out, using the existing flange;
+3. **both, deliberately** — which is what real parapet construction does (membrane upstand, metal
+   coping over) and what the rig already did on the sloped tops of parts 1 and 2.
 
-Duncan has a view; it was not recorded before we stopped on 2026-08-15.
+**So no predicate changed; what changed is that the overlap is now asserted rather than merely
+occurring.** `test_both_skins_cover_the_coping_and_stack_rather_than_collide` pins three things,
+because "the skins overlap" is otherwise indistinguishable from a bug:
+
+- the shared set is non-empty, so narrowing either predicate to reading 1 or 2 fails the test —
+  verified by patching `cladding_faces` to reading 1 and watching it go red;
+- the shared set is **only** sloped wall tops. A facade or a roof face in there would be two
+  skins covering one surface for no reason, which is not what was decided;
+- the two copings **stack in the right order** — cladding outboard of membrane, by the offset
+  difference. That, not separation, is the property worth pinning: the skins are *supposed* to
+  be close there.
+
+The gap is the offset difference only to within what the sloped planes absorbed, so the test
+reads each patch's own `slope_deviation` rather than a constant. A coping is sloped, hence
+least-squares, hence not exactly parallel-offset. On the real parapets that is a tight bound —
+77.000 mm ± 1 µm, deviations 0.119 and 1.266 mm. On the synthetic rig it is loose: 80.0 and
+81.9 mm against 77, because the rig's tops are steep (1:8 and 1:11, against the parapets' 1.36°)
+and the 85 mm cladding absorbs up to 6.036 mm there. The rig is the harsher case, as intended.
+
+The open item this leaves is the brick one below, and it is narrower than it was: with "both"
+settled, a coping comes from the cladding skin regardless of which system clads the wall beneath
+it, so a brick wall gets a rainscreen coping unless Duncan says otherwise.
+
+**The cladding stops at the ground, decided 2026-08-16.** The other open item Duncan had been
+sitting on. Untrimmed, the facades mitre with the substrate's unskinned underside and hang the
+full offset below it — z = −0.085 on the rig. Correct as offset geometry, wrong as building.
+
+It is authored, not hardcoded: a new per-skin `base` in `skin-parameters.yaml` (`0.0` for the
+cladding, `null` for the membrane, which never reaches the ground), a `base` argument on
+`skin_over`, and `_trim_below` in `skin/offset.py`. Three things that were decided while
+building it, none of them obvious from the outside:
+
+- **A cut, not a clamp.** Pushing the low vertices up to z = 0 gives the same outline and
+  silently tilts the bottom of every sloped panel off its offset plane. Nothing would report it
+  either — `offset_residual` is computed in `planar_offset`, long before any trim. So the
+  straddling triangles are re-cut against the plane instead, and a test asserts that every
+  surviving vertex is *exactly* where the offset put it (measured: max movement 0.0) and that
+  every remaining face plane still matches one the offset produced (worst 6e-16).
+- **Crossings are cached per edge.** Two triangles sharing a cut edge would otherwise each
+  compute their own intersection, agreeing to a rounding rather than being one vertex, and the
+  seam between them would crack. The 9 datum vertices on the cladding are 9 distinct points.
+- **`null` is not `0.0`.** For `drop` and `out`, zero is the feature switched off; for `base`,
+  zero is a real height to cut at. So no-trim had to be spelled `null`, and STRICT-COMPLETE
+  still applies — the key is required, and an omitted `base` is refused rather than read as
+  "not trimmed". `check_seeds` ignores it: a datum in the model is not a distance between two
+  surfaces, so it cannot make a swap invisible the way two equal offsets can.
+
+The trim runs last, after the hems and the turn-outs, so it means "no part of this skin goes
+below the datum" and not "the offset stops there". Cladding border edges go 19 → 23; residual,
+clearance and separation are all unchanged.
+
+Two bugs in the first cut of it, both found by `/code-review` the same day and both fixed:
+
+- **A tolerance band on the side test extrapolates.** `above` was `z > base - PLANE_TOL` while
+  `crossing` interpolates to exactly `z == base`. A vertex inside the band but below the plane
+  is then called above, and the interpolation — solving for a plane that vertex is already past
+  — runs its parameter negative and puts the cut vertex *outside* the edge it was cutting. A
+  near-horizontal triangle 1 mm across, half a micron under the datum, came out 333 mm across.
+  The side test is now exact; the tolerance belongs on the positions, where the duplicate-corner
+  drop already applies it. A band was the obvious thing to write and it is the wrong instinct
+  here — worth remembering if a tolerance is ever added back.
+- **A datum above the whole skin returned no faces at all**, and the empty mesh crashed inside
+  trimesh with `IndexError: too many indices` from `is_watertight`. Authoring `base` in the
+  wrong datum — site elevation where the model is building-local — is an ordinary mistake, so
+  it now raises naming `skins.<name>.base`. **On the real substrate `base: 0.0` currently cuts
+nothing** — the headhouse parapets sit at z = 14.02–14.75 — so the number to author there is a
+real ground level, and it only starts to bite once walls that reach the ground are in the bake.
 
 ## Layout
 
 | file | what |
 |---|---|
-| `skin/offset.py` | the solver. `planar_offset` (one constrained system), `skin_over` (union → offset → select faces → skirt → flange), `Faces` (what a predicate may ask) |
+| `skin/offset.py` | the solver. `planar_offset` (one constrained system), `skin_over` (union → offset → select faces → skirt → flange → trim), `Faces` (what a predicate may ask) |
 | `skin/measure.py` | `clearance` (skin to substrate), `separation` (skin to skin) |
 | `skin/substrate.py` | `polyhedron` (from vertex/face lists), `from_obj` (a baked export, one part per `o` group), `snapped`, `prism`, `cube`, `l_block`, `u_block`, and `classify` / `horizontality` (WALL vs ROOF from shape) |
 | `skin/export.py` | OBJ writer that emits n-gons, not triangles. `write_obj` one per file for `build/`, `write_objs` many as `o` groups for a whole substrate |
@@ -557,7 +630,9 @@ keeps it non-singular where the soft equations underdetermine a vertex.
   `tests/test_offset.py` is that condition in miniature.
 - **Which skin caps a brick wall?** `cladding_faces` takes *every* wall top regardless of
   facade system, so a brick wall would get a rainscreen coping. Plausible — brick with a
-  metal cap is normal — but it is an assumption, not a rule Duncan gave.
+  metal cap is normal — but it is an assumption, not a rule Duncan gave. The 2026-08-16
+  "both cap it" decision settles who caps a wall and not which *system* does, so this
+  survives it unchanged; it only becomes testable once the brick skin exists.
 - **A flat-topped wall panel cannot name its own facade.** `uphill` raises on one, by
   design. In the student-house a flat top always has another panel stacked on it, so the
   top is occluded and only parapets are exposed — but the *panel* still needs its
@@ -576,10 +651,27 @@ keeps it non-singular where the soft equations underdetermine a vertex.
   it in the build.
 - **The cladding overhangs part 4's bare ends by the offset**, reaching x = -3.169769 and
   x = 2.421661 where the wrapped top mitres with the unskinned end planes. Same family as
-  the z = −0.1 item below — every skin edge does this against an unskinned neighbour.
-- **Cladding hangs to z = −0.1**, below the substrate's base, because the exterior wall
-  faces mitre with the unskinned underside. Consistent with how every skin edge behaves,
-  but Duncan may want it trimmed to z = 0. **Awaiting his call.**
+  the z = −0.085 hang that `base` now trims — every skin edge does this against an
+  unskinned neighbour — but the trim does not reach it: `base` is a horizontal datum, and
+  a bare end is not a datum the model shares, so there is nothing in plan to author. Still
+  open, and a different thing to specify.
+- **`_fan_is_valid` treats a redundant collinear vertex as concavity, but only next to
+  vertex 0.** Found by review 2026-08-16, verified: a rectangle with an extra vertex on the
+  edge leaving vertex 0 is refused as "concave from its first vertex", while the identical
+  redundancy further round the loop passes and silently emits the zero-area triangle. The
+  test is `(signed > 0).all()`, and a collinear vertex gives exactly 0. Collinear vertices
+  on a wall face — a T-junction with a subdivided neighbour — are ordinary in a Blender
+  export, so this will be met. **Duncan's call**, because it is what `from_obj` accepts
+  from a bake: either refuse both (screen zero-area separately, with a message that says
+  "collinear", since the current one points the wrong way) or accept both (`>= 0`, and drop
+  the zero-area triangles rather than emitting them). Not touched pending that.
+- **Three headhouse OBJ exports are committed and nothing reads them** —
+  `headhouse-parapets-clt-insulation{,-no-scupper}.obj` and
+  `headhouse-walls-parapets-insulation.obj`, ~1,580 lines. They are the bake the parapet
+  work was measured on, and the measurements above quote them, but no test or build loads
+  one: `current_substrate()` returns the transcribed literals. Either a test should read
+  one — which would make the real-substrate figures a regression check rather than a note —
+  or they should go.
 - **Part 3's top is not planar** — three corners at z = 1.456084 and one at 1.156084,
   300 mm out of plane, held as two triangles. Skinned faithfully as two planes. He
   described it as "prismatic with a sloped top", so this may be unintended.

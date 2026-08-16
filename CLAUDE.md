@@ -163,6 +163,7 @@ skin names would sit there looking maintained while emitting nothing.
   distance: m
   drop: m          # skirt: hangs below the wall's top edge
   out: m           # collar: folds outward where it stops; 0.0 for none
+  base: m | null   # trim: cut here and keep what is above; null for none
   display: solid | wire
 ```
 
@@ -172,6 +173,9 @@ skin names would sit there looking maintained while emitting nothing.
 ```
 
 `out` and `turn_out` must agree: a non-zero `out` with `turn_out: None`, or the reverse, raises.
+`base` pairs with no rule — it is a datum rather than a face selection — and `null` is **not**
+`0.0`: zero is a real height to cut at, where a zero `drop` or `out` is the feature switched off.
+It is also not a seed, so `check_seeds` ignores it.
 The rules take `(Faces, fall)`; `skins()` binds `fall` from the file, so what `skin/` receives
 still has the `Faces -> bool[nfaces]` signature it expects. A built spec is *exactly*
 `skin_over`'s argument list plus `name` and `display`.
@@ -193,6 +197,14 @@ The two continuations work on different things, and that distinction matters:
   wall is extruded by `out` along the **dominant axis of its own normal** — roof panels turn up,
   a panel facing -X turns -X. Snapping to the axis keeps a turn off a shallow slope exactly
   vertical. Its distance is measured from the skin edge, so all turns are exactly `out`.
+
+`_trim_below` (`base`) runs **after** both, so it means "no part of this skin goes below the
+datum" rather than "the offset stops there". It is a **cut**, not a clamp: triangles straddling
+the plane are re-cut against it and everything above keeps the plane the solve gave it. Pushing
+the low vertices up instead would look identical in outline while tilting the bottom of every
+sloped panel off its offset plane — and the residual is computed before the trim, so nothing
+would report it. Crossings are cached per edge so the two triangles sharing one get the same
+vertex and the cut does not crack.
 
 `_turn_out` chains those boundary edges and **miters** the outer edges where neighbouring panels
 meet, rather than extruding each edge alone. Extruding independently is wrong in both directions:
@@ -236,8 +248,12 @@ listed — there are no plane coordinates and no part indices in them:
   flat-topped boxes and only the cap is sloped, so a per-body reading raises on two thirds of a
   wall that plainly has a high side. A flat face contributes `(0, 0)` to the area-weighted sum,
   so hidden leaf tops dilute the magnitude and never the direction — even where, as on a real
-  parapet, they match the cap in area. Which faces then get classified is still decided per body,
-  by role. This is deliberately *not* "find the cap part above": that would require a separate cap
+  parapet, they match the cap in area. Which faces then get classified is decided per **element**
+  too, not per body: role is one value shared by all of an element's bodies, so a wall admits the
+  vertical faces of its leaves and its cap together. (This line claimed a per-body decision until
+  2026-08-16. It was true when written, and stopped being true the day `Faces.roles` moved to the
+  element — the filter it described could no longer discriminate.)
+  This is deliberately *not* "find the cap part above": that would require a separate cap
   body to exist, whereas summing over the element gives the same answer whether the leaves are
   split or merged upstream. A
   vertical face across the fall is an **end** and is neither, which is how section cuts drop out
@@ -250,6 +266,13 @@ listed — there are no plane coordinates and no part indices in them:
   flanges. Tested per **wall**, not per face: only one triangle of a step wall touches the roof,
   but the membrane climbs the whole face, so touching faces elect the wall and the wall carries
   all of its own faces.
+- **both skins cap a wall, deliberately.** A top the membrane carries over is also claimed by
+  `cladding_faces`' "every wall top", so a parapet coping belongs to two skins at once — a
+  membrane upstand with a metal coping over it, which is what a parapet is built as. Decided
+  2026-08-16 after the alternatives (give the top to one skin or the other) were rejected. They
+  stack rather than collide: the cladding sits outboard by the difference of the two offsets, to
+  within what the sloped planes absorbed, and a test pins that ordering. **Do not narrow either
+  predicate to make the skins disjoint** — an overlap here is the design, not a bug.
 - **which cladding system a facade takes** — read off the part, not derived. `facades_of(faces,
   system, fall)` intersects the geometric facade set with `Faces.tagged(FACADE, system)`. No property
   of a wall's shape implies brick, and neither a compass direction nor a named plane separates a

@@ -39,7 +39,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "distance", "drop", "out", "display"],
+        "required": ["name", "distance", "drop", "out", "base", "display"],
         "properties": {
           "name": {
             "description": "Joins these numbers to a rule set in build.py, and names the emitted OBJ and its manifest entry.",
@@ -60,6 +60,10 @@
             "description": "How far a panel ending on a wall turn_out selects is folded outward, metres, measured from the skin edge. Zero means the skin has no turn-out; build.py raises if that disagrees with whether its rule set defines turn_out.",
             "type": "number",
             "minimum": 0
+          },
+          "base": {
+            "description": "Height, metres, at which the finished skin is cut, keeping what is above — for a skin that stops at a datum (cladding at ground level) rather than on the miter it would take against an unskinned neighbour. null means no trim, and is NOT the same as 0.0: zero is a real height to trim at, whereas a zero drop or out is the feature switched off. Not a seed — a datum in the model, not a distance between surfaces — so check_seeds ignores it.",
+            "type": ["number", "null"]
           },
           "display": {
             "description": "How blender/display.py shows it.",

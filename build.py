@@ -204,15 +204,18 @@ def wall_faces(faces, fall):
     exterior = np.zeros(len(faces.owner), dtype=bool)
     interior = np.zeros(len(faces.owner), dtype=bool)
     for members in faces.elements:
-        walls = [i for i in members if faces.roles[i] == substrate.WALL]
-        if not walls:
+        # the element is the unit on both counts. Its role is one value shared by
+        # every body -- a parapet's cap plate reports `wall` with its leaves, and
+        # would read `roof` alone -- so this admits all of `members` or none, and
+        # the vertical faces of leaf and cap are classified together. It filtered
+        # per body until 2026-08-16, which stopped discriminating the day
+        # `Faces.roles` moved to the element and left the filter saying nothing.
+        if faces.roles[members[0]] != substrate.WALL:
             continue
-        # the direction comes from the whole element -- the cap plate carries the
-        # slope and is usually a ROOF body, so reading only the wall bodies would
-        # find nothing but flat tops. Which faces get classified is still decided
-        # per body, by role.
+        # and the direction likewise: the cap carries the slope, so reading the
+        # bodies separately would find nothing but flat tops on the leaves
         facing = faces.normals[:, :2] @ uphill([faces.parts[i] for i in members])
-        mine = vertical & np.isin(faces.owner, walls)
+        mine = vertical & np.isin(faces.owner, members)
         exterior |= mine & (facing > fall)
         interior |= mine & (facing < -fall)
 
@@ -249,7 +252,11 @@ def _rules(faces, fall):
 
 
 def membrane_faces(faces, fall):
-    """Membrane: the roof, the interior faces it climbs, and those walls' tops."""
+    """Membrane: the roof, the interior faces it climbs, and those walls' tops.
+
+    It carries over the top rather than stopping at it, and the cladding takes
+    that same top as its coping — see `cladding_faces`. The overlap is intended.
+    """
     exterior, interior, roof, climbed, flanged = _rules(faces, fall)
     return roof | (interior & climbed) | (_upward(faces.normals) & climbed)
 
@@ -305,7 +312,16 @@ def check_facades(faces, fall, systems=CLADDING_SYSTEMS):
 
 
 def cladding_faces(faces, fall):
-    """Cladding: every rainscreen facade, plus every wall top it wraps over."""
+    """Cladding: every rainscreen facade, plus every wall top it wraps over.
+
+    "Every wall top" includes the ones the membrane has already carried over, so
+    a parapet coping belongs to **both** skins. That is deliberate (Duncan's
+    call, 2026-08-16): it is what a parapet is built as — membrane upstand, metal
+    coping over it — and it is what the rig already did on the sloped tops of
+    parts 1 and 2. The two skins stack rather than collide, the cladding outboard
+    by the difference of the offsets, and a test pins that ordering. Do not
+    narrow either predicate to make the skins disjoint.
+    """
     return facades_of(faces, RAINSCREEN, fall) | (
         _upward(faces.normals) & faces.of_role(substrate.WALL)
     )
@@ -408,6 +424,7 @@ def skins(params: dict | None = None) -> tuple[dict, ...]:
                 "distance": spec["distance"],
                 "drop": spec["drop"],
                 "out": spec["out"],
+                "base": spec["base"],
                 "display": spec["display"],
                 "keep": partial(rules["keep"], fall=fall),
                 "turn_down": partial(rules["turn_down"], fall=fall),
@@ -430,6 +447,7 @@ def _skin_from(spec, parts, distance=None):
         drop=spec["drop"],
         turn_out=spec["turn_out"],
         out=spec["out"],
+        base=spec["base"],
         classify=spec["classify"],
     )
 
