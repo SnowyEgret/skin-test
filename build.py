@@ -515,6 +515,17 @@ def build(
         )
         if slope > TOL:
             print(f"           sloped planes absorb up to {slope * 1000:.3f} mm")
+        # a fold is geometry the solve stopped constraining because no skin
+        # covered it. Reported rather than left to the metadata: it is the one
+        # place the offset is deliberately not solved, and silence about that is
+        # exactly what the runaway guard was written to stop
+        folds = skin.metadata.get("folds") or []
+        if folds:
+            print(
+                f"           {len(folds)} fold(s) left unconstrained, at vertex"
+                f" {', '.join(str(v) for v in folds)} — surfaces facing opposite"
+                f" ways that this skin does not cover"
+            )
         # anything closer than the slope planes were allowed to move is a real fold
         if gap < distance - slope - TOL:
             print(

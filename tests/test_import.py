@@ -220,12 +220,12 @@ def test_a_degenerate_sliver_is_refused_rather_than_flung_away(tmp_path):
     sound = substrate.cube(2.0)
     assert planar_offset(sound, 0.02).metadata["max_displacement"] < 0.05
 
-    # the wedge itself, transcribed off the union and moved to the origin. A
-    # made-up sliver will not do: an acute plan wedge saturates at a bounded
-    # displacement, because `_vertex_normals` snaps its near-parallel faces onto
-    # the axis and they become an opposing pair the solve simply averages. This
-    # one has four mutually skew planes and no such rescue. 254 mm across, 29 mm
-    # tall, 5.8e-10 m^3 of volume.
+    # the wedge itself, transcribed off the union and moved to the origin: 254 mm
+    # across, 29 mm tall, 5.8e-10 m^3 of volume. Its four faces carry exactly two
+    # normals, +/-(0.707, 0.707, 0) — it is a fin of no thickness, and that is
+    # what is now detected. A comment here used to claim it had four mutually
+    # skew planes; it does not, and the claim only survived because the runaway
+    # guard caught the symptom without anyone reading the planes.
     sliver = trimesh.Trimesh(
         vertices=np.array([[0.005647, 0.248100, 0.000000],
                            [0.000000, 0.253747, 0.011479],
@@ -235,8 +235,8 @@ def test_a_degenerate_sliver_is_refused_rather_than_flung_away(tmp_path):
         process=False,
     )
     assert sliver.is_watertight
-    with pytest.raises(ValueError, match="offset is undetermined at vertex"):
-        planar_offset(sliver, 0.02)
+    with pytest.raises(ValueError, match="folds back on itself"):
+        planar_offset(sliver, 0.02)  # no selection, so every plane is required
 
 
 def test_the_transcribed_substrate_round_trips_through_obj(tmp_path):

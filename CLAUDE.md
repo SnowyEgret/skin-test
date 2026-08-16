@@ -109,6 +109,19 @@ Key invariants, each of which spans several files:
   tune — it says the result is not a skin of this mesh. The cause is always a degenerate sliver,
   in practice a fragment a boolean left detached: the residual stays clean (the hard constraints
   *are* satisfied), so nothing else notices. `metadata["max_displacement"]` reports the worst.
+  It is now a backstop rather than the front line — a fold is caught first, structurally, by the
+  rule below.
+- **A fold is reconciled against what the skin covers, or refused.** Where the surface turns back
+  on itself a vertex lies on two planes facing opposite ways, and no offset exists for it: it
+  would have to move `distance` both ways at once. `_reconcile` re-reads that vertex's planes
+  from the **covered** faces alone — the ones `keep`/`turn_down`/`turn_out` selected, which is
+  why `skin_over` evaluates its predicates *before* the solve and passes the mask down. If the
+  contradiction survives among those, it raises naming the vertex and the two normals. Applies at
+  contradictory vertices and nowhere else, so no model that solves today changes by a bit; a
+  hash of the rig and both parapet exports pins that. The reconciled vertices are reported in
+  `metadata["folds"]` and printed by `build.py`, because a constraint the solve deliberately
+  dropped must not be silent. Consequence, accepted by Duncan 2026-08-16: a degenerate sliver
+  **no skin covers** is now tolerated rather than refused.
 - **Vertical/horizontal exact, sloped absorbs the error.** A sloped top over a concave plan
   over-determines the offset. `planar_offset` splits the plane equations into hard (|n_z| ≈ 0 or
   ≈ 1) and least-squares (sloped), plus hard equations keeping substrate-horizontal edges

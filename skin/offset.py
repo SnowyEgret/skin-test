@@ -31,20 +31,96 @@ PLANE_TOL = 1e-6
 RIDGE = 1e-9
 
 
-def _vertex_normals(mesh: trimesh.Trimesh, vertex: int, tol: float) -> np.ndarray:
+def _vertex_normals(mesh: trimesh.Trimesh, vertex: int, tol: float, only=None) -> np.ndarray:
     """Distinct outward face-plane normals meeting at `vertex`.
 
     Normals within `tol` of an axis are snapped onto it: the union that feeds
     this carries float32 vertices, and an axis-aligned face whose normal is off
     by 1e-7 would otherwise be held to a hard constraint that is itself skew.
+
+    `only` is a face mask restricting which incident faces are read. It is used
+    solely to re-read a contradictory vertex — see `_reconcile`.
     """
     faces = mesh.vertex_faces[vertex]
-    normals = mesh.face_normals[faces[faces >= 0]]
+    faces = faces[faces >= 0]
+    if only is not None:
+        faces = faces[only[faces]]
+    if not len(faces):
+        return np.zeros((0, 3))
+    normals = mesh.face_normals[faces]
     axis = np.abs(normals).argmax(axis=1)
     aligned = np.abs(normals).max(axis=1) > 1 - tol
     normals = normals.copy()
     normals[aligned] = np.sign(normals[aligned, axis[aligned]])[:, None] * np.eye(3)[axis[aligned]]
     return np.unique(np.round(normals / PLANE_TOL), axis=0) * PLANE_TOL
+
+
+def _opposed(normals: np.ndarray):
+    """The first pair of normals at a vertex that point opposite ways, or None.
+
+    Two such planes cannot both be offset outward and still meet: the vertex
+    would have to move `distance` one way and `distance` the other at once. The
+    equations are not merely hard to satisfy, they are contradictory, and a
+    least-squares solve does not report that — it splits the difference and
+    spreads the error across the whole body.
+    """
+    for i in range(len(normals)):
+        for j in range(i + 1, len(normals)):
+            if normals[i] @ normals[j] < -1 + PLANE_TOL:
+                return normals[i], normals[j]
+    return None
+
+
+def _reconcile(mesh, vertex, tol, normals, covered):
+    """Drop the planes of uncovered faces at a contradictory vertex, or raise.
+
+    A surface that folds back on itself has no offset at the fold: the vertex
+    lies on two planes facing opposite ways. Measured on the headhouse parapets:
+    where a roof layer's end face is exposed through a scupper, it is coplanar
+    with the parapet's inner face it otherwise abuts, and the two survive into
+    the union facing opposite ways. One point then carries both.
+
+    The offset is solved over the whole body so that a vertex on the edge of a
+    selection sits on the miter it would have had if its neighbours were skinned
+    too. That is why every face contributes a plane — but it only justifies the
+    planes of faces that *bound* something being built. A face no skin touches,
+    whose plane contradicts its neighbours, is supplying a constraint for a
+    surface nobody asked for and breaking the ones that were.
+
+    So the rule is narrow, and deliberately applies nowhere else: at a
+    contradictory vertex, and only there, re-read the planes from the covered
+    faces alone. Every other vertex keeps every plane it had, so no model that
+    solves today changes by so much as a bit. If the contradiction survives
+    among the covered faces it is real — a skin is being asked to cover both
+    sides of a fold — and it raises here rather than surfacing as a vertex
+    thrown kilometres away with a clean residual.
+    """
+    if covered is None:
+        reduced = normals
+        why = "no face selection was given, so every plane is required"
+    else:
+        reduced = _vertex_normals(mesh, vertex, tol, only=covered)
+        incident = mesh.vertex_faces[vertex]
+        skinned = int(covered[incident[incident >= 0]].sum())
+        why = f"{skinned} of its faces are covered by a skin"
+
+    pair = _opposed(reduced)
+    if pair is None:
+        return reduced
+
+    a, b = pair
+    raise ValueError(
+        f"the surface folds back on itself at vertex {vertex} "
+        f"{np.round(mesh.vertices[vertex], 6).tolist()}: it lies on planes facing "
+        f"{np.round(a, 3).tolist()} and {np.round(b, 3).tolist()}, which cannot both be "
+        f"offset outward — the vertex would have to move both ways at once. "
+        f"{why}, so this is not a stray face that can be ignored. Two surfaces "
+        f"facing exactly opposite ways means the solid has no thickness there: "
+        f"either a degenerate sliver, in practice a fragment a boolean left "
+        f"behind, or two parts meeting exactly on one plane where an opening "
+        f"exposes the far side of the contact — lap those into each other "
+        f"rather than abutting them."
+    )
 
 
 def _stack(rows: list, width: int) -> tuple[np.ndarray, np.ndarray]:
@@ -53,7 +129,7 @@ def _stack(rows: list, width: int) -> tuple[np.ndarray, np.ndarray]:
     return np.array([r for r, _ in rows]), np.array([v for _, v in rows])
 
 
-def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6):
+def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6, covered=None):
     """Offset every face of `mesh` outward by `distance`.
 
     Solves for all vertex displacements at once. A vertex lies on all of its
@@ -61,13 +137,24 @@ def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6):
     each incident normal `n` puts it on all the offset planes at once. Those
     equations are hard for vertical and horizontal planes, least-squares for the
     sloped rest; horizontal edges add hard equations tying endpoint heights.
+
+    `covered` is the face mask the caller is actually building a skin over, and
+    is consulted at exactly one kind of vertex: one whose planes contradict each
+    other because the surface folds back on itself. See `_reconcile`. Omitting
+    it makes every plane required, which is the right default for a plain
+    closed-shell offset — there is no selection, so nothing is uncovered.
     """
     width = 3 * len(mesh.vertices)
     hard: list = []
     soft: list = []
+    folds: list = []
 
     for vertex in range(len(mesh.vertices)):
-        for normal in _vertex_normals(mesh, vertex, tol):
+        normals = _vertex_normals(mesh, vertex, tol)
+        if _opposed(normals) is not None:
+            normals = _reconcile(mesh, vertex, tol, normals, covered)
+            folds.append(vertex)
+        for normal in normals:
             row = np.zeros(width)
             row[3 * vertex : 3 * vertex + 3] = normal
             # vertical and horizontal planes are held exactly; only sloped
@@ -129,6 +216,9 @@ def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6):
     out.metadata["offset_residual"] = float(np.abs(H @ t - h).max()) if H.size else 0.0
     out.metadata["slope_deviation"] = float(np.abs(S @ t - s).max()) if S.size else 0.0
     out.metadata["max_displacement"] = float(moved.max()) if moved.size else 0.0
+    # the folds that were reconciled rather than raised on: geometry the solve
+    # deliberately stopped constraining, so a caller can say where it did that
+    out.metadata["folds"] = folds
     return out
 
 
@@ -529,7 +619,10 @@ def skin_over(
     still solved over the whole body first, so vertices on the edge of the
     selection sit on the same miter they would have if the neighbouring faces
     were skinned too — the surface stops there rather than being offset in
-    isolation.
+    isolation. The selections are therefore evaluated *before* the solve and
+    handed to it, but only so that it can tell a covered face from an uncovered
+    one where the surface folds back on itself; see `_reconcile`. Nothing else
+    in the solve knows what is being kept.
 
     `turn_down` selects walls the surface should hang down, `drop` metres below
     the substrate's top edge, continuing the surface past where `keep` ends it.
@@ -550,22 +643,23 @@ def skin_over(
     need it, so a plain closed-shell offset can leave it out.
     """
     body = substrate.union(parts)   # about the origin; see substrate.union
-    skin = planar_offset(body, distance)
     if keep is None:
-        return skin
+        return planar_offset(body, distance)
 
     surface = Faces(body, parts, _owner(body, parts), classify)
     kept = keep(surface)
+    none = np.zeros(len(kept), dtype=bool)
+    stop = none if turn_out is None else turn_out(surface)
+    down = none if turn_down is None else turn_down(surface)
+
+    # everything this skin puts a surface on. Only a fold consults it
+    skin = planar_offset(body, distance, covered=kept | down | stop)
 
     verts = list(skin.vertices)
     faces = [f.tolist() for f in skin.faces[kept]]
 
-    none = np.zeros(len(kept), dtype=bool)
-    stop = none if turn_out is None else turn_out(surface)
-
     if turn_down is not None:
         height = np.abs(body.face_normals[:, 2])
-        down = turn_down(surface)
         faces += _hem(
             body,
             skin,
