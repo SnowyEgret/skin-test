@@ -57,6 +57,7 @@ to the review. A whole new module went unreviewed this way once before it was ca
 Two things that review catches and the rest of the stack cannot. The tests and the build both
 exercise the happy path, so a knob that is only wrong when *supplied* passes everything —
 `build(params=...)` skipped schema validation entirely and separation went 64.215 → 558.849 mm
+(the figures the synthetic rig gave before its parameters were re-tuned on 2026-08-15)
 with no error. And documentation that asserts a property the code does not have is invisible to a
 test by construction. Both were found by an independent reader checking claims against code.
 

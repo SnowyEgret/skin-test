@@ -150,8 +150,29 @@ class Faces:
         self.classify = classify
 
     @cached_property
+    def element_of(self) -> np.ndarray:
+        """Element index per part — the inverse of `elements`."""
+        index = np.empty(len(self.parts), dtype=int)
+        for number, members in enumerate(self.elements):
+            index[members] = number
+        return index
+
+    @cached_property
     def roles(self) -> list:
-        """WALL or ROOF per part, from geometry. Raises on a part it cannot read.
+        """WALL or ROOF per part, read from the part's **element**.
+
+        Classified on the element as built — its bodies unioned — for the same
+        reason `uphill` sums over the element: a parapet's cap plate is a 29 mm
+        slab and reads `ROOF` on its own, but it is not a roof, it is the top of
+        a wall. Every leaf and cap of one element therefore reports the element's
+        role, so a predicate asking `of_role(WALL)` gets the whole parapet.
+
+        Measured on the headhouse parapets: per body, each parapet came back as
+        a mix of `wall` leaves and `roof` caps; per element, all four are `wall`,
+        and the roof layers stay `roof`.
+
+        Where nothing is grouped every part is its own element, so this is the
+        per-part classification unchanged — the transcribed `PART_N` case.
 
         `classify` is supplied by the caller rather than being
         `substrate.classify` with its thresholds defaulted: the thresholds are
@@ -167,7 +188,13 @@ class Faces:
                 "`partial(substrate.classify, margin=..., aspect=...)` with the "
                 "authored thresholds — there is deliberately no default pair."
             )
-        return [self.classify(p) for p in self.parts]
+        by_element = []
+        for members in self.elements:
+            bodies = [self.parts[i] for i in members]
+            by_element.append(
+                self.classify(bodies[0] if len(bodies) == 1 else substrate.union(bodies))
+            )
+        return [by_element[e] for e in self.element_of]
 
     @cached_property
     def elements(self) -> list:

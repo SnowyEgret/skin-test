@@ -238,8 +238,13 @@ def _rules(faces, fall):
     exterior, interior = wall_faces(faces, fall)
     roof = _upward(faces.normals) & faces.of_role(substrate.ROOF)
     meets = faces.touching(roof)
-    climbed = np.isin(faces.owner, np.unique(faces.owner[interior & meets]))
-    flanged = np.isin(faces.owner, np.unique(faces.owner[exterior & meets]))
+    # elected per ELEMENT, not per body: the face that touches the roof belongs
+    # to the inner leaf, and the top the membrane then carries over belongs to
+    # the cap — different bodies of the same wall. Electing per body would climb
+    # a leaf and stop at its flat top, leaving the cap bare.
+    element = faces.element_of[faces.owner]
+    climbed = np.isin(element, np.unique(element[interior & meets]))
+    flanged = np.isin(element, np.unique(element[exterior & meets]))
     return exterior, interior, roof, climbed, flanged
 
 

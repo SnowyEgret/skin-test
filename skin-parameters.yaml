@@ -40,12 +40,12 @@ fall: 0.707
 # no turn-out at all, which is a feature being off, not a seed.
 skins:
   - name: Membrane
-    distance: 0.020
-    drop: 0.145      # skirt down the exterior walls
-    out: 0.310       # every panel stopping on part 4's exterior face turns out
+    distance: 0.008
+    drop: 0.062      # skirt down the exterior walls
+    out: 0.205       # every panel stopping on part 4's exterior face turns out
     display: solid
   - name: Cladding
     distance: 0.085
-    drop: 0.225      # skirt down the interior walls, part 4's included
+    drop: 0.03      # skirt down the interior walls, part 4's included
     out: 0.0         # no turn-out: the cladding stops against nothing
     display: wire

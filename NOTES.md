@@ -25,7 +25,7 @@ now **authored rather than coded**. `build.py` holds no plane coordinates, no pa
 sets and no magic constants: exterior/interior comes off each wall's own top slope,
 climb-or-flange from which face the roof runs into, wall-vs-roof from
 `substrate.classify`, cladding system from `part.metadata`, and every tunable number from
-`skin-parameters.yaml`. 42 tests, ~1.6 s.
+`skin-parameters.yaml`. 46 tests, ~1.9 s.
 
 Agreed order for what remains, from the migration discussion:
 
@@ -310,13 +310,37 @@ grouping, not a guess, and exactly the transcribed `PART_N` case.
 | Cladding | 41 | 9.58e-16 | 85.000 mm |
 
 7 elements from 25 parts; `wall_faces` finds 41 exterior and 9 interior of 120 faces.
-Separation 81.691 mm — larger than the synthetic rig's 64.215 because the two skins here
+Separation 81.691 mm — larger than the synthetic rig's, because the two skins here
 cover disjoint substrate faces, so their closest approach is corner-to-corner rather than
 across a shared face.
 
-**Still open:** role is still read per body, so parapet cap plates classify `ROOF`. Element
-grouping is now available to fix that the same way, but it is a separate decision — see the
-leaf/cap discussion above.
+**Role moved to the element too** (same day). `Faces.roles` classifies the element as built —
+its bodies unioned — and every body reports its element's role, so a parapet's 29 mm cap plate
+stops reading `ROOF`. The climb/flange election in `_rules` moved with it: the face that
+touches the roof is on the inner leaf while the top the membrane carries over is on the cap,
+so electing per body climbed a leaf and stopped at its flat top, leaving the cap bare.
+
+Measured on the headhouse parapets: per body each parapet came back as mixed `wall` leaves and
+`roof` caps; per element all four are `wall`, the roof layers stay `roof`, no ambiguity. The
+membrane's face set is *identical* either way — so the old answer was accidentally right, for
+the wrong reason. The membrane skirt goes 8 → 62 faces, covering all four parapets rather than
+the single leaf body that happened to touch the roof, which is a fix.
+
+**Open, and the last thing outstanding: who caps the parapet.** With role on the element,
+`cladding_faces`' "every wall top" now claims the coping the membrane is already carrying over
+— **12 faces belong to both skins** (4 + 4 + 2 + 2 across N/S/W/E). That is this file's
+long-standing "which skin caps a wall?" question arriving for real. It is no longer a geometry
+failure: after Duncan re-tuned the parameters on 2026-08-15 the two skins sit 77.000 mm apart,
+exactly their offset difference, so nothing collides. It is a modelling decision. Three
+readings:
+
+1. membrane caps it — `facades | (up & of_role(WALL) & ~climbed)`, smallest change, keeps the
+   two skins disjoint;
+2. cladding caps it — the membrane stops at the top and turns out, using the existing flange;
+3. both, deliberately — which is what real parapet construction does (membrane upstand, metal
+   coping over) and what the rig already does on the sloped tops of parts 1 and 2.
+
+Duncan has a view; it was not recorded before we stopped on 2026-08-15.
 
 ## Layout
 
@@ -340,20 +364,30 @@ leaf/cap discussion above.
 Numbers in `skin-parameters.yaml`, face rules in `build.py`'s `RULES`, joined by name by
 `skins()`. Adding a third is a YAML entry plus a rule set, not a code path.
 
-| | Membrane (20 mm) | Cladding (85 mm) |
+**The numbers are tuned for the student-house substrate now** (2026-08-15). The synthetic
+rig was built slightly off scale, and when the parapet export arrived Duncan re-tuned
+`skin-parameters.yaml` to it; the rig inherits the same file. It still builds clean —
+residuals ~1e-16, no self-intersection warning — so the figures below are the rig's
+*current* output, not its original one. **The rig has served its purpose and is unlikely
+to be needed again; if it is, the smaller `drop` and `out` values suffice** (Duncan's call,
+in preference to giving the headhouse its own parameter file).
+
+| | Membrane (8 mm) | Cladding (85 mm) |
 |---|---|---|
 | part 3's roof | covers | — |
-| interior (step) walls | climbs | skirts 225 mm |
+| interior (step) walls | climbs | skirts 30 mm |
 | sloped tops of parts 1 & 2 | covers | covers |
-| exterior walls | skirts 145 mm | climbs |
-| part 4's exterior face | stops against it; every panel turns out 310 mm | climbs |
+| exterior walls | skirts 62 mm | climbs |
+| part 4's exterior face | stops against it; every panel turns out 205 mm | climbs |
 | part 4's sloped top | bare (membrane stops on the wall) | wraps over |
-| part 4's interior face | — | skirts 225 mm |
+| part 4's interior face | — | skirts 30 mm |
 | part 4's ends and bottom | bare | bare |
 
-Measured separation 64.215 mm — the offsets differ by 65 mm, less the opposing slope
-deviations. Checked on every build. It dropped to 20.4 mm while part 4's exterior face
-was skinned by the membrane alone; giving the cladding the same face restored it.
+Measured separation **76.071 mm** — the offsets differ by 77 mm, less the opposing slope
+deviations. Checked on every build; clearances 7.7760 mm and 84.6091 mm. It dropped to
+20.4 mm while part 4's exterior face was skinned by the membrane alone; giving the cladding
+the same face restored it. (It read 64.215 mm under the pre-2026-08-15 numbers, which is
+what the earlier entries in this file quote.)
 
 **Skin distances are non-degenerate seeds** (student-house CLAUDE.md, hard rule): no two
 of the five are equal and none is an integer multiple of another. `Membrane.drop` and
@@ -386,10 +420,10 @@ Two things the naive form got wrong, both now handled:
 The skirt's drop is measured from the **substrate** edge, not from the skin surface —
 the pre-existing convention, pinned by a test. The turn-out is different: it is measured
 from the **skin** edge it springs off, because it is defined on the skin's own panels
-rather than on a substrate feature. All four turns are therefore exactly 310 mm.
+rather than on a substrate feature. All four turns are therefore exactly `out`.
 
 **The turn-out rule.** Where the membrane stops against part 4's exterior face, every
-panel that ends there turns out 310 mm along the axis it faces, so the whole termination
+panel that ends there turns out `out` along the axis it faces, so the whole termination
 folds outward as one collar rather than the roof alone climbing:
 
 | panel | normal | turns |
