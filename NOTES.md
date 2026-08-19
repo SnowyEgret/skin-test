@@ -623,6 +623,8 @@ keeps it non-singular where the soft equations underdetermine a vertex.
 
 `headhouse-parapets-clt-insulation.obj` would not skin; the no-scupper export would. Chased to
 the end, and worth recording in full because almost every intuition along the way was wrong.
+Both files were deleted on 2026-08-19 and are recoverable from commit `5d77c9a`; the figures
+below were measured on them and have not been re-checked since.
 
 **The defect.** Two vertices of the union, at (8.5, 4.885, 14.499309) and (8.5, 5.085, 14.499309),
 each lie on a **+X and a −X plane at once**. The insulation taper's edge lands on exactly the
@@ -781,8 +783,9 @@ one in the same plane. Nothing turns on where its box came from, so the `classif
 bounds does not apply.
 
 **Nothing else moved.** The synthetic rig's build output and both skin OBJs are byte-identical,
-and both parapet exports skin to identical vertex hashes. `headhouse-walls-parapets-insulation.obj`
-still raises `AmbiguousPart` on a 0.42 × 0.42 × 1.675 block, unchanged and pre-existing.
+and both parapet exports skinned to identical vertex hashes — checked against the three older
+exports before they were deleted later the same day. `headhouse-walls-parapets-insulation.obj`
+still raised `AmbiguousPart` on a 0.42 × 0.42 × 1.675 block, unchanged and pre-existing.
 
 ### The three folds are all x = 8.5
 
@@ -909,13 +912,14 @@ and those vertices move the full 8 mm and the edges come vertical. Unchanged, an
   the corner is an ordinary triangle vertex where an ear is available there and is dropped
   contributing nothing where one is not. `_fan_is_valid` itself is unchanged; it is now a
   *routing* test ("can the fan have this one?") rather than a refusal.
-- **Three of the four headhouse OBJ exports are committed and nothing reads them** —
-  `headhouse-parapets-clt-insulation{,-no-scupper}.obj` and
-  `headhouse-walls-parapets-insulation.obj`. The current bake is read by
-  `tests/test_import.py` as of 2026-08-19, so its figures are a regression check; the older
-  three are still unfalsifiable notes. The last of them does not even load —
-  `AmbiguousPart` on a 0.42 x 0.42 x 1.675 block — so it cannot become one without work.
-  They are superseded rather than useful; propose deleting them.
+- ~~**Three of the four headhouse OBJ exports are committed and nothing reads them.**~~ Deleted
+  2026-08-19 on Duncan's say-so: `headhouse-parapets-clt-insulation{,-no-scupper}.obj` and
+  `headhouse-walls-parapets-insulation.obj`, superseded by
+  `headhouse-walls-parapets-caps-clt-insulation.obj`, which `tests/test_import.py` does read.
+  They live in commit `5d77c9a` if one is ever wanted back. **Every figure in this file quoted
+  against those three is now a note rather than a check** — the sections dated 2026-08-15 and
+  2026-08-16 in particular. The one survivor of them in the tree is the detached-sliver wedge,
+  transcribed as literals in `tests/test_import.py`.
 - **Part 3's top is not planar** — three corners at z = 1.456084 and one at 1.156084,
   300 mm out of plane, held as two triangles. Skinned faithfully as two planes. He
   described it as "prismatic with a sloped top", so this may be unintended.
