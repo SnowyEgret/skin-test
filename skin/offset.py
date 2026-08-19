@@ -64,9 +64,19 @@ def _opposed(normals: np.ndarray):
     least-squares solve does not report that — it splits the difference and
     spreads the error across the whole body.
     """
+    # compared as unit vectors. `_vertex_normals` quantises to the PLANE_TOL
+    # lattice, so a normal off-axis by more than `tol` comes back with |n| up to
+    # ~8e-7 short of 1 and an exactly antiparallel pair dots to -|n|^2, which can
+    # sit above -1 + PLANE_TOL. Measured over 20 000 random sloped normals:
+    # 3.65% of genuine contradictions went undetected, and an undetected one is
+    # never reconciled and never reported -- the solve just splits the
+    # difference, which is the failure `_reconcile` exists to make structural.
+    # Axis-aligned normals are snapped to exact units upstream and were fine,
+    # which is why every fold found so far happened to be axis-aligned.
+    unit = normals / np.linalg.norm(normals, axis=1)[:, None]
     for i in range(len(normals)):
         for j in range(i + 1, len(normals)):
-            if normals[i] @ normals[j] < -1 + PLANE_TOL:
+            if unit[i] @ unit[j] < -1 + PLANE_TOL:
                 return normals[i], normals[j]
     return None
 
@@ -222,6 +232,20 @@ def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6, cov
     return out
 
 
+def elements_of(parts: list) -> list:
+    """Part indices grouped by `metadata["object"]` — see `Faces.elements`.
+
+    Module level so a caller can group parts *before* there is a union to build
+    `Faces` over. `build.group_caps` needs exactly that: it decides which bodies
+    belong to one element, which is the question `Faces` is constructed after.
+    """
+    groups: dict = {}
+    for index, part in enumerate(parts):
+        name = part.metadata.get("object")
+        groups.setdefault(("object", name) if name else ("part", index), []).append(index)
+    return list(groups.values())
+
+
 class Faces:
     """What a face predicate may ask about the unioned substrate.
 
@@ -303,11 +327,7 @@ class Faces:
         declares no grouping has each part standing alone, which is exactly the
         transcribed `PART_N` case.
         """
-        groups: dict = {}
-        for index, part in enumerate(self.parts):
-            name = part.metadata.get("object")
-            groups.setdefault(("object", name) if name else ("part", index), []).append(index)
-        return list(groups.values())
+        return elements_of(self.parts)
 
     def of_role(self, role) -> np.ndarray:
         """Mask of faces belonging to a part of this role."""

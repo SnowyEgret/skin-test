@@ -11,6 +11,7 @@ This file covers commands and structure; `NOTES.md` covers why the code is the w
 
 ```bash
 python3 build.py              # headless build: writes build/*.obj + build/manifest.json
+python3 build.py <bake.obj>   # ...over a baked substrate instead of the transcribed rig
 python3 -m pytest tests -q    # ~1.5 s
 python3 -m pytest tests -q -k skirt        # single test by name
 ```
@@ -33,6 +34,10 @@ exec(open("/home/duncan/skin-test/blender/display.py").read())
 reload()                    # skins only
 reload(substrate=True)      # and the transcribed substrate, to check transcription
 ```
+
+Substrate parts emitted from a bake keep their own names (`Substrate_Parapet-Headhouse-N`),
+because eighteen boxes called `Substrate_7` are no use for checking one. The `Substrate_` prefix
+stays regardless: the stale-copy sweep in `build()` globs on it.
 
 **The module reads the substrate and never writes it.** `build()` emits skins only;
 `build(emit_substrate=True)` additionally dumps the parts as OBJ, and `python3 build.py`
@@ -225,6 +230,18 @@ adjacent panels turning along different axes leave a gap at one corner and inter
 next. The miter is just the intersection of the two outer lines, so it extends or trims as
 needed. Segments that continue the same panel are parallel and are left unmitered.
 
+**A separately-authored cap plate joins the wall it caps.** `build.group_caps` runs before
+anything reads a role, and re-stamps `metadata["object"]` so the plate and its parapet are one
+element. The rule is derived, not a name match: **a lift that classifies `ROOF` while the element
+it rests on classifies `WALL` is that wall's cap** — `_next_lift` already computes "rests on and
+continues", the same relation `rise` walks. It groups the cap and **not** the parapet under it,
+which is why the lift's own classification is the test: a parapet reads `WALL` alone and stays
+separate. Do not extend it to merge a whole stack into one element. That would read `WALL` too
+and would break something else — the climb-or-flange election is per wall, so a wall merged with
+its parapet has the membrane climb its full height instead of stopping at the parapet the roof
+runs into. It is inert on a bake whose plates already sit inside their parapet objects, and
+idempotent.
+
 ## Classifying parts
 
 `substrate.classify(part, margin, aspect)` returns `WALL` or `ROOF` **from geometry alone** — no
@@ -255,7 +272,7 @@ there is deliberately no fallback pair of thresholds.
 listed — there are no plane coordinates and no part indices in them:
 
 - **exterior / interior** — a wall's top falls toward its interior, so the face under the high
-  edge is the facade and the one under the low edge is the interior (`uphill` + `wall_faces`).
+  edge is the facade and the one under the low edge is the interior (`rise` + `wall_faces`).
   `uphill` takes the **element**, `Faces.elements` — every body of one wall — not a single part.
   A baked wall arrives as an inner leaf, an outer leaf and a cap plate; the leaves are
   flat-topped boxes and only the cap is sloped, so a per-body reading raises on two thirds of a
@@ -266,9 +283,13 @@ listed — there are no plane coordinates and no part indices in them:
   vertical faces of its leaves and its cap together. (This line claimed a per-body decision until
   2026-08-16. It was true when written, and stopped being true the day `Faces.roles` moved to the
   element — the filter it described could no longer discriminate.)
-  This is deliberately *not* "find the cap part above": that would require a separate cap
-  body to exist, whereas summing over the element gives the same answer whether the leaves are
-  split or merged upstream. A
+  Summing over the element is deliberately *not* "find the cap part above": it gives the same
+  answer whether the leaves are split or merged upstream, without requiring a separate cap body
+  to exist. Where the cap is separate *from the element too* — its own object, as in the current
+  bake — the element genuinely has no slope of its own, and `rise` looks up the stack for it; see
+  the flat-top rule below for what it will and will not accept as the lift above. The two are not
+  in tension: the sum is what reads an element that has a slope somewhere in it, and the walk is
+  what runs only when that sum comes back flat. A
   vertical face across the fall is an **end** and is neither, which is how section cuts drop out
   without being enumerated. `fall` is the authored direction cosine that separates the two from an
   end (0.707 = 45°); every rule below takes it as an argument and `skins()` binds it. The
@@ -282,7 +303,10 @@ listed — there are no plane coordinates and no part indices in them:
 - **both skins cap a wall, deliberately.** A top the membrane carries over is also claimed by
   `cladding_faces`' "every wall top", so a parapet coping belongs to two skins at once — a
   membrane upstand with a metal coping over it, which is what a parapet is built as. Decided
-  2026-08-16 after the alternatives (give the top to one skin or the other) were rejected. They
+  2026-08-16 after the alternatives (give the top to one skin or the other) were rejected, and
+  reaffirmed 2026-08-19 when a bake that authored its cap plates as **separate objects** reversed
+  it by accident: each plate became its own element, a 29 mm plate classifies `ROOF` alone, and
+  "every wall top" stopped reaching any coping. `build.group_caps` restores it — see below. They
   stack rather than collide: the cladding sits outboard by the difference of the two offsets, to
   within what the sloped planes absorbed, and a test pins that ordering. **Do not narrow either
   predicate to make the skins disjoint** — an overlap here is the design, not a bug.
@@ -293,8 +317,19 @@ listed — there are no plane coordinates and no part indices in them:
   substrate reader stamps `part.metadata["facade"]`; in the student-house that is one read of the
   IFC material. `check_facades` raises if any facade is claimed by no declared system, so an
   unstamped part cannot silently vanish from every skin.
-- **`uphill` raises on a flat top.** A stacked wall panel has no high side and must take its
-  direction from the parapet above it — not yet built. Do not add a fallback that guesses a side.
+- **A flat-topped wall takes its direction from the lift above it.** `uphill` reads one
+  element's own top and raises where it is flat; `rise` walks the stack to the element that
+  carries the fall, and is what `wall_faces` calls. A wall built in lifts is flat-topped all the
+  way up — panel, parapet, and only the cap plate laid to fall — so the walk is recursive, not
+  one step. `_next_lift` decides what counts as the next lift, and takes three conditions: it
+  rests on this element's top, it overlaps it in plan, and it is **flush on both faces across
+  this element's thickness**. Both faces, not one: a roof deck bears on every wall it lands on
+  and is flush with none, while a neighbour's cap plate runs over a wall's *end* and is flush
+  with the building's outer plane there — one face of two. Requiring the opposed pair separates
+  them exactly, with no threshold to author. Do not relax it to a single plane and weight the
+  strays down by area: that leaves the answer tilted a few degrees and dependent on how long the
+  walls happen to be. Where the stack ends with no slope anywhere it still raises, naming the
+  element. Do not add a fallback that guesses a side.
 
 ## Substrate changes
 
@@ -311,10 +346,24 @@ worst case the tests run on, not a stand-in for a real substrate.
 
 `from_obj` parses the OBJ itself rather than calling `trimesh.load`, which in trimesh 5.0.0
 silently merges every `o` group into one mesh named after the first. It raises, naming the object,
-on a group with no faces, a face loop the fan triangulation would tile wrongly (concave from its
-first vertex — export that object triangulated), and a part that is not a closed solid. That last
-one matters because `skin_over` unions the parts: a union over an open shell produces nonsense
-rather than an error.
+on a group with no faces, a loop it cannot triangulate, and a part that is not a closed solid.
+That last one matters because `skin_over` unions the parts: a union over an open shell produces
+nonsense rather than an error.
+
+**A loop the fan cannot tile is ear-clipped, not refused.** `polyhedron`'s fan is faithful only
+for a loop star-shaped from its first vertex, and a bake is full of loops that are not: a wall
+with a rebate, a parapet with a scupper slot cut through the middle of an edge. Rotating the loop
+to start elsewhere does not save it — a slot leaves a face star-shaped from no vertex at all, and
+6 of the 14 notched faces in the current bake are that shape. So `from_obj` ear-clips them in the
+loop's own plane and hands `polyhedron` triangles, which fan to themselves. It is written here
+because nothing installed will do it: `mapbox_earcut` and `triangle` are both absent, and
+trimesh's remaining engine routes through manifold3d, whose float32 is what `substrate.union`
+already shifts to the origin to work around. The clip runs on the snapped float64 coordinates.
+What it still refuses is a loop that is **not simple** — the tiled area is checked against the
+loop's own and disagreement raises, because ear clipping a self-crossing loop returns well-formed
+triangles covering the wrong region. A corner with no area is clipped away contributing nothing,
+which settles the old asymmetry where `_fan_is_valid` read a collinear vertex as concavity only
+when it sat next to vertex 0: either way no zero-area triangle now reaches the mesh.
 
 **Hand-modelled objects survive `reload()`.** `clear()` removes only objects carrying the
 `skin_generated` key, so anything Duncan models is untouched — that is the same safety property

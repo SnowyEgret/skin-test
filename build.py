@@ -11,7 +11,7 @@ import numpy as np
 import trimesh
 
 from skin import clearance, parameters, separation, skin_over, substrate, write_obj
-from skin.offset import Faces, _owner
+from skin.offset import Faces, _owner, elements_of
 
 BUILD_DIR = Path(__file__).parent / "build"
 
@@ -165,6 +165,216 @@ def uphill(element) -> np.ndarray:
     return -fall / length
 
 
+def _wall_planes(bodies) -> np.ndarray:
+    """`(n_x, n_y, n_z, d)` per vertical face of these bodies, duplicates dropped."""
+    rows = []
+    for part in bodies:
+        upright = np.abs(part.face_normals[:, 2]) < TOL
+        normals = part.face_normals[upright]
+        offsets = (normals * part.triangles.mean(axis=1)[upright]).sum(axis=1)
+        rows.append(np.column_stack([normals, offsets]))
+    if not rows:
+        return np.zeros((0, 4))
+    return np.unique(np.round(np.vstack(rows) / TOL) * TOL, axis=0)
+
+
+def _next_lift(parts, elements, members) -> list:
+    """The elements resting on this one that continue it as its next lift.
+
+    What a flat-topped panel has to ask, to find the parapet that names its
+    sides. Three conditions, and it takes all three.
+
+    - It **rests on** this element: its underside sits at this element's top,
+      and the two overlap in plan.
+    - It is **flush on both sides**: this element has a pair of opposed vertical
+      planes — the two faces across its thickness — and the element above lies
+      in both. That is what "the next lift of this wall" means, and it is the
+      condition that does the work here.
+    - Consequently it is not a roof: `Roof_Headhouse_CLT` bears on all four
+      headhouse walls at z = 14.025 and would otherwise hand each of them the
+      taper's fall, which says nothing about which side of a wall is outside.
+      Its edges are set in from every wall face, so it is flush with none.
+
+    Both sides, not one, because the caps of this substrate overlap at the
+    corners rather than mitring: `CapPlate-Headhouse-W` runs over the end of
+    `Parapet-Headhouse-S` and is flush with its y = 7.54 face — the building's
+    outer plane, which every element at that corner shares. It is not flush with
+    y = 7.12, so it is not another lift of that parapet, and requiring the pair
+    says so exactly. Weighting the strays down by area instead would leave the
+    answer tilted by a few degrees and dependent on how long the walls are.
+
+    Plane-matching rather than bounds: an axis-aligned box around a wall running
+    diagonally in plan says nothing useful, which is the same reason
+    `substrate.classify` refuses to read one. The plan overlap below is a bounds
+    test, but only as a necessary condition on two elements already known to be
+    flush and in contact — it separates the lift above from a distant one in the
+    same plane, and nothing turns on where its box came from.
+    """
+    bodies = [parts[i] for i in members]
+    top = max(part.bounds[1][2] for part in bodies)
+    mine = _wall_planes(bodies)
+    # this element's thickness, however it runs in plan. Held as index pairs
+    # into `mine` rather than as the rows themselves: matching a row back by its
+    # value would turn on the rounding in `_wall_planes` having landed two
+    # coplanar faces of a diagonal wall on the same lattice point, and that is
+    # not something to rely on
+    opposed = [
+        (i, j)
+        for i in range(len(mine))
+        for j in range(i + 1, len(mine))
+        # antiparallel, and looking away from each other rather than toward:
+        # the two faces across a thickness, not the two cheeks of a notch
+        if abs(mine[i, :3] @ mine[j, :3] + 1) < TOL and mine[i, 3] > -mine[j, 3]
+    ]
+    if not opposed:
+        return []
+    plan = np.array([[part.bounds[j][:2] for part in bodies] for j in (0, 1)])
+    box = (plan[0].min(axis=0), plan[1].max(axis=0))
+
+    lifts = []
+    for other in elements:
+        if other[0] in members:
+            continue
+        above = [parts[i] for i in other]
+        if abs(min(part.bounds[0][2] for part in above) - top) > TOL:
+            continue
+        theirs = np.array([[part.bounds[j][:2] for part in above] for j in (0, 1)])
+        if (theirs[1].max(axis=0) <= box[0] + TOL).any():
+            continue
+        if (theirs[0].min(axis=0) >= box[1] - TOL).any():
+            continue
+        planes = _wall_planes(above)
+        if not len(planes):
+            continue
+        flush = np.abs(planes[:, None, :] - mine[None, :, :]).max(axis=2) < TOL
+        held = flush.any(axis=0)
+        if any(held[i] and held[j] for i, j in opposed):
+            lifts.append(other)
+    return lifts
+
+
+def group_caps(parts: list, classify) -> list:
+    """Join each cap plate to the wall it caps, so the two are one element.
+
+    A parapet's coping is a 29 mm plate. On its own it is unmistakably a slab
+    and `substrate.classify` calls it `ROOF` — but it is not a roof, it is the
+    top of a wall, and the whole of `Faces.roles` exists on that observation.
+    Where the bake keeps the plate inside its parapet's object the grouping is
+    already right and this changes nothing. Where the plate is its **own**
+    object, as in `headhouse-walls-parapets-caps-clt-insulation.obj`, it becomes
+    its own element, reads `ROOF`, and the consequences run right through:
+    `cladding_faces`' "every wall top" stops reaching any coping, the membrane
+    covers the plate as if it were roof, and the parapet head comes out with the
+    membrane *over* the metal rather than under it.
+
+    The rule is derived, not a name match on `CapPlate-`: **a lift that
+    classifies `ROOF` while the element it rests on classifies `WALL` is that
+    wall's cap.** `_next_lift` already computes "rests on and continues", which
+    is the same relation `rise` walks, so nothing new is measured here.
+
+    It groups the cap and **not** the parapet below it, which is the whole point
+    of testing the lift's own classification: a parapet reads `WALL` on its own
+    and stays a separate element. Merging the entire stack into one element
+    would read `WALL` too, and would be wrong for a different reason — the
+    climb-or-flange election is per wall, so a wall merged with its parapet
+    would have the membrane climb its full height instead of stopping at the
+    parapet the roof actually runs into.
+
+    Mutates `metadata["object"]`, because that is what `elements_of` groups on
+    and the alternative is a second grouping channel saying the same thing.
+    """
+    elements = elements_of(parts)
+    roles = {}
+    for members in elements:
+        bodies = [parts[i] for i in members]
+        roles[members[0]] = classify(
+            bodies[0] if len(bodies) == 1 else substrate.union(bodies)
+        )
+
+    for members in elements:
+        if roles[members[0]] != substrate.WALL:
+            continue
+        owner = parts[members[0]].metadata.get("object")
+        if owner is None:
+            continue  # ungrouped parts stand alone; there is no element to join
+        for lift in _next_lift(parts, elements, members):
+            if roles[lift[0]] != substrate.ROOF:
+                continue
+            for index in lift:
+                parts[index].metadata["object"] = owner
+    return parts
+
+
+def rise(faces, members, seen=None) -> np.ndarray:
+    """The direction an element's top rises in, from the stack where it is flat.
+
+    `uphill` reads the slope off the element's own upward faces and raises where
+    there is none. A wall built in lifts has none: the panel is a flat-topped
+    box, the parapet above it is another, and only the cap plate on top is laid
+    to fall. The direction is still perfectly well defined — it is the cap's —
+    and this is what walks up to find it.
+
+    Recursive, because the stack is more than two deep here: the headhouse's
+    walls carry parapets that carry cap plates, and only the third element has a
+    slope. Area-weighted where a panel carries more than one, for the same
+    reason `uphill` weights its own faces: a wall running under two parapets
+    takes the direction of the longer one, and two that disagree flatly cancel
+    into a raise rather than a silent coin-toss.
+
+    It deliberately does not merge the stack and re-read it. Unioning a wall
+    with its parapet and cap gives a solid whose upward faces are the cap's, so
+    the answer would be the same — but the merged solid is a different shape
+    from either, and `classify` and `wall_faces` would then be reading a body
+    that is not in the substrate.
+    """
+    bodies = [faces.parts[i] for i in members]
+    try:
+        return uphill(bodies)
+    except ValueError as flat:
+        if "flat top" not in str(flat):
+            raise
+
+    # per path, not shared across branches: a cap plate spanning two parapets of
+    # one wall must be counted under each of them, and a set mutated in place
+    # would silently drop the second. It is here to stop a cycle, nothing more
+    seen = (set() if seen is None else seen) | {members[0]}
+    up = np.zeros(2)
+    for other in _next_lift(faces.parts, faces.elements, members):
+        if other[0] in seen:
+            continue
+        # a lift whose own stack ends flat contributes nothing rather than
+        # aborting this wall: a parapet over part of a panel and a plant plinth
+        # over the rest is an ordinary thing, and the parapet still names the
+        # sides. Only a wall with no direction anywhere above it raises, below
+        try:
+            direction = rise(faces, other, seen)
+        except ValueError as flat:
+            if "flat top" not in str(flat):
+                raise
+            continue
+        # weighted by how much underside the lift bears on us with, the same
+        # shape of measure `uphill` weights its own faces by. It matters where a
+        # panel runs under two parapets: the longer one governs, and two that
+        # disagree flatly cancel into a raise rather than a silent coin-toss
+        area = sum(
+            part.area_faces[part.face_normals[:, 2] < -TOL].sum()
+            for part in (faces.parts[i] for i in other)
+        )
+        up += area * direction
+
+    length = float(np.linalg.norm(up))
+    if length < TOL:
+        name = faces.parts[members[0]].metadata.get("object", f"part {members[0]}")
+        raise ValueError(
+            f"flat top: {name!r} has no high side of its own and nothing "
+            f"resting on it that continues its wall planes has one either, so "
+            f"its exterior and interior are undefined. A stacked wall panel "
+            f"takes its direction from the parapet above it; this stack ends "
+            f"without a slope."
+        )
+    return up / length
+
+
 def _grow_coplanar(faces, seed, candidates):
     """Grow `seed` into `candidates` across coplanar shared edges."""
     near, far = faces.body.face_adjacency.T
@@ -214,7 +424,7 @@ def wall_faces(faces, fall):
             continue
         # and the direction likewise: the cap carries the slope, so reading the
         # bodies separately would find nothing but flat tops on the leaves
-        facing = faces.normals[:, :2] @ uphill([faces.parts[i] for i in members])
+        facing = faces.normals[:, :2] @ rise(faces, members)
         mine = vertical & np.isin(faces.owner, members)
         exterior |= mine & (facing > fall)
         interior |= mine & (facing < -fall)
@@ -455,6 +665,7 @@ def _skin_from(spec, parts, distance=None):
 def separation_check(parts=None, params=None):
     """Both skins plus the smallest distance between them."""
     parts = current_substrate() if parts is None else parts
+    group_caps(parts, classifier(parameters.resolve(params)))
     built = [_skin_from(spec, parts) for spec in skins(params)]
     return separation(*built), built
 
@@ -484,6 +695,10 @@ def build(
     specs = skins(params)
     print(f"  params     {source}")
     parts = current_substrate() if parts is None else parts
+    # before anything reads a role: a separately-authored cap plate is not a
+    # roof, it is the top of the wall it caps. Idempotent, so a substrate that
+    # already groups its caps is untouched
+    group_caps(parts, classifier(params))
     body = substrate.union(parts)
     check_facades(
         Faces(body, parts, _owner(body, parts), classifier(params)), params["fall"]
@@ -491,8 +706,16 @@ def build(
 
     named = []
     if emit_substrate:
+        # a bake names its own parts, and eighteen anonymous boxes in the
+        # outliner are no use for checking a transcription. The prefix stays
+        # either way, because the stale-copy sweep below globs on it
         named += [
-            (f"Substrate_{i + 1}", part, "solid", "substrate")
+            (
+                f"Substrate_{part.metadata.get('name', i + 1)}",
+                part,
+                "solid",
+                "substrate",
+            )
             for i, part in enumerate(parts)
         ]
 
@@ -567,4 +790,16 @@ def build(
 if __name__ == "__main__":
     # this rig transcribes its substrate, so a copy of it is throwaway and worth
     # seeing next to the skins. Do not pass this where the substrate is live.
-    build(emit_substrate=True)
+    #
+    # An OBJ path builds that bake instead of the transcribed rig. It is an
+    # argument rather than a parameter-file entry because it names the substrate,
+    # not a tunable number, and `skin-parameters.yaml` is the numbers.
+    import sys
+
+    if len(sys.argv) > 1:
+        build(
+            parts=substrate.from_obj(sys.argv[1], metadata={FACADE: RAINSCREEN}),
+            emit_substrate=True,
+        )
+    else:
+        build(emit_substrate=True)

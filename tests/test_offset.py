@@ -206,11 +206,126 @@ def test_exterior_and_interior_are_read_off_each_wall_s_own_slope():
 
 
 def test_uphill_refuses_a_flat_top():
-    """A stacked wall panel has no high side, so it cannot name its own facade."""
+    """A stacked wall panel has no high side, so it cannot name its own facade.
+
+    `uphill` reads one element's own upward faces and stops there. Walking the
+    stack to find the slope is `rise`'s job, below.
+    """
     from build import uphill
 
     with pytest.raises(ValueError, match="flat top"):
         uphill([substrate.prism((0, 0, 0), (4.0, 0.3, 3.0))])
+
+
+def _lift(name, lo, hi, tilt=0.0):
+    """A box from `lo` to `hi`, its top falling `tilt` from the y0 edge."""
+    (x0, y0, z0), (x1, y1, z1) = lo, hi
+    part = substrate.polyhedron(
+        [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0),
+         (x0, y0, z1), (x1, y0, z1), (x1, y1, z1 - tilt), (x0, y1, z1 - tilt)],
+        [[0, 3, 2, 1], [4, 5, 6, 7], [0, 4, 7, 3],
+         [1, 2, 6, 5], [0, 1, 5, 4], [3, 7, 6, 2]],
+    )
+    part.metadata["object"] = name
+    return part
+
+
+def test_a_flat_topped_panel_takes_its_direction_from_the_lift_above_it():
+    """The open item this file carried from the start, arriving for real.
+
+    A wall built in lifts is flat-topped all the way up — panel, parapet, and
+    only the cap plate on top is laid to fall. `uphill` raises on every one of
+    them; `rise` walks the stack and hands each the cap's direction. The stack
+    here is three deep, as the headhouse's is, so a rule that only looked one
+    element up would still leave the panel undefined.
+    """
+    from build import rise, uphill
+
+    parts = [
+        _lift("Panel", (0, 0, 0), (6.0, 0.4, 3.0)),
+        _lift("Parapet", (0, 0, 3.0), (6.0, 0.4, 3.7)),
+        _lift("Cap", (0, 0, 3.7), (6.0, 0.4, 3.73), tilt=0.01),
+    ]
+    faces = _faces(parts)
+    assert [len(m) for m in faces.elements] == [1, 1, 1]
+
+    for members in faces.elements[:2]:
+        with pytest.raises(ValueError, match="flat top"):
+            uphill([faces.parts[i] for i in members])
+
+    # the cap falls toward +y, so the whole stack faces -y
+    for members in faces.elements:
+        assert np.allclose(rise(faces, members), [0.0, -1.0], atol=1e-3)
+
+
+def test_one_dead_end_lift_does_not_cost_the_wall_its_direction():
+    """A parapet over part of a panel and a plinth over the rest is ordinary,
+    and the parapet still names the sides. Found by review 2026-08-19: the
+    recursive call was unguarded, so a `ValueError` from the flat branch came
+    out of the loop and the wall got no direction at all, despite the sloped
+    branch having one. The area weighting the docstring promised never ran.
+    """
+    from build import rise
+
+    parts = [
+        _lift("Wall", (0, 0, 0), (6.0, 0.4, 3.0)),
+        _lift("Cap", (0, 0, 3.0), (4.0, 0.4, 3.03), tilt=0.01),  # sloped
+        _lift("Stub", (4.5, 0, 3.0), (6.0, 0.4, 3.3)),  # flat, and stays flat
+    ]
+    faces = _faces(parts)
+    named = {faces.parts[m[0]].metadata["object"]: m for m in faces.elements}
+    assert len(_next_lift_names(faces, named["Wall"])) == 2  # both are lifts
+
+    assert np.allclose(rise(faces, named["Wall"]), [0.0, -1.0], atol=1e-3)
+
+    # but a wall with nothing but dead ends above it still raises
+    bare = [parts[0], parts[2]]
+    faces = _faces(bare)
+    named = {faces.parts[m[0]].metadata["object"]: m for m in faces.elements}
+    with pytest.raises(ValueError, match="'Wall' has no high side"):
+        rise(faces, named["Wall"])
+
+
+def _next_lift_names(faces, members):
+    from build import _next_lift
+
+    return [
+        faces.parts[m[0]].metadata["object"]
+        for m in _next_lift(faces.parts, faces.elements, members)
+    ]
+
+
+def test_a_lift_must_be_flush_on_both_sides_not_merely_bear_on_the_top():
+    """What keeps a roof deck, and a neighbour's cap, out of the answer.
+
+    Both rest on the wall's top. The deck is set in from every wall face, so it
+    is flush with none. The neighbour's cap runs over the wall's *end* and is
+    flush with the building's outer plane there — one of the wall's two faces,
+    but only one — which is why the test is the opposed pair rather than any
+    single plane. Weighting the strays down by area instead leaves the answer
+    tilted by a few degrees and dependent on how long the wall happens to be.
+    """
+    from build import rise
+
+    wall = _lift("Wall", (0, 0, 0), (6.0, 0.4, 3.0))
+    cap = _lift("Cap", (0, 0, 3.0), (6.0, 0.4, 3.03), tilt=0.01)
+    deck = _lift("Deck", (0.2, 0.3, 3.0), (5.8, 4.0, 3.2))
+    # a return wall's cap, crossing the end of this wall and flush at y = 0
+    stray = _lift("Stray", (5.6, 0, 3.0), (6.0, 4.0, 3.03), tilt=0.01)
+
+    parts = [wall, cap, deck, stray]
+    faces = _faces(parts)
+    named = {
+        faces.parts[m[0]].metadata["object"]: m for m in faces.elements
+    }
+    assert _next_lift_names(faces, named["Wall"]) == ["Cap"]
+
+    # and with only the strays present there is no direction to be had, which
+    # raises naming the element rather than averaging two unrelated slopes
+    faces = _faces([wall, deck, stray])
+    named = {faces.parts[m[0]].metadata["object"]: m for m in faces.elements}
+    with pytest.raises(ValueError, match="'Wall' has no high side"):
+        rise(faces, named["Wall"])
 
 
 def _facing_wall(x0, x1, y0, y1, high, low):
@@ -580,3 +695,32 @@ def test_a_skin_with_no_datum_is_not_trimmed():
     low = _skin_from(dict(membrane, base=1.5), parts)
     assert np.isclose(_skin_from(membrane, parts).vertices[:, 2].min(), 1.164, atol=1e-3)
     assert low.vertices[:, 2].min() == 1.5  # the same skin, cut where told
+
+
+def test_opposed_normals_are_compared_as_unit_vectors():
+    """`_vertex_normals` quantises to the PLANE_TOL lattice, so a sloped normal
+    comes back a hair short of unit length and an exactly antiparallel pair dots
+    to -|n|^2 rather than -1. Comparing that raw against `-1 + PLANE_TOL` missed
+    3.65% of genuine contradictions over 20 000 random sloped normals — found by
+    review 2026-08-19.
+
+    An undetected contradiction is the worst kind: `_reconcile` never runs, no
+    fold is reported, and the solve quietly splits the difference. Axis-aligned
+    normals were never affected, which is why every fold met so far was one.
+    """
+    from skin.offset import PLANE_TOL, _opposed
+
+    rng = np.random.default_rng(0)
+    normals = rng.normal(size=(4000, 3))
+    normals /= np.linalg.norm(normals, axis=1)[:, None]
+    # only sloped ones: near-axis normals are snapped to exact units upstream
+    normals = normals[np.abs(normals).max(axis=1) < 1 - 1e-6]
+    quantised = np.round(normals / PLANE_TOL) * PLANE_TOL
+    assert np.abs((quantised * quantised).sum(axis=1) - 1).max() > PLANE_TOL
+
+    for n in quantised:
+        assert _opposed(np.array([n, -n])) is not None
+
+    # and a pair that merely diverges is still not a contradiction
+    apart = np.array([[0.0, 0.0, 1.0], [0.0, 0.6, -0.8]])
+    assert _opposed(apart) is None

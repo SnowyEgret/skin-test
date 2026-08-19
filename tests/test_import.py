@@ -1,6 +1,8 @@
 """Reading a substrate from OBJ — the import path for geometry too large to
 transcribe. Every check here is one the student-house export will actually meet."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import trimesh
@@ -62,13 +64,15 @@ def test_an_open_shell_is_refused_by_name(tmp_path):
         substrate.from_obj(path)
 
 
-def test_a_face_the_fan_cannot_tile_is_refused_by_name(tmp_path):
+def test_a_face_the_fan_cannot_tile_is_ear_clipped(tmp_path):
     """`polyhedron` fan-triangulates, which is faithful only for a loop that is
     star-shaped from its first vertex. A baked wall with a notch is not, and a
     silently inverted triangle inside a substrate is close to undebuggable.
 
     Signed triangle areas telescope to the true polygon area whatever the shape,
-    so area cannot detect this — the test is that no triangle is inverted.
+    so area cannot detect this — the fan test is that no triangle is inverted.
+    What `from_obj` then does about it is ear-clip the loop: rotating it to start
+    somewhere else does not save a U, which is star-shaped from no vertex at all.
     """
     u = np.array(  # a U in plan: star-shaped from no vertex at all
         [[0, 0, 0], [3, 0, 0], [3, 3, 0], [2, 3, 0],
@@ -76,15 +80,59 @@ def test_a_face_the_fan_cannot_tile_is_refused_by_name(tmp_path):
     )
     assert not substrate._fan_is_valid(u)
     assert substrate._fan_is_valid(u[[0, 1, 2, 7]])  # a convex quad of the same loop
+    assert not any(substrate._fan_is_valid(np.roll(u, -r, axis=0)) for r in range(8))
 
-    path = tmp_path / "notched.obj"
-    path.write_text(
-        "o Notched\n"
-        + "".join(f"v {x:g} {y:g} {z:g}\n" for x, y, z in u)
-        + "f 1 2 3 4 5 6 7 8\n"
+    ears = substrate._triangulated(u)
+    assert len(ears) == 6  # n - 2, so no corner was dropped
+    tiled = trimesh.Trimesh(vertices=u, faces=ears)
+    assert tiled.area == pytest.approx(7.0)  # 3x3 less the 1x2 slot
+    assert (tiled.face_normals @ [0, 0, 1] > 0).all()  # none inverted
+
+
+def test_a_loop_that_crosses_itself_is_refused_by_name(tmp_path):
+    """Ear clipping tiles a *simple* loop. A bowtie is not one, and the clip has
+    to say so rather than return whichever half it managed to cover — the area
+    check is what notices, since the ears themselves are all well formed.
+    """
+    bowtie = np.array(  # skewed, so the two lobes do not cancel to no plane
+        [[0, 0, 0], [4, 4, 0], [4, 0, 0], [0, 1, 0]], dtype=float
     )
-    with pytest.raises(ValueError, match="'Notched' has a 8-sided face"):
+    with pytest.raises(ValueError, match="not simple"):
+        substrate._triangulated(bowtie)
+
+    path = tmp_path / "bowtie.obj"
+    path.write_text(
+        "o Bowtie\n"
+        + "".join(f"v {x:g} {y:g} {z:g}\n" for x, y, z in bowtie)
+        + "f 1 2 3 4\n"
+    )
+    with pytest.raises(ValueError, match="'Bowtie' has a 4-sided face"):
         substrate.from_obj(path)
+
+
+def test_a_collinear_corner_is_tiled_faithfully_rather_than_refused(tmp_path):
+    """A redundant vertex on an edge — a T-junction left by a subdivided
+    neighbour, ordinary in a Blender export — reads to `_fan_is_valid` as
+    concavity, but only when it sits next to vertex 0 (the test is `> 0` and a
+    straight corner gives exactly 0). That asymmetry was a standing open item:
+    the same redundancy further round the loop passed and emitted a zero-area
+    triangle.
+
+    The clip settles it in the direction of accepting both. It uses the corner
+    as an ordinary triangle vertex where an ear is available there, and drops it
+    without emitting anything where one is not — either way no zero-area
+    triangle reaches the mesh and the tiled area is the polygon's.
+    """
+    square = np.array(
+        [[0, 0, 0], [1, 0, 0], [2, 0, 0], [2, 2, 0], [0, 2, 0]], dtype=float
+    )
+    assert not substrate._fan_is_valid(square)  # the extra corner leaves vertex 0
+    assert substrate._fan_is_valid(np.roll(square, -1, axis=0))  # further round, fine
+
+    tiled = trimesh.Trimesh(vertices=square, faces=substrate._triangulated(square))
+    assert tiled.area == pytest.approx(4.0)
+    assert (tiled.area_faces > 0).all()  # nothing zero-area was emitted
+    assert (tiled.face_normals @ [0, 0, 1] > 0).all()
 
 
 def test_a_face_before_any_object_is_refused(tmp_path):
@@ -254,3 +302,157 @@ def test_the_transcribed_substrate_round_trips_through_obj(tmp_path):
     for before, after in zip(parts, back):
         assert np.isclose(before.volume, after.volume, rtol=0, atol=1e-9)
         assert np.allclose(np.sort(before.bounds, axis=0), np.sort(after.bounds, axis=0))
+
+
+REPO = Path(__file__).resolve().parent.parent
+BAKE = REPO / "headhouse-walls-parapets-caps-clt-insulation.obj"
+
+
+def test_the_baked_headhouse_reads_and_skins():
+    """The bake is the requirement, so it is a regression check and not a note.
+
+    Four exports were committed before this one and nothing read any of them,
+    which left every figure quoted about them unfalsifiable. This one pins what
+    matters about the current bake: it reads, both skins solve, and each sits at
+    its own offset with the two exactly their offset difference apart.
+
+    The face counts are deliberately not pinned. They move whenever the bake
+    does, and a test that has to be re-blessed on every export stops being read.
+    """
+    from build import (
+        FACADE, RAINSCREEN, classifier, group_caps, rise, skins, _skin_from,
+    )
+    from skin import parameters, substrate
+    from skin.measure import clearance, separation
+    from skin.offset import Faces, _owner, elements_of
+
+    parts = substrate.from_obj(BAKE, metadata={FACADE: RAINSCREEN})
+    assert len(parts) == 18
+    assert all(part.is_watertight for part in parts)
+
+    params = parameters.load_validated()
+    # the five cap plates are their own objects in this bake, and each joins the
+    # parapet it caps: 16 elements become 11
+    assert len(elements_of(parts)) == 16
+    group_caps(parts, classifier(params))
+    assert len(elements_of(parts)) == 11
+
+    body = substrate.union(parts)
+    assert body.is_watertight and body.body_count == 1
+
+    # every wall resolves to an exact outboard axis, through two flat-topped
+    # lifts to the cap plate that carries the fall
+    faces = Faces(body, parts, _owner(body, parts), classifier(params))
+    walls = [
+        m for m in faces.elements if faces.roles[m[0]] == substrate.WALL
+    ]
+    assert len(walls) == 8  # four walls and the four parapets above them
+    for members in walls:
+        direction = rise(faces, members)
+        assert np.abs(np.abs(direction) - [1.0, 0.0]).min() < 1e-9 or np.abs(
+            np.abs(direction) - [0.0, 1.0]
+        ).min() < 1e-9
+
+    built = {}
+    for spec in skins(params):
+        skin = _skin_from(spec, parts)
+        built[spec["name"]] = skin
+        assert skin.metadata["offset_residual"] < 1e-14
+        gap = clearance(parts, skin)
+        assert gap > spec["distance"] - skin.metadata["slope_deviation"] - 1e-6
+        # three folds, all of them x = 8.5 self-contacts: the knife corner where
+        # the E and N walls meet, and the two jambs of the scupper slot
+        assert len(skin.metadata["folds"]) == 3
+        assert (np.abs(body.vertices[skin.metadata["folds"]][:, 0] - 8.5) < 1e-6).all()
+
+    membrane, cladding = built["Membrane"], built["Cladding"]
+    assert clearance(parts, cladding) == pytest.approx(0.085, abs=1e-6)
+    assert separation(membrane, cladding) == pytest.approx(0.077, abs=1e-6)
+
+    # both skins cap the coping, as they did when the plates lived inside their
+    # parapets. The cladding wraps over the plate; the membrane goes under it
+    top = body.vertices[:, 2].max()
+    assert cladding.vertices[:, 2].max() > top + 0.08
+    # the membrane sits between the plate and the cladding over it, its own
+    # offset up. Not pinned to the micron: the plate is sloped, so it is
+    # least-squares and the high corner is not exactly `distance` in z
+    assert membrane.vertices[:, 2].max() == pytest.approx(top + 0.008, abs=1e-3)
+    assert top < membrane.vertices[:, 2].max() < cladding.vertices[:, 2].max()
+
+    # neither skin is buried in the substrate -- clearance() cannot see that,
+    # because closest_point returns an unsigned distance
+    for skin in built.values():
+        assert not any(part.contains(skin.vertices).any() for part in parts)
+
+
+def test_the_bake_needs_ear_clipping_to_read_at_all():
+    """Fourteen of its faces are notched, and six of those are star-shaped from
+    no vertex, so no rotation of the loop would let the fan tile them. Pinned so
+    that the clip is not mistaken for a nicety that could be dropped.
+    """
+    vertices, groups = substrate._parse_obj(BAKE.read_text())
+    points = substrate.snapped(vertices)
+
+    notched = unfannable = 0
+    for _, loops in groups:
+        for body in substrate._bodies(loops):
+            used = sorted({i for loop in body for i in loop})
+            local = {whole: part for part, whole in enumerate(used)}
+            corners = points[used]
+            faces, _ = substrate._collapsed(
+                [[local[i] for i in loop] for loop in body], corners
+            )
+            for loop in faces:
+                if len(loop) <= 3 or substrate._fan_is_valid(corners[loop]):
+                    continue
+                notched += 1
+                turned = corners[loop]
+                if not any(
+                    substrate._fan_is_valid(np.roll(turned, -r, axis=0))
+                    for r in range(len(loop))
+                ):
+                    unfannable += 1
+
+    assert (notched, unfannable) == (14, 6)
+
+
+def test_the_bake_s_separately_authored_cap_plates_are_capped_by_both_skins():
+    """Duncan, 2026-08-19: the cap plates are skinned by both the membrane and
+    the cladding, the same way they were when integrated with the parapet. That
+    is the 2026-08-16 "both cap it" decision, which separating them into their
+    own objects had reversed — each plate became its own element, classified
+    `ROOF`, and `cladding_faces`' "every wall top" stopped reaching any coping.
+
+    Pinned on the *plates* specifically, because the earlier version of this
+    property was pinned on the rig, where a coping is a sloped wall top rather
+    than a part of its own.
+    """
+    from build import (
+        FACADE, RAINSCREEN, cladding_faces, classifier, group_caps, membrane_faces,
+    )
+    from skin import parameters, substrate
+    from skin.offset import Faces, _owner
+
+    params = parameters.load_validated()
+    parts = substrate.from_obj(BAKE, metadata={FACADE: RAINSCREEN})
+    group_caps(parts, classifier(params))
+
+    body = substrate.union(parts)
+    faces = Faces(body, parts, _owner(body, parts), classifier(params))
+    plates = np.array(
+        [parts[o].metadata["name"].startswith("CapPlate-") for o in faces.owner]
+    )
+    assert plates.any()
+
+    # every cap plate face that is exposed upward is claimed by both skins
+    tops = plates & (faces.normals[:, 2] > 0.9)
+    assert tops.sum() == 10  # five plates, two triangles each
+    assert membrane_faces(faces, params["fall"])[tops].all()
+    assert cladding_faces(faces, params["fall"])[tops].all()
+
+    # and every plate reads `wall`, through the parapet it was joined to --
+    # alone, a 29 mm plate is unmistakably a slab
+    assert all(faces.roles[o] == substrate.WALL for o in faces.owner[plates])
+    lone = substrate.from_obj(BAKE)
+    plate = next(p for p in lone if p.metadata["name"] == "CapPlate-Headhouse-N")
+    assert classifier(params)(plate) == substrate.ROOF

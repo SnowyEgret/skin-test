@@ -3,7 +3,7 @@
 Offsetting a **substrate** (an assembly of solid parts) outward by a fixed distance to
 produce **skins**: open surfaces that cover a chosen subset of faces.
 
-Last worked: 2026-08-16.
+Last worked: 2026-08-19.
 
 `CLAUDE.md` has the commands, the architecture and its invariants, and the tolerance
 rationale. This file is the running log: what the geometry currently is, what was tried
@@ -699,6 +699,176 @@ slot decision below, which makes the sill genuinely sky-facing and the claim cor
   the fold vertex keeps 3 planes instead of 2 and moves exactly 8.000 mm in y, making the edge
   vertical. Cover more, and the constraint comes back — which is the rule behaving as designed.
 
+## The walls-and-caps bake (2026-08-19)
+
+`headhouse-walls-parapets-caps-clt-insulation.obj`: leaves removed from walls and parapets, cap
+plates separated into their own objects, the scupper built as a slot. 18 parts, 16 elements. It
+skins, and the numbers are the best yet:
+
+| | faces | residual | clearance | slope absorbed |
+|---|---|---|---|---|
+| Membrane (8 mm) | 30 | 3.82e-17 | 7.8808 mm | 0.158 mm |
+| Cladding (85 mm) | 47 | 8.60e-16 | 85.0000 mm | 1.683 mm |
+
+Separation **77.000 mm** — exactly the offset difference. No self-intersection warning; neither
+skin has a vertex inside a part; a Möller-Trumbore pass over both edge sets against both
+triangle sets finds **zero** crossings, skin-to-skin or self. `python3 build.py <bake.obj>`
+builds it, and `tests/test_import.py` now reads it, which closes the "nothing reads these
+exports" item for this one.
+
+Two things had to be built to get there, and both were open items rather than surprises.
+
+### Ear clipping, because the fan is not enough (was Duncan's call, now settled)
+
+The reader refused the file outright: 14 of its faces are notched, and **6 are star-shaped from
+no vertex at all**, so no rotation of the loop would let a fan tile them. The slot is the clearest
+case — a rectangle with a bite out of the middle of one edge is never star-shaped.
+
+`_triangulated` ear-clips in the loop's own plane. Written rather than imported because nothing
+here will do it: `mapbox_earcut` and `triangle` are both absent, and trimesh's remaining engine
+routes through manifold3d, whose float32 is the thing `substrate.union` already shifts to the
+origin to avoid. Verified against that engine anyway — every clipped loop's area agrees to
+**2.4e-16 relative**, and rebuilding each part with the two tilings gives volumes agreeing to
+< 1e-12 m³.
+
+What it still refuses is a loop that is **not simple**: ear clipping a self-crossing loop returns
+perfectly well-formed triangles covering the wrong region, so the check is that the tiled area
+equals the loop's own. A symmetric bowtie does not even reach it — its Newell normal cancels to
+zero and it raises for having no plane — so the test uses a skewed one.
+
+This also settles the standing `_fan_is_valid` collinear question, and in the direction of
+accepting both readings. A corner with no area is used as an ordinary triangle vertex where an
+ear is available there and dropped contributing nothing where one is not; either way no zero-area
+triangle reaches the mesh. Duncan's framing was "refuse both or accept both"; the clip accepts
+both *faithfully*, which neither option on the table quite was.
+
+### `rise`, because every wall is now flat-topped
+
+With the caps separated, **no wall element has a slope of its own**. `uphill` raised on all eight
+— four walls and four parapets — and the only sloped elements left are the cap plates (1.364°,
+classifying `roof` on their own) and the insulation taper. That is this file's oldest open item
+arriving in full: a stacked panel must take its direction from the parapet above it.
+
+`rise(faces, members)` tries `uphill` and, on a flat top, walks up. Recursive, because the stack
+is three deep here: wall → parapet → cap, and only the third has the fall.
+
+**What counts as the lift above** took two attempts, and the failed one is worth keeping.
+
+*First attempt — rests on it, and shares any vertical plane.* Every wall came back "carried by"
+all four parapets, because the walls' **end** planes are shared right round the perimeter: the
+E parapet's x = 8.08 face is the same plane as the N wall's end. `Headhouse-N` resolved to
+(+1, 0) — flatly wrong, and its −Y facade would have read as an end.
+
+*What landed — rests on it, overlaps it in plan, and is flush on **both** faces across its
+thickness.* Both, not one, because the caps of this bake overlap at the corners rather than
+mitring: `CapPlate-Headhouse-W` runs over the end of `Parapet-Headhouse-S` and is flush with its
+y = 7.54 face, the building's outer plane, which everything at that corner shares. It is not
+flush with y = 7.12, so it is not another lift of that parapet. The opposed pair separates them
+exactly, with nothing to author.
+
+Weighting the strays down by area instead was tried and rejected: it gave `Parapet-Headhouse-N`
+(+0.0794, −0.9968) rather than (0, −1). That still classifies correctly against `fall = 0.707`,
+which is exactly why it is the wrong thing to ship — a few degrees of tilt that depends on how
+long the walls are and passes anyway.
+
+With it, all eight walls resolve to **exact** axis directions: N (0, −1), S (0, +1), E (−1, 0),
+W (+1, 0), each panel agreeing with its parapet. `Roof_Headhouse_CLT` still raises, and does not
+matter: it is a `roof`, and `wall_faces` never asks.
+
+The plan-overlap test is the one bounds test in it, and it is only a necessary condition on two
+elements already known to be flush and in contact — it separates the lift above from a distant
+one in the same plane. Nothing turns on where its box came from, so the `classify` objection to
+bounds does not apply.
+
+**Nothing else moved.** The synthetic rig's build output and both skin OBJs are byte-identical,
+and both parapet exports skin to identical vertex hashes. `headhouse-walls-parapets-insulation.obj`
+still raises `AmbiguousPart` on a 0.42 × 0.42 × 1.675 block, unchanged and pre-existing.
+
+### The three folds are all x = 8.5
+
+Vertex 9 at (8.5, 2.85, 12.595) is the knife corner where the E and N walls meet — this file's
+failure 1 from 2026-08-15, still there in a milder form. Vertices 23 and 34 at (8.5, 4.785,
+14.5036) and (8.5, 5.185, 14.5036) are the two jambs of the scupper slot. Exactly as predicted
+on 2026-08-16: the fold is the x = 8.5 flush contact between the parapet's inner face and the
+insulation taper's edge, orthogonal to slot-versus-hole and to slot size. `_reconcile` handles
+all three and the cladding's clearance is a clean 85.000 mm, which is the slot doing its job —
+the hole version still reads 0.000 mm.
+
+### What `/code-review high` caught (2026-08-19)
+
+Four findings, one of them a defect in code that has been committed since 2026-08-16 and that
+nothing would ever have reported.
+
+- **`_opposed` compared un-normalised normals.** `_vertex_normals` quantises to the `PLANE_TOL`
+  lattice, so a *sloped* normal comes back with `|n|` up to ~8e-7 short of 1, and an exactly
+  antiparallel pair dots to `-|n|^2` rather than -1 — which can sit above `-1 + PLANE_TOL`.
+  Measured over 20 000 random sloped normals: **3.65% of genuine contradictions went
+  undetected**. That is the worst failure available here — `_reconcile` never runs, nothing
+  appears in `metadata["folds"]`, and the solve silently splits the difference, which is exactly
+  what the fold work was written to make structural. Axis-aligned normals are snapped to exact
+  units upstream and were always fine, which is the only reason it had not bitten: every fold
+  met so far has been axis-aligned, including all three in this bake. Now compared as unit
+  vectors, with a test over 4 000 sloped normals.
+- **`rise` let one dead-end lift cost the whole wall its direction.** The recursive call was
+  unguarded, so a flat branch raised out of the loop instead of contributing nothing — a parapet
+  over part of a panel with a plinth over the rest raised, though the parapet named the sides
+  perfectly well, and the area weighting the docstring promised never ran. Fixed, and only a
+  wall with no direction anywhere above it raises now.
+- `seen` was a global visited set rather than a per-path cycle guard, so a cap spanning two
+  parapets of one wall was counted under the first and skipped under the second. Fixed while the
+  review was still running.
+- The coping (below) — which is a modelling decision, not a defect, and is Duncan's.
+
+The review also fuzzed the ear clip against 4 000 random simple polygons with no failures,
+independently of the 45 awkward ones (combs, stars, spirals) checked against shapely here.
+
+### Who caps the parapet: both, again — Duncan, 2026-08-19
+
+Separating the cap plates reversed the 2026-08-16 "both skins cap the coping" decision **by
+accident**, and the reversal was in the substrate rather than in the code. With each plate its
+own element, a 29 mm slab classifies `ROOF`, so `cladding_faces`' "every wall top" stopped
+reaching any coping and the membrane covered the plate as roof instead. Measured before the fix:
+cladding stopped at z = 14.718, *under* the cap, while the membrane ran over the top of it at
+14.755 — the parapet head built upside down.
+
+Duncan's answer: the cap plates are skinned by both skins, exactly as they were when integrated
+with the parapet. `group_caps` does it, and the rule is derived rather than a name match on
+`CapPlate-`: **a lift that classifies `ROOF` while the element it rests on classifies `WALL` is
+that wall's cap**, joined to it by re-stamping `metadata["object"]`. `_next_lift` already
+computes "rests on and continues", so nothing new is measured — it is the relation `rise` walks,
+used a second time.
+
+It groups the cap and **not** the parapet below it, and testing the lift's *own* classification
+is what makes that fall out: a parapet reads `WALL` alone and stays a separate element. Merging
+the whole stack was considered and is wrong for an independent reason — the climb-or-flange
+election is per wall, so a wall merged with its parapet would have the membrane climb its full
+height rather than stopping at the parapet the roof runs into. Occlusion would not save it: the
+wall's inner face below z = 14.025 is the inside of the building and genuinely exposed.
+
+| | before grouping | after |
+|---|---|---|
+| elements | 16 | 11 |
+| Membrane | 30 faces, z ..14.7552 | 50 faces, z ..14.7552 |
+| Cladding | 47 faces, z ..14.7180 | 81 faces, z ..**14.8340** |
+| shared faces | 3 | **13** |
+| separation | 77.000 mm | 77.000 mm |
+
+The 13 are the 10 sloped plate tops (five plates, two triangles each) plus the 3 exactly
+horizontal faces of `Parapet-Headhouse-E` beside the scupper slot, which no plate covers and
+which are a genuinely exposed flat wall top. Cladding over membrane over plate, in that order,
+and the Möller-Trumbore pass still finds zero crossings.
+
+`group_caps` is **inert** on both earlier parapet exports — their plates already sit inside the
+parapet objects, 7 elements before and after — and idempotent, so `build()` may run it
+unconditionally.
+
+### Still not fixed here
+
+The membrane still **stops flat at the scupper cheeks** rather than turning up — the jamb faces
+at y = 4.785 and y = 5.185 are covered by neither skin, and the fold vertices are exactly the
+ones `_reconcile` drops planes at. The 2026-08-16 measurement stands: add the jambs to `covered`
+and those vertices move the full 8 mm and the edges come vertical. Unchanged, and still Duncan's.
+
 ## Open items
 
 - **The brick skin is not built.** Everything it needs exists — `BRICK`,
@@ -713,11 +883,10 @@ slot decision below, which makes the sill genuinely sky-facing and the claim cor
   metal cap is normal — but it is an assumption, not a rule Duncan gave. The 2026-08-16
   "both cap it" decision settles who caps a wall and not which *system* does, so this
   survives it unchanged; it only becomes testable once the brick skin exists.
-- **A flat-topped wall panel cannot name its own facade.** `uphill` raises on one, by
-  design. In the student-house a flat top always has another panel stacked on it, so the
-  top is occluded and only parapets are exposed — but the *panel* still needs its
-  exterior/interior for cladding, and must inherit the direction from the parapet above
-  it. That propagation is unbuilt; the error message says so.
+- ~~**A flat-topped wall panel cannot name its own facade.**~~ Built 2026-08-19 as `rise` +
+  `_next_lift`; see above. What is left of it: the walk needs the lift above to be **in
+  contact**, so two lifts of one wall with a floor slab between them do not resolve. It raises
+  naming the element rather than guessing, which is right, but the student-house will meet it.
 - **The substrate reader for the student-house side does not exist yet.**
   `current_substrate()` returns transcribed literals. Its replacement must pull evaluated
   meshes in world space off the Bonsai IFC objects, snap to 1 µm **clustering before
@@ -735,23 +904,18 @@ slot decision below, which makes the sill genuinely sky-facing and the claim cor
   unskinned neighbour — but the trim does not reach it: `base` is a horizontal datum, and
   a bare end is not a datum the model shares, so there is nothing in plan to author. Still
   open, and a different thing to specify.
-- **`_fan_is_valid` treats a redundant collinear vertex as concavity, but only next to
-  vertex 0.** Found by review 2026-08-16, verified: a rectangle with an extra vertex on the
-  edge leaving vertex 0 is refused as "concave from its first vertex", while the identical
-  redundancy further round the loop passes and silently emits the zero-area triangle. The
-  test is `(signed > 0).all()`, and a collinear vertex gives exactly 0. Collinear vertices
-  on a wall face — a T-junction with a subdivided neighbour — are ordinary in a Blender
-  export, so this will be met. **Duncan's call**, because it is what `from_obj` accepts
-  from a bake: either refuse both (screen zero-area separately, with a message that says
-  "collinear", since the current one points the wrong way) or accept both (`>= 0`, and drop
-  the zero-area triangles rather than emitting them). Not touched pending that.
-- **Three headhouse OBJ exports are committed and nothing reads them** —
+- ~~**`_fan_is_valid` treats a redundant collinear vertex as concavity, but only next to
+  vertex 0.**~~ Settled 2026-08-19 by ear clipping, which accepts both readings faithfully —
+  the corner is an ordinary triangle vertex where an ear is available there and is dropped
+  contributing nothing where one is not. `_fan_is_valid` itself is unchanged; it is now a
+  *routing* test ("can the fan have this one?") rather than a refusal.
+- **Three of the four headhouse OBJ exports are committed and nothing reads them** —
   `headhouse-parapets-clt-insulation{,-no-scupper}.obj` and
-  `headhouse-walls-parapets-insulation.obj`, ~1,580 lines. They are the bake the parapet
-  work was measured on, and the measurements above quote them, but no test or build loads
-  one: `current_substrate()` returns the transcribed literals. Either a test should read
-  one — which would make the real-substrate figures a regression check rather than a note —
-  or they should go.
+  `headhouse-walls-parapets-insulation.obj`. The current bake is read by
+  `tests/test_import.py` as of 2026-08-19, so its figures are a regression check; the older
+  three are still unfalsifiable notes. The last of them does not even load —
+  `AmbiguousPart` on a 0.42 x 0.42 x 1.675 block — so it cannot become one without work.
+  They are superseded rather than useful; propose deleting them.
 - **Part 3's top is not planar** — three corners at z = 1.456084 and one at 1.156084,
   300 mm out of plane, held as two triangles. Skinned faithfully as two planes. He
   described it as "prismatic with a sloped top", so this may be unintended.

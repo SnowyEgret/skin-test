@@ -254,6 +254,114 @@ def _fan_is_valid(points: np.ndarray) -> bool:
     return bool((signed > 0).all())
 
 
+def _triangulated(points: np.ndarray) -> list:
+    """Ear-clip a loop the fan cannot tile, as index triples into `points`.
+
+    The fan is faithful only for a loop that is star-shaped from its first
+    vertex, and a bake is full of loops that are not: a wall with a rebate, a
+    parapet with a scupper slot cut through the middle of an edge. Rotating the
+    loop to start elsewhere does not save it — a slot leaves a face that is
+    star-shaped from no vertex at all — so the tiling has to be solved rather
+    than picked.
+
+    Ear clipping, in the loop's own plane, because nothing installed here will
+    do it: `mapbox_earcut` and `triangle` are both absent, and trimesh's
+    remaining engine routes through manifold3d, whose float32 arithmetic is the
+    thing this module already shifts to the origin to work around. This runs on
+    the snapped float64 coordinates.
+
+    A corner with no area — the collinear vertex a subdivided neighbour leaves
+    on a wall face — is clipped away contributing no triangle, which is the only
+    faithful reading of it: it is a point on an edge, not a corner. That does
+    not extend to a corner with area that the clip cannot reach, which means the
+    loop is not simple; the tiled area is checked against the loop's own and
+    raises if they disagree.
+    """
+    normal = np.cross(points, np.roll(points, -1, axis=0)).sum(axis=0)  # Newell
+    scale = np.linalg.norm(normal)
+    if scale < 1e-18:
+        raise ValueError("the loop spans no plane, so it has no triangulation")
+    normal = normal / scale
+
+    edges = np.roll(points, -1, axis=0) - points
+    along = edges[np.argmax(np.linalg.norm(edges, axis=1))]
+    basis = np.column_stack(
+        [along / np.linalg.norm(along), np.cross(normal, along / np.linalg.norm(along))]
+    )
+    flat = (points - points[0]) @ basis  # right-handed, so the loop runs CCW
+    span = float(np.ptp(flat, axis=0).max())
+    # an area, being 1e-9 of the loop's own bounding square: on a 15 m loop that
+    # is a sliver 30 nm tall, well under the 1 um lattice the points sit on
+    tiny = 1e-9 * span * span
+
+    def wedge(u, v):
+        """2D cross product. Spelled out: `np.cross` on 2-vectors is deprecated."""
+        return u[..., 0] * v[..., 1] - u[..., 1] * v[..., 0]
+
+    def turn(a, b, c):
+        return float(wedge(flat[b] - flat[a], flat[c] - flat[b]))
+
+    def clear(a, b, c, rest):
+        """No other corner of the remaining loop lies within triangle a-b-c.
+
+        Tested per corner against all three edges, not by looking for one edge
+        that has every corner outside it. The latter is quicker and wrong: a
+        notch with corners beyond two different edges of the ear has none inside
+        it, and the shortcut would report the ear blocked and leave a tileable
+        loop with no ear to clip.
+
+        A corner exactly on an edge counts as inside and blocks the ear. That is
+        the conservative direction — the tiling stays faithful, the clip just
+        takes a different ear.
+        """
+        if not rest:
+            return True
+        others = flat[rest]
+        within = np.ones(len(rest), dtype=bool)
+        for p, q in ((a, b), (b, c), (c, a)):
+            within &= wedge(flat[q] - flat[p], others - flat[p]) > -tiny
+        return not within.any()
+
+    remaining = list(range(len(points)))
+    tiled = []
+    while len(remaining) > 3:
+        for k, corner in enumerate(remaining):
+            before = remaining[k - 1]
+            after = remaining[(k + 1) % len(remaining)]
+            if turn(before, corner, after) <= tiny:
+                continue  # reflex, or a corner with no area to clip
+            rest = [i for i in remaining if i not in (before, corner, after)]
+            if not clear(before, corner, after, rest):
+                continue
+            tiled.append((before, corner, after))
+            remaining.pop(k)
+            break
+        else:
+            straight = [
+                k
+                for k, corner in enumerate(remaining)
+                if abs(turn(remaining[k - 1], corner, remaining[(k + 1) % len(remaining)]))
+                <= tiny
+            ]
+            if not straight:
+                raise ValueError(
+                    "ear clipping found no ear and no straight corner, so the loop "
+                    "is not simple — it crosses itself or repeats a corner"
+                )
+            remaining.pop(straight[0])  # no area, so no triangle is lost with it
+    if len(remaining) == 3:
+        tiled.append(tuple(remaining))
+
+    area = abs(wedge(flat, np.roll(flat, -1, axis=0)).sum()) / 2.0
+    covered = sum(abs(turn(*t)) for t in tiled) / 2.0
+    if abs(covered - area) > max(tiny, 1e-9 * area):
+        raise ValueError(
+            f"ear clipping tiled {covered:.6g} of the loop's {area:.6g} — the loop "
+            f"is not simple, so no triangulation of it is faithful"
+        )
+    return tiled
+
+
 def snapped(points, grid: float = 1e-6) -> np.ndarray:
     """Quantise coordinates to a grid — 1 µm by default.
 
@@ -314,15 +422,25 @@ def from_obj(path, metadata: dict | None = None, grid: float = 1e-6) -> list:
             if not faces:
                 raise ValueError(f"{path}: {name!r} has no face left after collapsing")
 
+            # `polyhedron` fans, which is faithful only for a loop star-shaped
+            # from its first vertex. A bake is full of loops that are not, so
+            # the ones the fan cannot tile are ear-clipped here and handed down
+            # as triangles — a 3-loop fans to itself, so `polyhedron` is unaware
+            tiled = []
             for loop in faces:
-                if len(loop) > 3 and not _fan_is_valid(corners[loop]):
+                if len(loop) <= 3 or _fan_is_valid(corners[loop]):
+                    tiled.append(loop)
+                    continue
+                try:
+                    ears = _triangulated(corners[loop])
+                except ValueError as bad:
                     raise ValueError(
-                        f"{path}: {name!r} has a {len(loop)}-sided face that fan "
-                        f"triangulation would tile wrongly — it is concave from its "
-                        f"first vertex, or degenerate. Triangulate it on export."
-                    )
+                        f"{path}: {name!r} has a {len(loop)}-sided face that cannot "
+                        f"be triangulated — {bad}. Triangulate it on export."
+                    ) from bad
+                tiled += [[loop[i] for i in ear] for ear in ears]
 
-            part = polyhedron(corners, faces)
+            part = polyhedron(corners, tiled)
             if not part.is_watertight:
                 raise ValueError(
                     f"{path}: {name!r} is not a closed solid. `skin_over` unions the "
