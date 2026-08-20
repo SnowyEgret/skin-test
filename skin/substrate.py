@@ -93,6 +93,24 @@ def classify(part: trimesh.Trimesh, margin: float, aspect: float) -> str:
     return by_area
 
 
+def role_of(classify, bodies: list) -> str:
+    """Classify one element — its bodies unioned — and name it if it is ambiguous.
+
+    `classify` raises with the numbers but no identity, because a part is only
+    geometry to it. In a bake of three dozen bodies that is not enough to act on:
+    the raise has to say which object to go and look at, or the reader is left
+    matching a horizontality against every part by hand. Both callers
+    (`build.group_caps` and `Faces.roles`) classify an element exactly this way,
+    so the union and the naming live here rather than twice over.
+    """
+    body = bodies[0] if len(bodies) == 1 else union(bodies)
+    try:
+        return classify(body)
+    except AmbiguousPart as ambiguous:
+        name = bodies[0].metadata.get("object") or bodies[0].metadata.get("name")
+        raise AmbiguousPart(f"{name or 'unnamed part'}: {ambiguous}") from ambiguous
+
+
 def _box(extents, center) -> trimesh.Trimesh:
     return trimesh.creation.box(extents=extents, transform=translation_matrix(center))
 

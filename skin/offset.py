@@ -304,9 +304,8 @@ class Faces:
             )
         by_element = []
         for members in self.elements:
-            bodies = [self.parts[i] for i in members]
             by_element.append(
-                self.classify(bodies[0] if len(bodies) == 1 else substrate.union(bodies))
+                substrate.role_of(self.classify, [self.parts[i] for i in members])
             )
         return [by_element[e] for e in self.element_of]
 
@@ -408,6 +407,48 @@ def _hem(body, skin, verts, distance, height, wall, skinned_wall, against, proje
     return faces
 
 
+def _meets_region(p, q, tris, normal) -> bool:
+    """Does segment `p`-`q` touch any of these coplanar triangles?
+
+    All of them lie in the plane `normal` faces, so the test drops that axis and
+    runs in 2D. A segment meets a triangle when either end is inside it or when
+    it crosses one of its edges — checking crossings alone would miss a segment
+    lying wholly within one triangle, and checking containment alone would miss
+    one that only passes through.
+
+    Boundary contact counts: the panel that stops on a wall very often ends
+    exactly on the edge of the wall's own face. The `PLANE_TOL` slack is applied
+    to the side products after dividing out the edge length, so it is the same
+    metre tolerance used everywhere else rather than an area.
+    """
+    axes = [k for k in range(3) if k != int(np.abs(normal).argmax())]
+    a, b = p[axes], q[axes]
+    t = tris[:, :, axes]
+
+    def side(u, v, w):
+        """Twice the signed area of u-v-w, over |v-u|: w's distance off line u-v."""
+        run = v - u
+        length = np.linalg.norm(run, axis=-1)
+        cross = run[..., 0] * (w - u)[..., 1] - run[..., 1] * (w - u)[..., 0]
+        return np.divide(cross, length, out=np.zeros_like(cross), where=length > 0)
+
+    for point in (a, b):
+        d = np.stack([side(t[:, i], t[:, (i + 1) % 3], point) for i in range(3)])
+        if np.any(np.all(d > -PLANE_TOL, axis=0) | np.all(d < PLANE_TOL, axis=0)):
+            return True
+
+    for i in range(3):
+        u, v = t[:, i], t[:, (i + 1) % 3]
+        d1, d2 = side(a, b, u), side(a, b, v)
+        d3, d4 = side(u, v, a), side(u, v, b)
+        straddles = ((d1 > PLANE_TOL) != (d2 > PLANE_TOL)) & (
+            (d3 > PLANE_TOL) != (d4 > PLANE_TOL)
+        )
+        if np.any(straddles):
+            return True
+    return False
+
+
 def _turn_out(body, verts, faces, wall, distance, out):
     """Turn every panel that stops on a `wall` plane out along the axis it faces.
 
@@ -432,19 +473,25 @@ def _turn_out(body, verts, faces, wall, distance, out):
     if not out or not wall.any():
         return []
 
-    corner = body.vertices[body.faces[wall][:, 0]]
-    planes = np.unique(
+    elected = body.triangles[wall]
+    keys = (
         np.round(
             np.column_stack(
                 [
                     body.face_normals[wall],
-                    (corner * body.face_normals[wall]).sum(axis=1) + distance,
+                    (elected[:, 0] * body.face_normals[wall]).sum(axis=1) + distance,
                 ]
             )
             / PLANE_TOL
-        ),
-        axis=0,
-    ) * PLANE_TOL
+        )
+        * PLANE_TOL
+    )
+    # the elected faces kept WITH the plane they offset onto, not just the plane:
+    # an edge ends on the wall only if it also meets those faces there
+    walls = [
+        (key[:3], key[3], elected[np.all(keys == key, axis=1)])
+        for key in np.unique(keys, axis=0)
+    ]
 
     V = np.asarray(verts, dtype=float)
     seen: Counter = Counter()
@@ -456,10 +503,19 @@ def _turn_out(body, verts, faces, wall, distance, out):
             holder[key] = tri
 
     def stops_on_wall(i, j):
-        return any(
-            abs(V[i] @ n - d) < PLANE_TOL and abs(V[j] @ n - d) < PLANE_TOL
-            for n, d in zip(planes[:, :3], planes[:, 3])
-        )
+        """On one of the wall's offset planes, and on the wall's faces there.
+
+        The plane alone is not enough. A plane is unbounded, and a building
+        shares one right up a stack: a parapet's outer face is the very plane
+        its wall's is, a storey higher. Matching on it turned the membrane's
+        parapet skirt out into thin air 1.5 m above the roof the flange was
+        elected for. So the segment is projected back onto the substrate and
+        must meet the elected faces themselves — see NOTES 2026-08-19.
+        """
+        for n, d, tris in walls:
+            if abs(V[i] @ n - d) < PLANE_TOL and abs(V[j] @ n - d) < PLANE_TOL:
+                return _meets_region(V[i] - distance * n, V[j] - distance * n, tris, n)
+        return False
 
     segs = []
     for (i, j), count in seen.items():

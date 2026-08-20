@@ -9,6 +9,50 @@ Last worked: 2026-08-19.
 rationale. This file is the running log: what the geometry currently is, what was tried
 and rejected, and what is still open.
 
+## Start here (picking up 2026-08-20)
+
+The live substrate is **`unit8-parapets-caps-clt-insulation-headhouse-cornices.obj`** — 29 `o`
+groups, 36 parts, 18 elements. It replaced `unit8-parapets-caps-clt-insulation-headhouse.obj`,
+which Duncan overwrote on disk and which was never committed; the walls-and-caps bake
+`headhouse-walls-parapets-caps-clt-insulation.obj` survives because `tests/test_import.py` reads
+it.
+
+```bash
+python3 build.py unit8-parapets-caps-clt-insulation-headhouse-cornices.obj
+```
+
+...and **build it after running pytest, not before** — the tests rebuild `build/` with the
+synthetic rig, manifest included, and `display.reload()` then shows you the rig. See CLAUDE.md.
+
+Everything from 2026-08-19 is committed on branch `skin-the-walls-and-caps-bake`. Three pieces of
+work landed that day, each with its own section below:
+
+1. **The Unit8 bake** — the storey below added, the first substrate to elect a `flanged` wall and
+   so the first to exercise `_turn_out` for real. It found a defect: the turn-out matched an
+   unbounded *plane* rather than the elected faces, and dressed the membrane's parapet skirt into
+   thin air 1.5 m above the roof, with 35 crossings through the cladding. Fixed by `_meets_region`.
+2. **The cornices bake** — two cornices, neither of which would classify. `group_cornices` joins a
+   cornice to the wall it projects from; the cladding stops below one and the membrane needed no
+   new rule at all.
+3. **`substrate.role_of`** — the classify-an-element call both callers were duplicating, which now
+   names the element it refuses.
+
+**Duncan's next session is "some minor adjustments."** Two rule questions are deliberately parked
+and should be reopened when he says so, not before — both are in Open items, and both were
+deferred for the same stated reason, that settling a general rule on a single instance risks a
+rule that fits only that instance:
+
+- **the in-line butt / V11 leak** — waiting on more instances; he expected the scupper's sides to
+  produce another. The cornices bake has now arrived, so this one may be ready to reopen.
+- **`clearance` cries wolf** on a skin that stops short of a projecting feature. The cornices bake
+  prints a self-intersection warning that is false. Not fixed: changing what the build asserts is
+  his call.
+
+**Not run:** `/code-review high` on this branch. CLAUDE.md asks for it before a meaningful chunk
+lands, and this is one — `_turn_out`, `group_cornices` and `role_of` are all new seams. It is all
+committed, so there is no working diff to review: give it the branch, `/code-review high main`.
+Worth running first thing.
+
 ## Why this exists
 
 A ground-up replacement for the student-house skinning module, which had grown too large
@@ -872,7 +916,222 @@ at y = 4.785 and y = 5.185 are covered by neither skin, and the fold vertices ar
 ones `_reconcile` drops planes at. The 2026-08-16 measurement stands: add the jambs to `covered`
 and those vertices move the full 8 mm and the edges come vertical. Unchanged, and still Duncan's.
 
+## The Unit8 bake (2026-08-19)
+
+`unit8-parapets-caps-clt-insulation-headhouse.obj`: the walls-and-caps bake with **the whole
+storey below added** — Unit8's CLT deck, flat insulation and taper, its four parapets and their
+four cap plates. 27 `o` groups, 34 parts (the tapers are multi-body), 18 elements. The headhouse
+geometry is byte-identical to the previous bake; everything new is underneath it.
+
+The Unit8 roof is **L-shaped, notched around the headhouse**, so the headhouse now stands in a
+roof rather than on nothing. That is what the file is for, and it is the first substrate here
+where any wall is elected `flanged` — so the first that exercises `_turn_out` on a real model at
+all. The old bake elected none, and `_turn_out` returned `[]` before reaching any of its logic.
+
+Everything derived came out right first time, which is worth recording because none of it was
+touched:
+
+- **The climb/flange election reads the notch.** `Headhouse-E` and `Headhouse-S` — the two walls
+  facing the Unit8 roof — are `flanged`; `Headhouse-N` and `Headhouse-W`, on the building's outer
+  perimeter, are neither. All **eight** parapets, Unit8's four and the headhouse's four, are
+  `climbed`. Nothing lists a wall or a direction anywhere.
+- `rise` resolved every one of the new flat-topped Unit8 parapets through its cap plate, and
+  `group_caps` joined all four Unit8 cap plates to their parapets, exactly as it does upstairs.
+- The three folds are still the `x = 8.5` contact, now four — the fourth is the same knife corner
+  on the Unit8 side. `_reconcile` handles all four.
+
+### The turn-out followed the plane instead of the faces
+
+The build "succeeded" and the printed numbers caught it: **skin separation 8.000 mm**, against
+77.000 mm on the previous bake. A Möller-Trumbore pass found **35 genuine crossings** between the
+membrane and the cladding. Neither skin self-intersected, and the residuals were clean — the
+hard constraints were all satisfied, so nothing in the solve had any reason to complain.
+
+`_turn_out`'s `stops_on_wall` tested only whether a skin boundary edge lay **on the offset plane**
+of an elected face. A plane is unbounded, and a building shares one right up a stack:
+`Parapet-Headhouse-E`'s outer face is the very plane `Headhouse-E`'s is, 1.1 m higher. So the
+membrane's parapet skirt, and both jambs of the scupper slot, turned out 205 mm **horizontally
+into thin air at z ≈ 14.43–14.76** — because the Unit8 roof, 1.5 m below, ran into a wall that
+happened to share their plane. Of the 19 edges turned out, **9 were on no elected face at all**.
+
+This is the same failure as `_next_lift`'s first attempt (above): a shared plane is not a shared
+face. It is worth noting how long it hid — `out` has been authored at 205 mm since the parameter
+file landed, and the rig exercises it happily, because the rig has exactly one turn-out wall and
+nothing coplanar with it anywhere.
+
+**The fix.** The elected faces are now kept *with* the plane they offset onto, and a candidate
+edge is projected back onto the substrate and must **meet those faces there** — `_meets_region`,
+an exact 2D segment-versus-triangle-region test in the plane, boundary contact included. Boundary
+contact matters and is not slack: a panel stopping on a wall very often ends exactly on the edge
+of the wall's own face, and the membrane over `Parapet-Unit8-N`'s cap overlaps `Headhouse-E`'s
+elected face by only the 8 mm the offset itself adds. It turns up, correctly, and a containment
+test that sampled the midpoint alone would have dropped it.
+
+The blast radius is exactly what it should be:
+
+| | before | after |
+|---|---|---|
+| Rig, both skins | — | **byte-identical** |
+| Walls-and-caps bake, both skins | — | **byte-identical** |
+| Unit8 Cladding (`out: 0.0`) | — | **byte-identical** |
+| Unit8 Membrane | 19 edges turned out | 10 |
+| skin separation | 8.000 mm | **76.230 mm** |
+| membrane ↔ cladding crossings | 35 | **0** |
+
+76.230 rather than 77.000 is the sloped taper absorbing its share, the same way the rig reads
+76.071 against its own 77; clearance is 7.8808 / 84.1503 mm, both above `distance − slope`.
+
+The ten survivors all sit at z ≈ 12.90–13.11, on the Unit8 roof and its parapet caps, where the
+flange was actually elected. The membrane runs up to the headhouse wall and **turns up** 205 mm
+against it — 12.9061 → 13.1111, exact — which is the upstand the rule was written for, and the
+first time this rig has produced one on a real substrate.
+
+`tests/test_offset.py::test_a_turn_out_stops_at_the_elected_faces_not_at_their_plane` poses it in
+miniature: two lifts of one wall presenting the same plane, only the lower elected. It turned out
+at z = 1.9 before the fix. 63 tests, ~3.2 s.
+
+
+## The cornices bake (2026-08-19)
+
+`unit8-parapets-caps-clt-insulation-headhouse-cornices.obj` **replaces** the Unit8 bake on disk —
+same substrate plus two cornices, and the earlier file is gone. 29 `o` groups, 36 parts, 18
+elements.
+
+- `Cornice-Unit8-E` — x −0.17…0.00, z 13.0066…13.0766: a 170 × 70 mm band the full 8.87 m of the
+  east facade, standing proud of `Parapet-Unit8-E`'s face with `CapPlate-Unit8-E` (widened west to
+  −0.17) oversailing it.
+- `Cornice-Headhouse-E` — x 7.98…8.08, y 4.785…5.185, z 14.425…14.495: a 400 mm stub at the
+  scupper, projecting 100 mm. This is the **new scupper detail** — the outlet drip.
+
+### It would not skin at all
+
+`substrate.classify` refused: `Cornice-Headhouse-E` has horizontality **0.533**, inside the
+authored 0.05 margin of the halfway mark. `Cornice-Unit8-E` did not refuse and was worse — it
+reads **0.704** and would have skinned silently as a `ROOF`. Neither is a roof.
+
+The raise named no part. It said only *"horizontality 0.533 is within 0.05 of the halfway mark"*,
+which in a 36-body bake is a number to match by hand against every part. `substrate.role_of` now
+wraps the classify-an-element call both callers were making separately — `build.group_caps` and
+`Faces.roles` each unioned the bodies and classified them — and re-raises naming the element:
+*"Cornice-Headhouse-E: horizontality 0.533 …"*. That is `Fail at the seam, addressed` applied to
+the one raise that was not.
+
+### What Duncan asked for, 2026-08-19
+
+> At the east facade where the cornice is at the top of the parapet, both the membrane and
+> cladding should cover the cap plate as before, however the cladding on the facade should stop
+> below the cornice. At the scupper only the membrane should cover the cornice and turn its skirt
+> down. The cladding on the headhouse east facade should stop below the cornice like on the east
+> facade.
+
+### `group_cornices`, and how little it turned out to need
+
+The rule is in CLAUDE.md. What is worth recording here is that **the membrane side needed no new
+rule at all** — joining the cornice to its parapet was enough:
+
+- at the scupper, the cornice's exposed top is caught by `membrane_faces`' "every upward face of a
+  climbed wall" and its front face by `membrane_skirts`' "down the exterior face of every wall
+  carried over". Measured: membrane over the top at z = 14.503, skirt down the face from 14.503 to
+  **14.433** — the full 62 mm drop on a 70 mm band.
+- at the east facade the same rules do nothing, because the cornice's top is buried under the cap
+  plate (they share z = 13.0766, so it cancels in the union) and its face is coplanar with the
+  cap's. The membrane there is unchanged, "as before".
+
+Only the cladding needed telling, and only by exclusion.
+
+**Two false starts, both instructive.** The first rule was *within its height, strictly shorter,
+wholly outside its plan footprint*. `Parapet-Unit8-W` satisfies all three against `Headhouse-S` —
+it butts the outer face, sits inside a 3.075 m wall's height and is shorter than it — and became
+its cornice, which made the merged element read `AmbiguousPart: Headhouse-S: measures disagree`.
+Adding *projects less far than the wall is thick* separates them with nothing authored: 3.34 m
+proud of a 420 mm wall is a wing, 100 mm proud of it is a band. The first rule also had to gain
+the height-containment test to keep `group_cornices` from claiming the cap plates that
+`group_caps` exists to claim.
+
+### The numbers, and one false alarm
+
+| | faces | residual | clearance | folds |
+|---|---|---|---|---|
+| Membrane (8 mm) | — | 1.16e-16 | 7.8808 mm | 6 |
+| Cladding (85 mm) | — | 7.36e-16 | **63.9999 mm** | 6 |
+
+Separation 29.308 mm. **The cladding's `WARNING: 21.000 mm inside the requested offset —
+self-intersecting` is a false alarm**, and this is the first time that check has cried wolf.
+Verified four ways: zero membrane↔cladding crossings both directions, zero self-crossings in
+either skin, no face centre of either skin inside any part, and **no skin edge crossing any
+part's surface at all**. The cladding has **zero faces in either cornice's z band** — it stops at
+z = 14.34, which is exactly 14.425 − 0.085, the mitre against the cornice's underside offset
+plane. That is "stops below the cornice", built correctly.
+
+What the 64 mm actually measures is a cladding face centroid 64 mm below the scupper cornice's
+underside. `measure.clearance` samples vertices and centroids and cannot tell *terminates near a
+projecting feature* from *folds through itself* — its docstring claims the latter. A skin that
+deliberately stops short of a feature standing proud of the wall will always read low, so the
+number is no longer the whole regression check it was. See the open item.
+
+Inert where there are no cornices: the rig and `headhouse-walls-parapets-caps-clt-insulation.obj`
+both come back **byte-identical**, checked against `HEAD`. 64 tests.
+
+
 ## Open items
+
+- **`clearance` cannot tell "stops short of a feature" from "folds through itself".** The cornices
+  bake makes the cladding read 63.9999 mm against an 85 mm offset and print
+  `WARNING: … self-intersecting`, and it is wrong — four independent checks (crossings both ways,
+  self-crossings, face centres inside parts, skin edges against part surfaces) all come back
+  clean, and the cladding stops exactly on its mitre against the cornice underside. The metric
+  samples vertices and centroids against every part, so any skin that deliberately terminates
+  beside something standing proud of the wall reads low. CLAUDE.md still says a clearance below
+  `distance − slope_deviation` means something broke; that is now false in the presence of a
+  cornice, and a warning that cries wolf every build is worse than none. The Möller-Trumbore pass
+  is the check that actually held up, which strengthens the standing "promote it into
+  `skin/measure.py` as `intersects(a, b)`" item below — it should probably become the check
+  `build.py` prints, with `clearance` demoted to a number rather than a verdict. Not fixed:
+  changing what the build asserts is Duncan's call.
+
+
+- **The membrane leaks at V11: an in-line butt has no wrap.** *Deferred by Duncan 2026-08-19,
+  to be reopened on the next import.* On the Unit8 bake the membrane's flange and skirt unify at
+  their **southern** junction and not at their **northern** one. V11 of `build/Membrane.obj`
+  (Blender 0-based; OBJ `v 12`) is the corner, at **(8.072, 2.422, 13.1138)**.
+
+  The two junctions are topologically different, which is why one works:
+
+  * **South — a T-junction, and it closes.** `Parapet-Unit8-W` runs *perpendicular* into
+    `Headhouse-S`'s south face, which is elected `flanged` because the Unit8 roof runs into it.
+    All three membrane panels at the parapet's end — inner climb, cap top, outer skirt — turn out
+    along their own normals and land **coplanar** on `y = 7.548`, where `_turn_out` miters them
+    into one panel, x 10.467…11.313, z 13.0436…13.3237. The open-edge run is continuous round the
+    corner.
+  * **North — an in-line butt, and it does not.** `Parapet-Unit8-N` butts *in line* with
+    `Headhouse-N`: both north faces are the same plane, y = 2.43, and the wall simply continues
+    upward. There is no face to turn out onto. The skirt's bottom edge stops dead at x = **8.08**
+    (the raw substrate plane, not the offset 8.072), an **8 mm diagonal sliver** closes it back up
+    to V11, and the upstand rises from V11 on x = 8.072 with a **free vertical edge**. Three open
+    edges converge on V11 — the pinhole.
+
+  What Duncan wants: the flange wrapped onto `Headhouse-N`'s north face and the skirt extended
+  onto the same face, their edges meeting at one corner — i.e. a panel on y = 2.422 running east
+  from x = 8.072, spanning z 13.0436 … 13.3188.
+
+  **Measured, so it need not be re-derived:** electing `Headhouse-N`'s exterior as a turn-out wall
+  cleans up the 8 mm sliver (the hem then miters to x = 8.072, because `_hem`'s `skinned_wall`
+  takes the `stop` faces) but produces **no wrap at all**. `_turn_out` extrudes along each panel's
+  *own dominant normal axis*, and at this junction that points north, off the building; the
+  direction that lands on the wall is +X, along the corner. So the existing mechanism cannot
+  produce it — this needs a rule the code does not have.
+
+  Four candidates were put to Duncan: dress onto every exposed face at the termination (general,
+  covers both junction types, needs `_turn_out` to chain a collar round a corner rather than
+  within one plane); a separate in-line-butt rule; fix it upstream in the substrate by returning
+  the parapet into the headhouse; or just close V11 without dressing onto the wall.
+
+  **Deferred deliberately.** Duncan is working on a new scupper detail, and the scupper's sides
+  will need cladding — at which point the in-line butt is probably **not unique**. Settling the
+  rule on one instance risks a rule that fits only this corner. Reopen when the import with the
+  new scupper detail arrives, with both cases visible. See also the scupper-cheek turn-up item,
+  which is the same family and also waiting on that import.
+
 
 - **The brick skin is not built.** Everything it needs exists — `BRICK`,
   `facades_of(faces, BRICK, fall)`, `CLADDING_SYSTEMS` — but no part in the sample is

@@ -93,6 +93,7 @@ PART_4 = (
 # headhouse has a second -X facade that is not brick, and a facade's material is
 # a design decision, not a fact about where it sits.
 FACADE = "facade"
+CORNICE = "cornice"  # stamped by group_cornices; the cladding stops below one
 RAINSCREEN = "rainscreen"
 BRICK = "brick"
 
@@ -253,6 +254,109 @@ def _next_lift(parts, elements, members) -> list:
     return lifts
 
 
+def _projection_axis(a, b):
+    """The plan axis `a` stands clear of `b` on, or None if their footprints overlap.
+
+    Touching is allowed — a cornice is flush against the face it hangs on — so
+    the test is on shared *area*, not on shared boundary.
+    """
+    for k in (0, 1):
+        if a[1][k] <= b[0][k] + TOL or a[0][k] >= b[1][k] - TOL:
+            return k
+    return None
+
+
+def _in_contact(a, b) -> bool:
+    """True where two bounding boxes meet or overlap on all three axes."""
+    return all(a[1][k] >= b[0][k] - TOL and a[0][k] <= b[1][k] + TOL for k in range(3))
+
+
+def group_cornices(parts: list) -> list:
+    """Join each cornice to the wall it projects from, so the two are one element.
+
+    A cornice is a band standing proud of a wall's exterior face — a course under
+    a coping, or the drip that throws a scupper's outflow clear of the facade. On
+    its own it classifies as nothing useful: `Cornice-Unit8-E` reads `ROOF` at
+    horizontality 0.704, and the 400 mm scupper drip reads 0.533, dead on the
+    halfway mark, where `substrate.classify` refuses outright and the build
+    stops. Neither is a roof. Both are the wall they hang on.
+
+    This runs **before** `group_caps`, which classifies every element up front
+    and would raise on the cornice before any grouping could help. It therefore
+    cannot ask what a part's role is — and does not need to, because the relation
+    is local geometry:
+
+    **a body is a cornice of one it touches when it sits within that body's
+    height, is strictly shorter than it, and lies wholly outside its plan
+    footprint.**
+
+    Each condition earns its place, and the second and third are what keep it
+    from running away:
+
+    - *within its height* separates a cornice from a cap plate, which rests on
+      the top and shares only that plane. `_next_lift` claims the cap, and this
+      must not claim it as well.
+    - *strictly shorter* separates it from the neighbouring wall it also touches
+      and also lies outside of. `Parapet-Unit8-N` butts `Parapet-Unit8-E` at the
+      corner, runs the same 727 mm, and is nobody's cornice.
+    - *wholly outside in plan* is what "projects from the face" means, as opposed
+      to sitting in the wall or on it.
+    - *projects less far than the wall is thick* is what stops the relation
+      running away along the building. `Parapet-Unit8-W` meets `Headhouse-S`'s
+      outer face, sits inside its height and is shorter than it, and on the first
+      three conditions alone became its cornice — it stands 3.34 m proud of a
+      420 mm wall. A cornice is a modest band by definition, so the wall's own
+      thickness is the measure, and nothing has to be authored: the same move
+      `_next_lift` makes when it asks about faces "across this element's
+      thickness".
+
+    Where several bodies qualify the tallest wins, since a cornice hangs on the
+    wall rather than on whatever else happens to touch it.
+
+    The bodies are stamped `metadata[CORNICE]` as well as regrouped, because the
+    two skins want different things and only one of them can be had by grouping.
+    The membrane needs nothing further: a cornice joined to a climbed parapet has
+    its exposed top picked up by "every upward face of a climbed wall" and its
+    face skirted by "down the exterior face of every wall carried over", which is
+    exactly the scupper drip Duncan asked for — covered, with the skirt turned
+    down it. At `Cornice-Unit8-E` the same rules do nothing, because its top is
+    buried under the cap plate and its face is coplanar with the cap's, so the
+    membrane there is unchanged. The cladding is the one that has to ask: it
+    **stops below** a cornice rather than wrapping it. See `cladding_faces`.
+    """
+    hosts = {}
+    for index, part in enumerate(parts):
+        mine = part.bounds
+        for other, host in enumerate(parts):
+            if other == index:
+                continue
+            theirs = host.bounds
+            if not _in_contact(mine, theirs):
+                continue
+            if mine[0][2] < theirs[0][2] - TOL or mine[1][2] > theirs[1][2] + TOL:
+                continue  # not within its height: a lift above it, not a band on it
+            if mine[1][2] - mine[0][2] >= theirs[1][2] - theirs[0][2] - TOL:
+                continue  # not shorter: a neighbour of the same stature
+            axis = _projection_axis(mine, theirs)
+            if axis is None:
+                continue  # not projecting: it sits in the wall, not proud of it
+            if mine[1][axis] - mine[0][axis] >= min(
+                theirs[1][k] - theirs[0][k] for k in (0, 1)
+            ):
+                continue  # projects further than the wall is thick: a wing, not a band
+            taller = theirs[1][2] - theirs[0][2]
+            if index not in hosts or taller > hosts[index][1]:
+                hosts[index] = (other, taller)
+
+    for index, (host, _) in hosts.items():
+        owner = parts[host].metadata.get("object")
+        if owner is None:
+            continue  # ungrouped parts stand alone; there is no element to join
+        parts[index].metadata["object"] = owner
+        parts[index].metadata[CORNICE] = True
+    return parts
+
+
 def group_caps(parts: list, classify) -> list:
     """Join each cap plate to the wall it caps, so the two are one element.
 
@@ -286,10 +390,7 @@ def group_caps(parts: list, classify) -> list:
     elements = elements_of(parts)
     roles = {}
     for members in elements:
-        bodies = [parts[i] for i in members]
-        roles[members[0]] = classify(
-            bodies[0] if len(bodies) == 1 else substrate.union(bodies)
-        )
+        roles[members[0]] = substrate.role_of(classify, [parts[i] for i in members])
 
     for members in elements:
         if roles[members[0]] != substrate.WALL:
@@ -532,9 +633,14 @@ def cladding_faces(faces, fall):
     by the difference of the offsets, and a test pins that ordering. Do not
     narrow either predicate to make the skins disjoint.
     """
-    return facades_of(faces, RAINSCREEN, fall) | (
-        _upward(faces.normals) & faces.of_role(substrate.WALL)
-    )
+    # ...but never a cornice. It stands proud of the facade, and the cladding
+    # stops at its underside rather than wrapping it -- Duncan, 2026-08-19. The
+    # face below it already ends there, so excluding the cornice's own faces is
+    # the whole of it; the coping above is a separate face and is still claimed.
+    return (
+        facades_of(faces, RAINSCREEN, fall)
+        | (_upward(faces.normals) & faces.of_role(substrate.WALL))
+    ) & ~faces.tagged(CORNICE, True)
 
 
 def cladding_skirts(faces, fall):
@@ -665,6 +771,7 @@ def _skin_from(spec, parts, distance=None):
 def separation_check(parts=None, params=None):
     """Both skins plus the smallest distance between them."""
     parts = current_substrate() if parts is None else parts
+    group_cornices(parts)
     group_caps(parts, classifier(parameters.resolve(params)))
     built = [_skin_from(spec, parts) for spec in skins(params)]
     return separation(*built), built
@@ -696,8 +803,12 @@ def build(
     print(f"  params     {source}")
     parts = current_substrate() if parts is None else parts
     # before anything reads a role: a separately-authored cap plate is not a
-    # roof, it is the top of the wall it caps. Idempotent, so a substrate that
-    # already groups its caps is untouched
+    # roof, it is the top of the wall it caps, and a cornice is not a slab, it is
+    # the band standing proud of one. Cornices first, because `group_caps`
+    # classifies every element up front and a lone cornice is exactly what
+    # `classify` refuses. Both are idempotent, so a substrate that already groups
+    # them is untouched
+    group_cornices(parts)
     group_caps(parts, classifier(params))
     body = substrate.union(parts)
     check_facades(

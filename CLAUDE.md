@@ -23,9 +23,18 @@ override of individual knobs. See **Parameters** below.
 
 Run pytest from the repo root — `tests/test_offset.py` imports `build` as a top-level module.
 
+**Running the tests overwrites `build/`.** `tests/test_offset.py` calls `build(parts)` on the
+synthetic rig, so a pytest run replaces whatever bake was last built — manifest included, which is
+what `blender/display.py` reads. Build the bake you want *after* the tests, not before, or
+`reload()` quietly shows you the rig. Caught once, after a reload displayed four `Substrate_N`
+boxes instead of a 36-part bake.
+
 `build.py` prints a per-skin line (residual, clearance, slope deviation, open/closed) and the
 skin-to-skin separation. Those numbers are the regression check: a residual above ~1e-9, or a
-clearance below `distance - slope_deviation`, means something broke.
+clearance below `distance - slope_deviation`, means something broke — **except where a skin
+deliberately stops short of something standing proud of the wall.** `measure.clearance` samples
+vertices and centroids against every part and cannot tell that from a fold, so the cornices bake
+prints a self-intersection warning that four independent checks say is false. See NOTES.
 
 To view the result, in Blender's Python console:
 
@@ -215,6 +224,12 @@ The two continuations work on different things, and that distinction matters:
   wall is extruded by `out` along the **dominant axis of its own normal** — roof panels turn up,
   a panel facing -X turns -X. Snapping to the axis keeps a turn off a shallow slope exactly
   vertical. Its distance is measured from the skin edge, so all turns are exactly `out`.
+  **The elected faces bound it, not the plane they lie on.** A building shares a plane right up
+  a stack — a parapet's outer face is the very plane its wall's is, a storey higher — so an edge
+  is projected back onto the substrate and must meet the elected faces *there*. Matching the
+  plane alone turned the membrane's parapet skirt out into thin air 1.5 m above the roof whose
+  flange elected it. Same failure as `_next_lift`'s first attempt below: a shared plane is not a
+  shared face.
 
 `_trim_below` (`base`) runs **after** both, so it means "no part of this skin goes below the
 datum" rather than "the offset stops there". It is a **cut**, not a clamp: triangles straddling
@@ -229,6 +244,27 @@ meet, rather than extruding each edge alone. Extruding independently is wrong in
 adjacent panels turning along different axes leave a gap at one corner and interpenetrate at the
 next. The miter is just the intersection of the two outer lines, so it extends or trims as
 needed. Segments that continue the same panel are parallel and are left unmitered.
+
+**A cornice joins the wall it projects from.** `build.group_cornices` runs before
+`group_caps` — which classifies every element up front and would raise on a lone cornice first.
+It cannot ask a part's role and does not need to: **a body is a cornice of one it touches when it
+sits within that body's height, is strictly shorter than it, lies wholly outside its plan
+footprint, and projects less far than that body is thick.** The last two conditions do the work.
+`Cornice-Unit8-E` reads `ROOF` at horizontality 0.704 and the 400 mm scupper drip reads 0.533 —
+dead on the halfway mark, where `classify` refuses and the build stops. A cap plate is held off by
+resting *on* the top rather than standing proud of the face; a neighbouring parapet butting a
+taller wall is inside its height, shorter than it and outside its footprint, and is held off only
+by the thickness test — it stands metres proud of a 420 mm wall. Nothing is authored: the wall's
+own thickness is the measure, the same move `_next_lift` makes.
+
+The membrane needs nothing further — a cornice joined to a climbed parapet has its exposed top
+picked up by "every upward face of a climbed wall" and its face skirted by "down the exterior face
+of every wall carried over", which is the scupper drip exactly: covered, skirt turned down it. At
+`Cornice-Unit8-E` those same rules do nothing, because its top is buried under the cap plate and
+its face is coplanar with the cap's. **The cladding stops below a cornice** rather than wrapping
+it (Duncan, 2026-08-19) — `cladding_faces` excludes `tagged(CORNICE, True)`, and since the facade
+face below already ends at the cornice, that exclusion is the whole of it. The coping above is a
+separate face and is still claimed by both skins.
 
 **A separately-authored cap plate joins the wall it caps.** `build.group_caps` runs before
 anything reads a role, and re-stamps `metadata["object"]` so the plate and its parapet are one

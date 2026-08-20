@@ -724,3 +724,85 @@ def test_opposed_normals_are_compared_as_unit_vectors():
     # and a pair that merely diverges is still not a contradiction
     apart = np.array([[0.0, 0.0, 1.0], [0.0, 0.6, -0.8]])
     assert _opposed(apart) is None
+
+
+def test_a_turn_out_stops_at_the_elected_faces_not_at_their_plane():
+    """A wall's outer face and the parapet's above it are the *same plane*.
+
+    A building shares a plane right up a stack, so matching a turn-out on the
+    plane alone reaches every coplanar surface in the model. On the Unit8 bake
+    that turned the membrane's parapet skirt out 205 mm into thin air 1.5 m
+    above the roof whose flange elected it, and put 35 crossings through the
+    cladding. The elected faces bound the turn-out, not the plane they lie on.
+    """
+    from skin.offset import _turn_out
+
+    # two lifts of one wall, both presenting a face on x = 0, with a gap so the
+    # union keeps them apart; only the lower one is elected
+    lower = trimesh.creation.box(extents=[1, 1, 1], transform=trimesh.transformations.
+                                 translation_matrix([0.5, 0.5, 0.5]))
+    upper = trimesh.creation.box(extents=[1, 1, 1], transform=trimesh.transformations.
+                                 translation_matrix([0.5, 0.5, 1.7]))
+    body = trimesh.util.concatenate([lower, upper])
+    outer = np.abs(body.face_normals @ [-1, 0, 0] - 1) < 1e-9
+    elected = outer & (body.triangles[:, :, 2].max(axis=1) <= 1.0 + 1e-9)
+    assert elected.sum() == 2 and outer.sum() == 4, "one lift elected, two present"
+
+    d, out = 0.01, 0.2
+    verts, faces = [], []
+
+    def panel(z):  # a horizontal skin panel ending on the offset plane at height z
+        n = len(verts)
+        verts.extend([np.array(v) for v in
+                      ([-d, 0.2, z], [-d, 0.8, z], [-0.5, 0.5, z])])
+        faces.append([n, n + 1, n + 2])
+
+    panel(0.5)   # on the elected lift
+    panel(1.7)   # on the lift above it, same plane, not elected
+
+    collar = _turn_out(body, verts, faces, elected, d, out)
+    assert collar, "the panel that does stop on the elected face still turns out"
+
+    z = np.array([verts[i][2] for tri in collar for i in tri])
+    assert z.min() >= 0.5 - out - 1e-9 and z.max() <= 0.5 + out + 1e-9, (
+        f"the turn-out reached z {z.min():.3f}..{z.max():.3f}: it followed the "
+        "plane up to the lift above instead of stopping at the elected faces"
+    )
+
+
+def test_a_cornice_joins_the_wall_it_projects_from():
+    """A projecting band is the wall it hangs on, not a slab of its own.
+
+    `Cornice-Unit8-E` reads `ROOF` at horizontality 0.704 and the 400 mm scupper
+    drip reads 0.533 — dead on the halfway mark, where `classify` refuses and the
+    build stops. Both are the wall. The relation has to hold off two look-alikes:
+    a cap plate rests on the top rather than standing proud of the face, and a
+    neighbouring parapet butting a taller wall is outside its footprint and
+    shorter than it, but stands metres proud of a 420 mm wall.
+    """
+    from build import CORNICE, group_cornices
+
+    def box(name, extents, centre):
+        part = substrate._box(extents, centre)
+        part.metadata.update(name=name, object=name)
+        return part
+
+    wall = box("Wall", [0.42, 6.0, 0.72], [0.21, 3.0, 12.71])          # x 0..0.42, top 13.07
+    cornice = box("Cornice", [0.17, 6.0, 0.07], [-0.085, 3.0, 13.035])  # proud of the face
+    cap = box("Cap", [0.59, 6.0, 0.03], [0.085, 3.0, 13.085])          # rests on the top
+    # butts the wall's end, inside its height and shorter than it: excluded only
+    # because it stands 6 m proud of a 420 mm wall
+    other = box("Neighbour", [0.42, 6.0, 0.60], [0.21, 9.0, 12.65])
+
+    group_cornices(parts := [wall, cornice, cap, other])
+    stamped = [p.metadata["name"] for p in parts if p.metadata.get(CORNICE)]
+    assert stamped == ["Cornice"], f"cornices identified: {stamped}"
+    assert cornice.metadata["object"] == "Wall", "joined to the wall it projects from"
+    assert cap.metadata["object"] == "Cap", "a cap rests on the top; group_caps has it"
+    assert other.metadata["object"] == "Neighbour", (
+        "a wall butting another's end is outside its footprint and shorter than it, "
+        "but stands proud of it by far more than its thickness — not a cornice"
+    )
+
+    group_cornices(parts)  # idempotent: a substrate already grouped is untouched
+    assert [p.metadata["name"] for p in parts if p.metadata.get(CORNICE)] == ["Cornice"]
