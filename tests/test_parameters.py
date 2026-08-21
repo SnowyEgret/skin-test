@@ -113,19 +113,29 @@ def test_a_rule_set_no_skin_names_is_refused():
         skins(params)
 
 
-def test_out_must_agree_with_whether_the_rules_turn_out():
-    """A skin either stops against something and turns out, or does neither."""
+def test_a_skin_that_cannot_lap_in_any_direction_is_refused():
+    """`drop` and `out` are the two directions a lap can take. With both zero a
+    skin would stop dead on every arris it reaches, which is a skin nobody asked
+    for and almost certainly a parameter file with a hole in it.
+
+    This replaces the old `out` vs `turn_out` cross-check, which asked whether
+    the rule set defined a turn-out. There is no turn-out any more: `_lap` reads
+    the direction off the substrate, so a skin no longer declares which way it
+    continues -- only how far, and a distance of zero switches that way off.
+    """
     from build import skins
 
     params = _params()
-    params["skins"][0]["out"] = 0.0  # but the Membrane rules define turn_out
-    with pytest.raises(parameters.ParameterError, match="disagrees"):
+    params["skins"][0]["drop"] = 0.0
+    params["skins"][0]["out"] = 0.0
+    with pytest.raises(parameters.ParameterError, match="no lap in any direction"):
         skins(params)
 
+    # either one alone is fine: the cladding has no turn-out and never did
     params = _params()
-    params["skins"][1]["out"] = 0.3  # and the Cladding rules do not
-    with pytest.raises(parameters.ParameterError, match="disagrees"):
-        skins(params)
+    params["skins"][1]["out"] = 0.0
+    assert skins(params)
+
 
 
 def test_a_supplied_params_dict_is_validated_too():

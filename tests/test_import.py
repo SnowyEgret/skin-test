@@ -379,6 +379,14 @@ def test_the_baked_headhouse_reads_and_skins():
     assert membrane.vertices[:, 2].max() == pytest.approx(top + 0.008, abs=1e-3)
     assert top < membrane.vertices[:, 2].max() < cladding.vertices[:, 2].max()
 
+    # the cladding stops at the scupper rather than lining it: the sill is a
+    # wall top, so "every wall top" claimed it until `_opening` was written, and
+    # the coping's own mitre then flared out through the mouth. Pinned by the
+    # sill's own offset plane, 85 mm above it, being empty
+    sill = body.vertices[:, 2].max() - 0.257     # z = 14.495, the slot's floor
+    on = np.abs(cladding.triangles[:, :, 2] - (sill + 0.085)).max(axis=1) < 1e-6
+    assert not on.any(), "the cladding is lining the inside of the scupper"
+
     # neither skin is buried in the substrate -- clearance() cannot see that,
     # because closest_point returns an unsigned distance
     for skin in built.values():

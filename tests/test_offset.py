@@ -478,11 +478,19 @@ def test_partial_skin_is_an_open_surface_with_constraints_intact():
         assert np.isclose(a - b, D, atol=1e-9)
 
 
-def test_skirt_hangs_the_right_walls_to_the_right_depth():
+def test_a_drip_hangs_the_right_walls_to_the_right_depth():
+    """The membrane's drip is derived, not elected.
+
+    There is no `turn_down` predicate any more: `_lap` finds the wall under a
+    covered top by adjacency and reads the direction off it. This checks the
+    result is what the old election produced -- the facades of the two walls the
+    roof runs into, and nothing else -- and that the depth is still measured
+    from the *substrate* edge rather than from the skin above it.
+    """
     import trimesh
 
     from build import current_substrate, skins, wall_faces
-    from skin.offset import _owner
+    from skin.offset import _owner, _receivers
 
     membrane = skins()[0]
     drop = membrane["drop"]
@@ -490,26 +498,32 @@ def test_skirt_hangs_the_right_walls_to_the_right_depth():
     body = trimesh.boolean.union(parts)
     owner = _owner(body, parts)
     faces = _faces(parts, body)
-    walls = membrane["turn_down"](faces)
 
-    # the membrane skirts down the walls it carried over, and only those: parts 1
-    # and 2, the two whose interior face the roof runs into
-    assert set(owner[walls].tolist()) <= {0, 1}
-    # every skirted face is a facade -- never an end, never an interior face
+    kept = membrane["keep"](faces)
+    walls = _receivers(body, kept, membrane["lap"](faces))
+    height = np.abs(body.face_normals[:, 2])
+    # the drips: a wall face carrying a covered top directly above it
+    tops = kept & (height > 1e-6)
+    below = np.zeros(len(kept), dtype=bool)
+    for (f, g), (a, b) in zip(body.face_adjacency, body.face_adjacency_edges):
+        for near, far in ((f, g), (g, f)):
+            if tops[near] and walls[far] and body.vertices[[a, b], 2].min() > 1.0:
+                below[far] = True
+
+    # parts 1 and 2 are the two whose interior face the roof runs into
+    assert {0, 1} <= set(owner[below].tolist())
     exterior, interior = wall_faces(faces, FALL)
-    assert (walls & exterior).sum() == walls.sum()
-    assert not (walls & interior).any()
+    assert (below & exterior).any() and not (below & interior).any()
 
-    surface = skin_over(parts, D, keep=membrane["keep"],
-                        turn_down=membrane["turn_down"], drop=drop,
-                        classify=membrane["classify"])
+    surface = skin_over(parts, D, keep=membrane["keep"], lap=membrane["lap"],
+                        drop=drop, out=membrane["out"], classify=membrane["classify"])
     tops = {round(float(z), 6) for z in body.vertices[:, 2] if z > 1.5}
     hems = {round(float(z), 6) for z in surface.vertices[:, 2]} & {
         round(t - drop, 6) for t in tops
     }
-    assert hems, "skirt hem should sit exactly drop below a substrate top edge"
+    assert hems, "drip should sit exactly drop below a substrate top edge"
 
-    # a near-level edge must be exactly level, hem included
+    # a near-level edge must be exactly level, drip included
     e = surface.vertices[surface.edges_unique]
     dz = np.abs(e[:, 0, 2] - e[:, 1, 2])
     assert dz[dz < 1e-3].max() < 1e-12
@@ -524,10 +538,11 @@ def test_cladding_and_membrane_cover_complementary_walls_and_never_meet():
     faces = _faces(parts)
 
     membrane, cladding = skins()
-    # the membrane climbs the interior walls and skirts the exterior; the
-    # cladding does the reverse
-    assert (membrane["keep"](faces) & cladding["turn_down"](faces)).any()
-    assert (cladding["keep"](faces) & membrane["turn_down"](faces)).any()
+    # the membrane climbs the interior walls and laps down the exterior; the
+    # cladding does the reverse. The membrane may lap onto any vertical face,
+    # so the discriminating direction is the cladding's
+    assert (membrane["keep"](faces) & cladding["lap"](faces)).any()
+    assert not (cladding["keep"](faces) & cladding["lap"](faces)).any()
 
     gap, skins = separation_check(parts)
     assert gap > 0.05, f"skins only {gap * 1000:.1f} mm apart"
@@ -693,7 +708,9 @@ def test_a_skin_with_no_datum_is_not_trimmed():
     assert membrane["base"] is None
 
     low = _skin_from(dict(membrane, base=1.5), parts)
-    assert np.isclose(_skin_from(membrane, parts).vertices[:, 2].min(), 1.164, atol=1e-3)
+    # 1.090, not the 1.164 this read before 2026-08-20: the membrane now laps
+    # onto part 3's -X end as well, and drips 62 mm down it from a lower corner
+    assert np.isclose(_skin_from(membrane, parts).vertices[:, 2].min(), 1.090, atol=1e-3)
     assert low.vertices[:, 2].min() == 1.5  # the same skin, cut where told
 
 
@@ -726,47 +743,44 @@ def test_opposed_normals_are_compared_as_unit_vectors():
     assert _opposed(apart) is None
 
 
-def test_a_turn_out_stops_at_the_elected_faces_not_at_their_plane():
+def test_a_lap_stops_at_the_faces_it_reaches_not_at_their_plane():
     """A wall's outer face and the parapet's above it are the *same plane*.
 
-    A building shares a plane right up a stack, so matching a turn-out on the
-    plane alone reaches every coplanar surface in the model. On the Unit8 bake
-    that turned the membrane's parapet skirt out 205 mm into thin air 1.5 m
-    above the roof whose flange elected it, and put 35 crossings through the
-    cladding. The elected faces bound the turn-out, not the plane they lie on.
-    """
-    from skin.offset import _turn_out
+    A building shares a plane right up a stack, so anything that matched a
+    continuation on the plane alone would reach every coplanar surface in the
+    model. On the Unit8 bake that turned the membrane's parapet skirt out 205 mm
+    into thin air 1.5 m above the roof whose flange elected it, and put 35
+    crossings through the cladding.
 
-    # two lifts of one wall, both presenting a face on x = 0, with a gap so the
-    # union keeps them apart; only the lower one is elected
+    `_receivers` now settles it structurally rather than by a region test: a lap
+    only ever turns onto a face **adjacent to one the skin covers**, so the lift
+    above is not a candidate at all. This poses the condition in miniature --
+    two lifts of one wall presenting the same plane, with a covered panel over
+    only the lower one.
+    """
+    from skin.offset import _receivers
+
     lower = trimesh.creation.box(extents=[1, 1, 1], transform=trimesh.transformations.
                                  translation_matrix([0.5, 0.5, 0.5]))
     upper = trimesh.creation.box(extents=[1, 1, 1], transform=trimesh.transformations.
                                  translation_matrix([0.5, 0.5, 1.7]))
     body = trimesh.util.concatenate([lower, upper])
     outer = np.abs(body.face_normals @ [-1, 0, 0] - 1) < 1e-9
-    elected = outer & (body.triangles[:, :, 2].max(axis=1) <= 1.0 + 1e-9)
-    assert elected.sum() == 2 and outer.sum() == 4, "one lift elected, two present"
+    assert outer.sum() == 4, "two lifts, both presenting a face on x = 0"
 
-    d, out = 0.01, 0.2
-    verts, faces = [], []
+    # the lower lift's top is covered; nothing else is
+    kept = (np.abs(body.face_normals @ [0, 0, 1] - 1) < 1e-9) & (
+        body.triangles[:, :, 2].min(axis=1) > 1.0 - 1e-9
+    ) & (body.triangles[:, :, 2].max(axis=1) < 1.0 + 1e-9)
+    assert kept.sum() == 2, "one lift top covered"
 
-    def panel(z):  # a horizontal skin panel ending on the offset plane at height z
-        n = len(verts)
-        verts.extend([np.array(v) for v in
-                      ([-d, 0.2, z], [-d, 0.8, z], [-0.5, 0.5, z])])
-        faces.append([n, n + 1, n + 2])
-
-    panel(0.5)   # on the elected lift
-    panel(1.7)   # on the lift above it, same plane, not elected
-
-    collar = _turn_out(body, verts, faces, elected, d, out)
-    assert collar, "the panel that does stop on the elected face still turns out"
-
-    z = np.array([verts[i][2] for tri in collar for i in tri])
-    assert z.min() >= 0.5 - out - 1e-9 and z.max() <= 0.5 + out + 1e-9, (
-        f"the turn-out reached z {z.min():.3f}..{z.max():.3f}: it followed the "
-        "plane up to the lift above instead of stopping at the elected faces"
+    vertical = np.abs(body.face_normals[:, 2]) < 1e-9
+    reached = _receivers(body, kept, vertical)
+    assert reached.sum(), "the lower lift's own faces are lapped onto"
+    z = body.triangles[reached][:, :, 2]
+    assert z.max() <= 1.0 + 1e-9, (
+        f"a lap reached up to z {z.max():.3f}: it followed the plane onto the "
+        "lift above instead of stopping at the faces it touches"
     )
 
 
@@ -806,3 +820,278 @@ def test_a_cornice_joins_the_wall_it_projects_from():
 
     group_cornices(parts)  # idempotent: a substrate already grouped is untouched
     assert [p.metadata["name"] for p in parts if p.metadata.get(CORNICE)] == ["Cornice"]
+
+
+def _slotted_wall():
+    """One wall body with a slot cut down through it, like a scupper.
+
+    A single body, not three abutting ones: a slot is *cut into* a parapet, so
+    its two cheeks belong to the same part, and `_opening` reads them per body
+    for the reasons its docstring gives. Every face is axis-aligned, so every
+    lap direction is exact.
+    """
+    wall = substrate.prism((0.0, 0.0, 0.0), (2.4, 0.4, 1.0))
+    slot = substrate.prism((1.0, -0.1, 0.8), (1.4, 0.5, 1.5))
+    notched = trimesh.boolean.difference([wall, slot])
+    notched.vertices = substrate.snapped(notched.vertices)
+    return [notched]
+
+
+def test_a_lap_wraps_the_cheeks_of_a_slot_the_old_election_could_not_see():
+    """The scupper, in miniature.
+
+    A slot's cheeks lie *across* the wall's fall, so `wall_faces` calls them
+    ends and neither the skirt nor the flange predicate could ever claim one --
+    which is why the membrane stopped dead at the scupper cheeks and left them
+    bare. `_lap` asks the substrate instead: the covered sill runs into the
+    cheek, so the surface turns and goes up it, and the covered top runs into it
+    from above, so it comes down. Nothing elects anything.
+    """
+    parts = _slotted_wall()
+    d, drop, out = 0.01, 0.06, 0.2
+
+    skin = skin_over(
+        parts, d,
+        keep=lambda faces: faces.normals[:, 2] > 1e-6,
+        lap=lambda faces: np.abs(faces.normals[:, 2]) < 1e-6,
+        drop=drop, out=out,
+    )
+
+    for x, sign in ((1.0, +1), (1.4, -1)):
+        plane = x + sign * d
+        on = np.abs(skin.triangles[:, :, 0] - plane).max(axis=1) < 1e-6
+        assert on.any(), f"nothing on the cheek at x = {plane}"
+        z = skin.triangles[on][:, :, 2]
+        # up `out` from the sill at 0.8, and down `drop` from the top at 1.0,
+        # which between them cover the whole 0.2 m cheek
+        assert z.min() <= 0.8 + d + 1e-6
+        assert z.max() >= 1.0 - drop - 1e-6
+
+    assert clearance(parts, skin) > d - 1e-6, "a cheek lap folded into the wall"
+
+
+def test_a_lap_runs_on_where_the_wall_it_hangs_from_butts_in_line():
+    """The junction at `Parapet-Unit8-N`'s east end, in miniature.
+
+    A low wall butts a tall one **in line**: both present the same face, so the
+    surface simply continues past the join. There is no arris to turn round, and
+    a lap that stopped at the end of the thing it hangs from would leave the
+    open edge the membrane leaked through. It runs on instead.
+    """
+    low = substrate.prism((0.0, 0.0, 0.0), (1.0, 0.4, 1.0))
+    tall = substrate.prism((1.0, 0.0, 0.0), (2.0, 0.4, 2.0))
+    parts = [low, tall]
+    d, drop, out = 0.01, 0.06, 0.2
+
+    # only the low wall's top is covered, so its drip runs out at x = 1.0
+    skin = skin_over(
+        parts, d,
+        keep=lambda faces: (faces.normals[:, 2] > 1e-6)
+        & (faces.centres[:, 2] < 1.5),
+        lap=lambda faces: np.abs(faces.normals[:, 2]) < 1e-6,
+        drop=drop, out=out,
+    )
+
+    on = np.abs(skin.triangles[:, :, 1] - (0.0 - d)).max(axis=1) < 1e-6
+    assert on.any(), "no drip on the front face"
+    reach = skin.triangles[on][:, :, 0].max()
+    assert reach == pytest.approx(1.0 - d + out, abs=1e-6), (
+        f"the drip stopped at x = {reach:.4f}: it ended where the wall it hangs "
+        "from ends instead of running on across the wall that continues it"
+    )
+    assert clearance(parts, skin) > d - 1e-6
+
+
+def test_an_in_line_butt_runs_on_the_same_way_at_both_ends():
+    """A run-on moves the seam it lengthens, so anything read off the runs before
+    it fires is stale — the *other* end of that same run included.
+
+    Caught by `/code-review high` 2026-08-20. Held over a whole pass, the second
+    end read the first end's vertex as its own, `tip == root` blocked it, and a
+    substrate symmetric about its own centre came out lapped on one side only.
+    """
+    low = substrate.prism((1.0, 0.0, 0.0), (2.0, 0.4, 1.0))
+    parts = [
+        low,
+        substrate.prism((0.0, 0.0, 0.0), (1.0, 0.4, 2.0)),
+        substrate.prism((2.0, 0.0, 0.0), (3.0, 0.4, 2.0)),
+    ]
+    d, out = 0.01, 0.2
+    skin = skin_over(
+        parts, d,
+        keep=lambda faces: (faces.normals[:, 2] > 1e-6) & (faces.centres[:, 2] < 1.5),
+        lap=lambda faces: np.abs(faces.normals[:, 2]) < 1e-6,
+        drop=0.06, out=out,
+    )
+    on = np.abs(skin.triangles[:, :, 1] - (0.0 - d)).max(axis=1) < 1e-6
+    x = skin.triangles[on][:, :, 0]
+    west, east = float(x.min()), float(x.max())
+    assert (1.0 + d) - west == pytest.approx(east - (2.0 - d), abs=1e-6), (
+        f"ran on to x {west:.4f} at one end and {east:.4f} at the other, on a "
+        "substrate symmetric about x = 1.5"
+    )
+
+
+def test_a_knife_is_only_a_knife_where_the_two_faces_touch():
+    """Coplanar and opposed is not enough — they have to share the vertex.
+
+    Caught by `/code-review high` 2026-08-20, and it is the trap this file
+    already records twice: a shared plane is not a shared face. Two walls metres
+    apart can present one plane facing opposite ways, and pairing them would
+    refuse a lap onto one because the skin happened to cover the other.
+    """
+    from skin.offset import _knives, _plane_ids
+
+    here = substrate.prism((0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
+    for name, other, touching in (
+        ("butted", substrate.prism((1.0, 0.0, 0.0), (2.0, 1.0, 1.0)), True),
+        ("2.6 m away", substrate.prism((1.0, 3.6, 0.0), (2.0, 4.6, 1.0)), False),
+    ):
+        body = trimesh.util.concatenate([here, other])
+        body.merge_vertices()
+        ids, reps = _plane_ids(body)
+        assert bool(_knives(body, ids, reps)) is touching, name
+
+
+def test_a_rule_set_may_decline_to_lap_at_all():
+    """`lap: None` is a skin that genuinely stops where it ends, and it has to be
+    reachable — the raise for a zero drop *and* a zero out used to recommend it
+    while `skins()` would have crashed building it.
+    """
+    parts = _slotted_wall()
+    skin = skin_over(
+        parts, 0.01,
+        keep=lambda faces: faces.normals[:, 2] > 1e-6,
+        lap=None, drop=0.06, out=0.2,
+    )
+    assert len(skin.faces), "the covered faces are still skinned"
+    assert np.abs(skin.face_normals[:, 2]).min() > 1e-6, "no vertical lap panels"
+
+
+def test_a_rainscreen_stops_at_an_opening_rather_than_lining_it():
+    """The floor of a slot cut through a wall is a wall top, and "every wall top"
+    claimed it — so the cladding lined the inside of the scupper.
+
+    The test that separates it from a coping is the sign between two opposed
+    flanks: a coping's are the faces across its wall's thickness and look *away*
+    from each other, an opening's cheeks look *at* each other. Read per body,
+    because the slot cuts through the cap plates too and per element their two
+    reveals would read as cheeks and take the coping with them.
+    """
+    from build import _opening, _upward
+    from skin.substrate import WALL
+
+    parts = _slotted_wall()
+    faces = _faces(parts)
+    cheeks, floor = _opening(faces)
+
+    assert cheeks.any(), "the slot's two cheeks"
+    for i in np.where(cheeks)[0]:
+        assert abs(abs(faces.normals[i][0]) - 1) < 1e-6, "a cheek faces along x here"
+    assert floor.any(), "the sill between them"
+    for i in np.where(floor)[0]:
+        assert faces.normals[i][2] > 0.5 and abs(
+            faces.centres[i][2] - 0.8) < 1e-6, "the sill is the top of the low block"
+
+    # the sill *is* a wall top, which is why "every wall top" claimed it and the
+    # cladding lined the outlet. `cladding_faces` subtracts `floor` for exactly
+    # this; the rule is checked here and the result on the real bake is checked
+    # by `tests/test_import.py`
+    assert (floor & _upward(faces.normals) & faces.of_role(WALL)).any()
+
+    # the wall's own coping is not a floor, though the same two cheeks touch it:
+    # they stop at that level rather than standing over it
+    top = (faces.normals[:, 2] > 1e-6) & (faces.centres[:, 2] > 0.9)
+    assert top.any() and not (top & floor).any(), "the coping read as its own floor"
+
+
+def test_a_lap_is_shortened_to_the_face_it_lands_on():
+    """`_lap` places whole quads, so a band wider than the face it lands on does
+    not overhang — it is cut to fit or refused.
+
+    Without this, covering the scupper cheeks sent a 205 mm upstand onto a 34 mm
+    cap-plate reveal: 120 mm above the top of the wall and straight through the
+    cladding's coping, 13 crossings. The march is over coplanar *triangles*, not
+    one face, because a union triangulates a wall and a lap commonly crosses
+    several — a 62 mm drip off a 34 mm cap plate must still run its full depth
+    down the parapet's coplanar face below.
+    """
+    low = substrate.prism((0.0, 0.0, 0.0), (1.0, 0.4, 1.0))
+    tall = substrate.prism((1.0, 0.0, 0.0), (2.0, 0.4, 1.05))
+    parts = [low, tall]
+    d, out = 0.01, 0.205
+    room = 0.05                      # all `tall` presents above `low`'s top
+
+    skin = skin_over(
+        parts, d,
+        keep=lambda faces: (faces.normals[:, 2] > 1e-6)
+        & (faces.centres[:, 2] < 1.02),
+        lap=lambda faces: np.abs(faces.normals[:, 2]) < 1e-6,
+        drop=0.06, out=out,
+    )
+    on = np.abs(skin.triangles[:, :, 0] - (1.0 - d)).max(axis=1) < 1e-6
+    assert on.any(), "no upstand against the taller wall"
+    top = float(skin.triangles[on][:, :, 2].max())
+    assert top == pytest.approx(1.05 + d, abs=1e-6), (
+        f"the upstand reached z {top:.4f}: it ran its full {out * 1000:.0f} mm "
+        f"instead of stopping at the {room * 1000:.0f} mm the wall offers"
+    )
+
+
+def test_a_run_on_does_not_bridge_a_gap_in_the_plane_it_runs_along():
+    """Coplanar is not contiguous.
+
+    Caught by `/code-review high` 2026-08-21: the run-on sampled the tip and the
+    far end and nothing between, so a 130 mm void between two bodies presenting
+    one plane read as solid and the lap hung four triangles over it. It marches
+    now, the same way a round-1 lap is cut to fit.
+    """
+    parts = [
+        substrate.prism((0.0, 0.0, 0.0), (1.0, 0.4, 1.0)),     # covered top
+        substrate.prism((1.0, 0.0, 0.0), (1.02, 0.4, 2.0)),    # a 20 mm stub
+        substrate.prism((1.15, 0.0, 0.0), (1.40, 0.4, 2.0)),   # ...then a void
+    ]
+    d, out = 0.01, 0.2
+    skin = skin_over(
+        parts, d,
+        keep=lambda faces: (faces.normals[:, 2] > 1e-6) & (faces.centres[:, 2] < 1.5),
+        lap=lambda faces: np.abs(faces.normals[:, 2]) < 1e-6,
+        drop=0.06, out=out,
+    )
+    on = np.abs(skin.triangles[:, :, 1] - (0.0 - d)).max(axis=1) < 1e-6
+    reach = float(skin.triangles[on][:, :, 0].max())
+    assert reach <= 1.02 + 1e-6, (
+        f"the drip ran on to x = {reach:.4f}, out over the void that starts at 1.02"
+    )
+
+
+def test_only_a_lap_already_near_level_is_snapped_to_level():
+    """`_across` rounds a lap off a cap plate's own fall onto the vertical, so an
+    upstand is a height. It must not round a lap that genuinely rakes.
+
+    Caught by `/code-review high` 2026-08-21: the threshold was 45°, so a lap
+    raking 40° *down* was flattened onto the horizontal — and `reach` then read
+    its flattened `t_z` and billed it the upstand distance rather than the drip.
+    """
+    from skin.offset import RAKE, _across
+
+    def direction(arris, third):
+        """`_across` over a face on y = 0, across the arris from the origin."""
+        v = np.array([[0.0, 0.0, 0.0], arris, third], dtype=float)
+        return _across(trimesh.Trimesh(vertices=v, faces=[[0, 1, 2]],
+                                       process=False), 0, 1, 0)
+
+    level = [1.0, 0.0, 0.0]
+    assert np.allclose(direction(level, [0.5, 0.0, 1.0]), [0, 0, 1]), "a face above laps up"
+    assert np.allclose(direction(level, [0.5, 0.0, -1.0]), [0, 0, -1]), "a face below laps down"
+
+    # an arris raking gently — a cap plate's own fall — is rounded off, because
+    # an upstand is a height and not a measurement along the fall
+    gentle = direction([1.0, 0.0, 0.02], [0.5, 0.0, 1.0])
+    assert np.allclose(gentle, [0, 0, 1]), f"{gentle} kept the cap plate's fall"
+
+    # an arris raking hard is not: the lap keeps the direction it really has,
+    # and `reach` then bills it the drip it really is
+    hard = direction([1.0, 0.0, 0.5], [0.0, 0.0, -1.0])
+    assert -1 + RAKE < hard[2] < -RAKE, f"{hard} was rounded onto an axis"
+    assert abs(hard[0]) > RAKE, "the in-plane component was discarded"

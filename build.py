@@ -11,7 +11,7 @@ import numpy as np
 import trimesh
 
 from skin import clearance, parameters, separation, skin_over, substrate, write_obj
-from skin.offset import Faces, _owner, elements_of
+from skin.offset import Faces, _owner, _plane_ids, elements_of
 
 BUILD_DIR = Path(__file__).parent / "build"
 
@@ -539,15 +539,21 @@ def _rules(faces, fall):
 
     Which face of a wall the roof runs into decides how the membrane treats that
     wall: into its *interior* face and the membrane climbs it and carries over
-    the top; into its *exterior* face and the membrane stops and flanges. That
-    single test replaces the hand-listed step-wall planes, the per-part index
-    sets and the NOT_OUTSIDE exclusions, all of which were this rule worked out
-    by hand.
+    the top; into its *exterior* face and the membrane stops there. That single
+    test replaces the hand-listed step-wall planes, the per-part index sets and
+    the NOT_OUTSIDE exclusions, all of which were this rule worked out by hand.
 
     The test is per *wall*, not per face. Only the one triangle of a step wall
     that shares an edge with the roof "meets" it, but the membrane climbs the
     whole face — so the touching faces elect the wall, and the wall carries all
     of its own faces.
+
+    There is no `flanged` any more. It named the walls a roof runs into on the
+    *outside*, and existed to hand those faces a turn-out and to keep them from
+    also getting a skirt. Both of those are now `_lap`'s, read off the substrate,
+    so the election that remains is only "does the membrane **cover** this wall"
+    — and the answer to that is `climbed` alone. Where the membrane stops on a
+    wall it does not cover, the lap turns it up without being told.
     """
     exterior, interior = wall_faces(faces, fall)
     roof = _upward(faces.normals) & faces.of_role(substrate.ROOF)
@@ -558,8 +564,75 @@ def _rules(faces, fall):
     # a leaf and stop at its flat top, leaving the cap bare.
     element = faces.element_of[faces.owner]
     climbed = np.isin(element, np.unique(element[interior & meets]))
-    flanged = np.isin(element, np.unique(element[exterior & meets]))
-    return exterior, interior, roof, climbed, flanged
+    return exterior, interior, roof, climbed
+
+
+def _opening(faces):
+    """The cheeks and the floor of an opening cut through a wall.
+
+    A slot cut through a wall — a scupper — leaves two vertical faces looking
+    **at** each other, the cheeks, and where it does not run to the bottom an
+    upward face between them, the sill. The two faces across a wall's thickness
+    are also opposed, and so are the two ends of a wall, but both of those look
+    **away** from each other. That sign is the whole test, and it is the same
+    measure `_next_lift` takes when it asks for faces "across this element's
+    thickness". Nothing is authored.
+
+    Read per **body**, not per element, and that is not a detail. Group the
+    scupper by element and the answer inverts twice over: the slot cuts through
+    the cap plates as well, so `CapPlate-Headhouse-E`'s reveal and `E2`'s look at
+    each other and the coping reads as a cheek pair; and the cornice is grouped
+    into the parapet, so its own two ends are an away-facing pair sitting on the
+    very same coplanar region as the sill, which makes the sill read as a
+    thickness. Per body, each plate has its own thickness and the sill's only
+    flanks are the cheeks.
+
+    Also read per coplanar **region** rather than per triangle, since the union
+    triangulates a sill and one triangle of it may touch only one cheek.
+    """
+    body = faces.body
+    vertical = np.abs(faces.normals[:, 2]) < TOL
+    part, ids = faces.owner, _plane_ids(body)[0]
+
+    regions: dict[tuple, list] = {}
+    for f in range(len(part)):
+        regions.setdefault((int(part[f]), int(ids[f])), []).append(f)
+    middle = {k: faces.centres[v].mean(axis=0) for k, v in regions.items()}
+
+    cheeks = np.zeros(len(part), dtype=bool)
+    by_body: dict[int, list] = {}
+    for key in regions:
+        if vertical[regions[key][0]]:
+            by_body.setdefault(key[0], []).append(key)
+    for members in by_body.values():
+        for i, u in enumerate(members):
+            for v in members[i + 1:]:
+                nu, nv = faces.normals[regions[u][0]], faces.normals[regions[v][0]]
+                if abs(nu @ nv + 1) > TOL:
+                    continue
+                if nu @ (middle[v] - middle[u]) > 0:   # toward, not away
+                    cheeks[regions[u]] = cheeks[regions[v]] = True
+
+    floor = np.zeros(len(part), dtype=bool)
+    beside: dict[tuple, set] = {}
+    tops = body.triangles[:, :, 2].max(axis=1)
+    for near, far in np.vstack([body.face_adjacency, body.face_adjacency[:, ::-1]]):
+        near, far = int(near), int(far)
+        if not (cheeks[far] and not vertical[near] and part[far] == part[near]):
+            continue
+        # only a cheek that *rises* above the face bounds an opening in it. The
+        # same cheeks also touch the wall's own coping, where the slot cuts
+        # through it -- but there they stop at that level rather than standing
+        # over it, and a coping is not the floor of anything
+        if tops[far] > body.triangles[near][:, 2].max() + TOL:
+            beside.setdefault((int(part[near]), int(ids[near])), set()).add(far)
+    for key, flanks in beside.items():
+        flanks = sorted(flanks)
+        for i, u in enumerate(flanks):
+            for v in flanks[i + 1:]:
+                if abs(faces.normals[u] @ faces.normals[v] + 1) < TOL:
+                    floor[regions[key]] = True
+    return cheeks, floor
 
 
 def membrane_faces(faces, fall):
@@ -568,22 +641,53 @@ def membrane_faces(faces, fall):
     It carries over the top rather than stopping at it, and the cladding takes
     that same top as its coping — see `cladding_faces`. The overlap is intended.
     """
-    exterior, interior, roof, climbed, flanged = _rules(faces, fall)
-    return roof | (interior & climbed) | (_upward(faces.normals) & climbed)
+    exterior, interior, roof, climbed = _rules(faces, fall)
+    # ...and the cheeks of any opening cut through a wall it covers. They lie
+    # *across* their wall's fall, so `wall_faces` calls them ends and neither
+    # exterior nor interior could ever reach them: the membrane used to arrive
+    # at the scupper cheeks as three overlapping laps instead of covering them.
+    # Covering them is what lining an outlet is, and it is what lets the skin
+    # flange out of the mouth -- with the cheek covered, the facade beside it
+    # becomes a face the skin runs into. Duncan, 2026-08-20.
+    cheeks, _ = _opening(faces)
+    return (
+        roof
+        | (interior & climbed)
+        | (_upward(faces.normals) & climbed)
+        | (cheeks & climbed)
+    )
 
 
-def membrane_skirts(faces, fall):
-    """Down the exterior face of every wall the membrane carried over."""
-    exterior, interior, roof, climbed, flanged = _rules(faces, fall)
-    # a wall with a roof on both sides is carried over from one side and met from
-    # the other; meeting wins, because that face gets a flange rather than a skirt
-    return exterior & climbed & ~flanged
+def membrane_laps(faces, fall):
+    """The membrane never stops on an arris: it laps onto whatever it runs into.
 
+    One rule where there were two. A skirt down a coping's outer face and a
+    flange up the wall a roof runs into are the same move — the surface reaching
+    an edge of what it covers and continuing across the face beyond — and which
+    way it turns is a fact about that face, not about which list the wall was
+    on. `skin.offset._across` reads the direction off the receiving face and
+    `_lap` picks the drip or the upstand distance from it.
 
-def membrane_flanges(faces, fall):
-    """Where the membrane runs into a wall's exterior face, it stops and turns out."""
-    exterior, interior, roof, climbed, flanged = _rules(faces, fall)
-    return exterior & flanged
+    So there is nothing left to elect here, and the two predicates that used to
+    do the electing are gone with it: `membrane_skirts` (exterior faces of
+    carried-over walls, minus the ones a roof ran into) and `membrane_flanges`
+    (exterior faces of walls a roof ran into). Both were the geometry worked out
+    by hand, in the way `wall_faces` retired the hand-listed planes before them.
+
+    What is left is the one restriction Duncan's rule states outright: the
+    membrane laps onto **vertical** surfaces. A sloped receiver would take a
+    sloped lap, and nothing in this substrate wants one — where the membrane
+    meets a slope it either covers it or ends over air.
+
+    Two things this now reaches that no election did. The **scupper cheeks**:
+    vertical faces lying across their parapet's fall, so `wall_faces` calls them
+    ends and neither skirt nor flange could ever claim them, while the membrane
+    plainly has to wrap them. And `Headhouse-N`'s **west end face**, where the
+    Unit8 parapet butts in line — the membrane did turn up there, but only
+    because the elected face beside it happened to overlap the cap by the 8 mm
+    the offset itself adds. It is elected on its own account now.
+    """
+    return np.abs(faces.normals[:, 2]) < TOL
 
 
 def facades_of(faces, system, fall):
@@ -637,35 +741,41 @@ def cladding_faces(faces, fall):
     # stops at its underside rather than wrapping it -- Duncan, 2026-08-19. The
     # face below it already ends there, so excluding the cornice's own faces is
     # the whole of it; the coping above is a separate face and is still claimed.
+    # ...and never the floor of an opening cut through a wall. The scupper sill
+    # is a wall top, so "every wall top" claimed it and the cladding lined the
+    # inside of a 400 mm outlet -- which is not what a rainscreen does, and which
+    # flared the coping's own mitre out through the mouth to within 8.7 mm of the
+    # membrane. A rainscreen stops at the opening; the membrane lines it, and
+    # still does. Duncan, 2026-08-20.
+    _, floor = _opening(faces)
     return (
         facades_of(faces, RAINSCREEN, fall)
         | (_upward(faces.normals) & faces.of_role(substrate.WALL))
-    ) & ~faces.tagged(CORNICE, True)
+    ) & ~faces.tagged(CORNICE, True) & ~floor
 
 
-def cladding_skirts(faces, fall):
-    """Down every wall's interior face."""
-    exterior, interior, roof, climbed, flanged = _rules(faces, fall)
+def cladding_laps(faces, fall):
+    """Down every wall's interior face, and nowhere else — for now.
+
+    The membrane's rule is geometric; this one is still the old election, held
+    deliberately. Deciding what the cladding does where it runs into something
+    is a separate conversation from deciding what the membrane does, and the
+    membrane came first (Duncan, 2026-08-20). Widening this to
+    `np.abs(faces.normals[:, 2]) < TOL` is the whole of the change when that
+    conversation happens; the machinery underneath is already general.
+    """
+    exterior, interior, roof, climbed = _rules(faces, fall)
     return interior
 
 
 # The face rules, keyed by skin name. Code, not numbers — this is the half of a
 # skin spec that cannot go in a parameter file, and the half `skin/` never learns.
-# `turn_out` is spelled `None` rather than omitted: the parameter file authors an
-# `out` for every skin, so a skin with no turn-out has to say so on both sides,
-# and `skins()` raises if the two disagree.
+# Two predicates, not four: `keep` is what the skin covers and `lap` is what it
+# may continue onto. The skirt/flange pair that used to sit here was one rule
+# split in two by hand — see `membrane_laps`.
 RULES = {
-    "Membrane": {
-        "keep": membrane_faces,
-        "turn_down": membrane_skirts,
-        # every panel that stops on part 4's exterior face turns out there
-        "turn_out": membrane_flanges,
-    },
-    "Cladding": {
-        "keep": cladding_faces,
-        "turn_down": cladding_skirts,
-        "turn_out": None,
-    },
+    "Membrane": {"keep": membrane_faces, "lap": membrane_laps},
+    "Cladding": {"keep": cladding_faces, "lap": cladding_laps},
 }
 
 
@@ -728,11 +838,15 @@ def skins(params: dict | None = None) -> tuple[dict, ...]:
     specs = []
     for spec in params["skins"]:
         rules = RULES[spec["name"]]
-        if (rules["turn_out"] is None) != (float(spec["out"]) == 0.0):
+        # a rule set may say `"lap": None` -- a skin that genuinely stops where it
+        # ends. `drop` and `out` are then unread, so the check below applies only
+        # to a skin that does lap: both zero would leave it stopping dead on every
+        # arris it reaches, which is the same thing said in two places
+        if rules["lap"] is not None and float(spec["drop"]) == float(spec["out"]) == 0.0:
             raise parameters.ParameterError(
-                f"parameter skins.{spec['name']}.out={spec['out']} disagrees with its "
-                f"rule set, whose turn_out is {rules['turn_out']} — a skin either stops "
-                f"against something and turns out, or does neither"
+                f"parameter skins.{spec['name']}: both drop and out are zero, so the "
+                f"skin has no lap in any direction and would stop dead on every arris "
+                f"it reaches — set one of them, or set the rule set's `lap` to None"
             )
         specs.append(
             {
@@ -743,10 +857,9 @@ def skins(params: dict | None = None) -> tuple[dict, ...]:
                 "base": spec["base"],
                 "display": spec["display"],
                 "keep": partial(rules["keep"], fall=fall),
-                "turn_down": partial(rules["turn_down"], fall=fall),
-                "turn_out": None
-                if rules["turn_out"] is None
-                else partial(rules["turn_out"], fall=fall),
+                "lap": None
+                if rules["lap"] is None
+                else partial(rules["lap"], fall=fall),
                 "classify": classify,
             }
         )
@@ -759,9 +872,8 @@ def _skin_from(spec, parts, distance=None):
         parts,
         spec["distance"] if distance is None else distance,
         keep=spec["keep"],
-        turn_down=spec["turn_down"],
+        lap=spec["lap"],
         drop=spec["drop"],
-        turn_out=spec["turn_out"],
         out=spec["out"],
         base=spec["base"],
         classify=spec["classify"],
@@ -842,7 +954,7 @@ def build(
         border = len(trimesh.grouping.group_rows(skin.edges_sorted, require_count=1))
         print(
             f"{spec['name']:<10} offset {distance * 1000:.0f} mm"
-            f" | skirt {spec['drop'] * 1000:.0f} mm"
+            f" | lap {spec['drop'] * 1000:.0f}/{spec['out'] * 1000:.0f} mm"
             f" | residual {skin.metadata['offset_residual']:.2e}"
             f" | clearance {gap * 1000:.4f} mm"
             f" | {'closed shell' if skin.is_watertight else f'open, {border} border edges'}"

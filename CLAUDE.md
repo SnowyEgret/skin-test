@@ -13,7 +13,7 @@ This file covers commands and structure; `NOTES.md` covers why the code is the w
 python3 build.py              # headless build: writes build/*.obj + build/manifest.json
 python3 build.py <bake.obj>   # ...over a baked substrate instead of the transcribed rig
 python3 -m pytest tests -q    # ~1.5 s
-python3 -m pytest tests -q -k skirt        # single test by name
+python3 -m pytest tests -q -k lap          # single test by name
 ```
 
 Every tunable number is in `skin-parameters.yaml`, validated against
@@ -94,7 +94,7 @@ skin-parameters.yaml                    every tunable number, JSON-Schema valida
 build.py  PART_N vertex/face literals   (transcribed from Blender, snapped to 1 µm)
    → substrate.polyhedron()             list[Trimesh], one per part
      ...or substrate.from_obj()         a baked export, one part per `o` group
-   → skin_over()                        union → planar_offset → keep() → skirt
+   → skin_over()                        union → planar_offset → keep() → lap
    → write_obj()                        build/*.obj as n-gons + manifest.json
    → blender/display.py                 imports, tags, displays
 ```
@@ -128,7 +128,8 @@ Key invariants, each of which spans several files:
 - **A fold is reconciled against what the skin covers, or refused.** Where the surface turns back
   on itself a vertex lies on two planes facing opposite ways, and no offset exists for it: it
   would have to move `distance` both ways at once. `_reconcile` re-reads that vertex's planes
-  from the **covered** faces alone — the ones `keep`/`turn_down`/`turn_out` selected, which is
+  from the **covered** faces alone — the ones `keep` selected plus the faces a lap reaches,
+  which is
   why `skin_over` evaluates its predicates *before* the solve and passes the mask down. If the
   contradiction survives among those, it raises naming the vertex and the two normals. Applies at
   contradictory vertices and nowhere else, so no model that solves today changes by a bit; a
@@ -188,62 +189,114 @@ skin names would sit there looking maintained while emitting nothing.
 # skin-parameters.yaml — the numbers
 - name: ...
   distance: m
-  drop: m          # skirt: hangs below the wall's top edge
-  out: m           # collar: folds outward where it stops; 0.0 for none
+  drop: m          # a lap that hangs below its arris; 0.0 switches that way off
+  out: m           # a lap that rises or runs sideways; 0.0 switches that way off
   base: m | null   # trim: cut here and keep what is above; null for none
   display: solid | wire
 ```
 
 ```python
 # build.py RULES — the predicates, keyed by the same name
-"...": {"keep": fn, "turn_down": fn, "turn_out": fn or None}
+"...": {"keep": fn, "lap": fn}
 ```
 
-`out` and `turn_out` must agree: a non-zero `out` with `turn_out: None`, or the reverse, raises.
-`base` pairs with no rule — it is a datum rather than a face selection — and `null` is **not**
-`0.0`: zero is a real height to cut at, where a zero `drop` or `out` is the feature switched off.
-It is also not a seed, so `check_seeds` ignores it.
+`drop` and `out` are the two directions a lap can take, and a skin with both zero would stop dead
+on every arris it reaches — `skins()` raises. Either alone is fine: the cladding has no upstand
+and never did. `base` pairs with no rule — it is a datum rather than a face selection — and `null`
+is **not** `0.0`: zero is a real height to cut at, where a zero `drop` or `out` is that direction
+switched off. It is also not a seed, so `check_seeds` ignores it.
 The rules take `(Faces, fall)`; `skins()` binds `fall` from the file, so what `skin/` receives
 still has the `Faces -> bool[nfaces]` signature it expects. A built spec is *exactly*
 `skin_over`'s argument list plus `name` and `display`.
 
-`keep`, `turn_down` and `turn_out` are predicates `Faces -> bool[nfaces]` over the union's
-faces. `Faces` (in `skin/offset.py`) carries `body`, `parts`, `owner`, `normals`, `centres`, plus
-`roles` (WALL/ROOF per part), `of_role(role)` and `touching(mask)`. Predicates get the whole thing
-because rules that read the substrate need to ask what a face *adjoins*, not just where it sits.
-Compose `_upward`, `wall_faces` and `_rules` rather than writing new plane tests. `keep` selects
-what the surface covers; `turn_down` selects walls it hangs a skirt down; `turn_out` selects walls
-it **stops against**.
+`keep` and `lap` are predicates `Faces -> bool[nfaces]` over the union's faces. `Faces` (in
+`skin/offset.py`) carries `body`, `parts`, `owner`, `normals`, `centres`, plus `roles` (WALL/ROOF
+per part), `of_role(role)` and `touching(mask)`. Predicates get the whole thing because rules that
+read the substrate need to ask what a face *adjoins*, not just where it sits. Compose `_upward`,
+`wall_faces` and `_rules` rather than writing new plane tests. `keep` selects what the surface
+**covers**; `lap` selects what it may **continue onto**.
 
-The two continuations work on different things, and that distinction matters:
+## The lap: one rule, not a skirt and a flange
 
-- `_hem` (skirt) works on the **union's** wall/roof adjacencies, and its drop is measured from
-  the **substrate** edge — a test pins this, so do not "fix" it to measure from the skin.
-- `_turn_out` works on the **assembled skin's** own boundary edges, after the hems are added, so
-  a skirt that ends on the wall turns out along with everything else. Every panel ending on the
-  wall is extruded by `out` along the **dominant axis of its own normal** — roof panels turn up,
-  a panel facing -X turns -X. Snapping to the axis keeps a turn off a shallow slope exactly
-  vertical. Its distance is measured from the skin edge, so all turns are exactly `out`.
-  **The elected faces bound it, not the plane they lie on.** A building shares a plane right up
-  a stack — a parapet's outer face is the very plane its wall's is, a storey higher — so an edge
-  is projected back onto the substrate and must meet the elected faces *there*. Matching the
-  plane alone turned the membrane's parapet skirt out into thin air 1.5 m above the roof whose
-  flange elected it. Same failure as `_next_lift`'s first attempt below: a shared plane is not a
-  shared face.
+Duncan, 2026-08-20: *"When membrane meets an exterior vertical surface it never terminates at that
+edge. It always flanges onto the vertical face. It can flange up, down, horizontally, or around a
+corner."* He was right, and `_hem` / `_turn_out` / `turn_down` / `turn_out` are gone. Where a
+covered face meets a face the skin does not cover, the skin turns and laps across the face
+beyond, and everything else follows from geometry:
 
-`_trim_below` (`base`) runs **after** both, so it means "no part of this skin goes below the
+- **Direction** — `_across`: in the receiving face's plane, perpendicular to the arris, pointing
+  into that face, read off the receiving triangle's own third vertex. A skirt goes down because
+  the wall is below the coping's arris; an upstand goes up because the wall is above the roof's;
+  a collar runs sideways because the face it turns onto lies to the side. A centroid will not do
+  — a receiving plane very often has surface on *both* sides of an arris.
+- **Level, and only level, is snapped.** A lap springing off a *sloped* arris — a cap plate laid
+  to fall — comes out perpendicular to it and so tilted by the fall, and a 205 mm upstand means a
+  height, measured vertically. So a lap that mostly rises or falls is made exactly vertical and
+  one that mostly runs sideways exactly horizontal, the same priority the solver gives level
+  planes. Nothing else is snapped: a wall at any plan angle laps along its own direction. This
+  replaces `_turn_out`'s dominant-axis snap, which was needed only because it extruded along the
+  *departing* panel's normal.
+- **Distance** follows the direction. Down is a drip (`drop`); up or sideways is an upstand
+  (`out`). There is nothing left to elect.
+- **Datum** is the one thing that did **not** unify, and it is deliberate. A drip is measured on
+  the **substrate**, from the arris itself mitered onto the offset planes of every skinned
+  vertical face at that vertex; an upstand is measured from the **skin's own edge**. That is how a
+  drip is set out from the edge of the coping it drips off and an upstand from the finished
+  surface it rises out of, and it is why two distances are still authored. Tests pin both.
+- **Which faces get one** — `_receivers`: `lap`-allowed, uncovered, and **adjacent to a covered
+  face**. That adjacency is what bounds a lap to the faces it actually reaches, and it is what
+  now stops the old plane-following bug structurally. A building shares a plane right up a stack —
+  a parapet's outer face is the very plane its wall's is, a storey higher — and matching on the
+  plane once turned the membrane's parapet skirt out into thin air 1.5 m above the roof. The lift
+  above is simply not a candidate. `_meets_region` is retired with the mechanism that needed it.
+- **A knife is refused.** Where a candidate is coplanar with and opposed to something the skin
+  already claims, the shared vertex has no offset at all. A covered face outranks a lap; between
+  two candidates the lap takes the **concave** arris and stops at the convex one, because an
+  internal corner is where the surface must be continuous while at an external one the two offset
+  surfaces have already parted by twice the distance. The scupper poses both — its drip is exactly
+  as wide as its slot.
+- **Chained and mitered within each receiving plane.** A run that changes direction along one face
+  closes at the turn; the miter is the intersection of the two outer lines. Across planes there is
+  nothing to miter — two outer lines on different faces do not meet, and asking anyway gets a
+  least-squares answer from out in space, which threw a 400 mm triangle across the scupper's
+  mouth. Two drips at a wall corner need no miter: `drip_at` already solves their shared arris on
+  both planes at once.
+
+**A lap is cut to the face it lands on** — `_room` marches along the lap direction over the
+coplanar triangles and shortens it, or drops it where there is no room. Marching rather than
+testing the far end, because a union triangulates a wall and a lap commonly crosses several of its
+triangles: a 62 mm drip off a 34 mm cap plate must still run its full depth down the parapet's
+coplanar face below. Without it, covering the scupper cheeks sent a 205 mm upstand onto a 34 mm
+reveal, 120 mm above the wall and through the cladding's coping.
+
+**A continuation runs only where the whole of it lands on substrate**, and never onto a knife — `_knifed`
+is shared by the seam receivers and by the faces a continuation may fold onto, because being a
+knife is a property of the face and not of how the lap arrived at it. Filtering only the receivers
+put two 205 mm panels across the mouth of the scupper, on the roof taper's end face.
+
+**A lap does not stop where the face it laps onto stops.** At the free end of a run it asks what
+the substrate presents there, and there are three answers: *the same plane carries on* (an in-line
+butt — the lap runs on), *another face meets it at an arris* (the lap folds round the corner, its
+direction the departing face's normal signed by whether that arris is convex or concave), or
+*nothing* (it ends — Duncan's stop condition). Two guards, both learned the hard way:
+
+- A run is only free at its end if **nothing else turns the same way there**. Two drips meeting at
+  a building corner are one band turning through 90°, and treating either as free folded it onto
+  the other and left a hole where the drip had been. An upstand meeting a drip at the same vertex
+  is different — they turn opposite ways and the corner between them is genuinely open, which is
+  the whole of the north junction.
+- A continuation runs **only where the whole of it lands on substrate**. There is no cutting here,
+  only whole quads, so a lap that would overhang is not placed at all. The scupper is why: the
+  parapet's inner face meets the cheek 8.6 mm above the sill, and a 62 mm drip run on down from
+  there goes straight into the parapet.
+
+`_trim_below` (`base`) runs **after** the laps, so it means "no part of this skin goes below the
 datum" rather than "the offset stops there". It is a **cut**, not a clamp: triangles straddling
 the plane are re-cut against it and everything above keeps the plane the solve gave it. Pushing
 the low vertices up instead would look identical in outline while tilting the bottom of every
 sloped panel off its offset plane — and the residual is computed before the trim, so nothing
 would report it. Crossings are cached per edge so the two triangles sharing one get the same
 vertex and the cut does not crack.
-
-`_turn_out` chains those boundary edges and **miters** the outer edges where neighbouring panels
-meet, rather than extruding each edge alone. Extruding independently is wrong in both directions:
-adjacent panels turning along different axes leave a gap at one corner and interpenetrate at the
-next. The miter is just the intersection of the two outer lines, so it extends or trims as
-needed. Segments that continue the same panel are parallel and are left unmitered.
 
 **A cornice joins the wall it projects from.** `build.group_cornices` runs before
 `group_caps` — which classifies every element up front and would raise on a lone cornice first.
@@ -258,10 +311,9 @@ by the thickness test — it stands metres proud of a 420 mm wall. Nothing is au
 own thickness is the measure, the same move `_next_lift` makes.
 
 The membrane needs nothing further — a cornice joined to a climbed parapet has its exposed top
-picked up by "every upward face of a climbed wall" and its face skirted by "down the exterior face
-of every wall carried over", which is the scupper drip exactly: covered, skirt turned down it. At
-`Cornice-Unit8-E` those same rules do nothing, because its top is buried under the cap plate and
-its face is coplanar with the cap's. **The cladding stops below a cornice** rather than wrapping
+picked up by "every upward face of a climbed wall", and the lap then hangs a drip down the face
+below it, which is the scupper drip exactly. At `Cornice-Unit8-E` neither happens, because its top
+is buried under the cap plate and its face is coplanar with the cap's. **The cladding stops below a cornice** rather than wrapping
 it (Duncan, 2026-08-19) — `cladding_faces` excludes `tagged(CORNICE, True)`, and since the facade
 face below already ends at the cornice, that exclusion is the whole of it. The coping above is a
 separate face and is still claimed by both skins.
@@ -332,10 +384,22 @@ listed — there are no plane coordinates and no part indices in them:
   exception is a facade wrapping a corner: an end coplanar with and joined to a neighbour's facade
   is grown into the exterior set.
 - **climb or flange** — whichever face of a wall the roof runs into decides it. Into the interior
-  face and the membrane climbs and carries over the top; into the exterior face and it stops and
-  flanges. Tested per **wall**, not per face: only one triangle of a step wall touches the roof,
-  but the membrane climbs the whole face, so touching faces elect the wall and the wall carries
-  all of its own faces.
+  face and the membrane climbs the whole of it and carries over the top; into the exterior face
+  and it stops, and the lap turns it up there. Tested per **wall**, not per face: only one
+  triangle of a step wall touches the roof, but the membrane climbs the whole face, so touching
+  faces elect the wall and the wall carries all of its own faces. Only the *climb* is elected now
+  — the upstand where the membrane stops is not, because the lap reads that off the substrate. So
+  `_rules` returns `climbed` and no longer computes `flanged`, which existed only to hand those
+  faces a turn-out and to keep them from also getting a skirt.
+- **an opening cut through a wall.** `build._opening` reads a slot's **cheeks** — two vertical
+  faces of one *body* looking **at** each other, where a wall's thickness and a wall's two ends
+  look away — and its **floor**, an upward face with a cheek pair standing *over* it. Per body,
+  not per element: a slot cuts through the cap plates too, so per element their two reveals look
+  at each other and the coping reads as a cheek pair. And *standing over*, not merely touching:
+  the same cheeks meet the wall's own coping where the slot cuts through it, but stop at that
+  level. The cladding subtracts the floor — a rainscreen stops at a 400 mm outlet rather than
+  lining it, and "every wall top" otherwise claimed the scupper sill and flared the coping's mitre
+  out through the mouth. The membrane still lines it, as an upward face of a climbed wall.
 - **both skins cap a wall, deliberately.** A top the membrane carries over is also claimed by
   `cladding_faces`' "every wall top", so a parapet coping belongs to two skins at once — a
   membrane upstand with a metal coping over it, which is what a parapet is built as. Decided
@@ -421,7 +485,12 @@ the solve.
 ## Tolerances
 
 manifold3d computes in **float32**, so a union's faces sit up to ~5e-7 m off their true planes at
-metre-scale coordinates. That is the accuracy floor for everything downstream: `TOL = 1e-6`
+metre-scale coordinates. That is half a `PLANE_TOL` lattice cell, so **plane identity must never be
+exact equality of a rounded key** — two faces of one plane land either side of a boundary often
+enough to matter, and the headhouse taper's top already does in the shipping bake. `_plane_ids`
+matches each face against the representatives already found instead, and `_lap`, `_knives` and the
+run chaining all key on its id. A run that silently fails to chain is a lap that silently does not
+happen. That is the accuracy floor for everything downstream: `TOL = 1e-6`
 (`build.py`) and `PLANE_TOL = 1e-6` (`skin/offset.py`) exist for it. Do not tighten them — an
 earlier 1 nm threshold produced a bogus self-intersection warning. `RIDGE = 1e-9` keeps the KKT
 system non-singular where the soft equations leave a vertex free; it is not a tolerance to tune.

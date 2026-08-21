@@ -13,7 +13,7 @@
 # number written here.
 #
 # What is NOT here, and why:
-#   * the face rules (`keep` / `turn_down` / `turn_out`) — code, not numbers. They
+#   * the face rules (`keep` / `lap`) — code, not numbers. They
 #     live in `build.py` keyed by skin name; `skins()` joins the two by name and
 #     raises if either side names something the other does not.
 #   * `TOL` / `PLANE_TOL` / `RIDGE` — the float32 accuracy floor of manifold3d and
@@ -36,8 +36,8 @@ fall: 0.707
 # integer multiple of another. `Membrane.drop` and `Cladding.distance` were both
 # 0.100 until 2026-08-14, which meant a bug swapping a skirt depth for an offset
 # distance produced identical geometry — invisible to the tests and to the eye.
-# Keep them distinct when tuning. A zero `out` is exempt: it means the skin has
-# no turn-out at all, which is a feature being off, not a seed.
+# Keep them distinct when tuning. A zero `out` is exempt: it means the skin never
+# laps upward or sideways, which is a direction being off, not a seed.
 #
 # `base` is a datum, not a seed: it is a height in the model, not a distance
 # between two surfaces, so `check_seeds` ignores it and a `base` equal to some
@@ -47,14 +47,14 @@ fall: 0.707
 skins:
   - name: Membrane
     distance: 0.008
-    drop: 0.062      # skirt down the exterior walls
-    out: 0.205       # every panel stopping on part 4's exterior face turns out
+    drop: 0.062      # a lap hanging below its arris — the drip over a coping
+    out: 0.205       # a lap rising or running sideways — the upstand at an abutment
     base: null       # nothing of it reaches the ground; nothing to trim
     display: solid
   - name: Cladding
     distance: 0.085
-    drop: 0.03      # skirt down the interior walls, part 4's included
-    out: 0.0         # no turn-out: the cladding stops against nothing
+    drop: 0.03      # down the interior walls, part 4's included
+    out: 0.0         # the cladding never laps upward or sideways
     base: 0.0        # stops at ground level rather than at its own miter, which
                      # would hang `distance` below the substrate's underside
     display: wire

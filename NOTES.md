@@ -3,55 +3,75 @@
 Offsetting a **substrate** (an assembly of solid parts) outward by a fixed distance to
 produce **skins**: open surfaces that cover a chosen subset of faces.
 
-Last worked: 2026-08-19.
+Last worked: 2026-08-21.
 
 `CLAUDE.md` has the commands, the architecture and its invariants, and the tolerance
 rationale. This file is the running log: what the geometry currently is, what was tried
 and rejected, and what is still open.
 
-## Start here (picking up 2026-08-20)
+## Start here (picking up 2026-08-21)
 
-The live substrate is **`unit8-parapets-caps-clt-insulation-headhouse-cornices.obj`** — 29 `o`
-groups, 36 parts, 18 elements. It replaced `unit8-parapets-caps-clt-insulation-headhouse.obj`,
+The live substrate is **`unit8-parapets-caps-clt-insulation-headhouse-extended-cornices.obj`** —
+the cornices bake with the scupper's drip run **100 mm past each jamb** (`Cornice-Headhouse-E`
+now `y 4.685…5.285` against the slot's `4.785…5.185`). Everything else is byte-identical to
+`unit8-parapets-caps-clt-insulation-headhouse-cornices.obj`, which it supersedes; 29 `o` groups,
+36 parts, 18 elements. It replaced `unit8-parapets-caps-clt-insulation-headhouse.obj`,
 which Duncan overwrote on disk and which was never committed; the walls-and-caps bake
 `headhouse-walls-parapets-caps-clt-insulation.obj` survives because `tests/test_import.py` reads
 it.
 
 ```bash
-python3 build.py unit8-parapets-caps-clt-insulation-headhouse-cornices.obj
+python3 build.py unit8-parapets-caps-clt-insulation-headhouse-extended-cornices.obj
 ```
 
 ...and **build it after running pytest, not before** — the tests rebuild `build/` with the
 synthetic rig, manifest included, and `display.reload()` then shows you the rig. See CLAUDE.md.
 
-Everything from 2026-08-19 is committed on branch `skin-the-walls-and-caps-bake`. Three pieces of
-work landed that day, each with its own section below:
+Everything through 2026-08-21 is committed on branch `skin-the-walls-and-caps-bake` — the name is
+now older than what is on it. Five pieces of work, each with its own section below; **read 4 and 5
+before touching `skin/offset.py`.**
 
-1. **The Unit8 bake** — the storey below added, the first substrate to elect a `flanged` wall and
-   so the first to exercise `_turn_out` for real. It found a defect: the turn-out matched an
-   unbounded *plane* rather than the elected faces, and dressed the membrane's parapet skirt into
-   thin air 1.5 m above the roof, with 35 crossings through the cladding. Fixed by `_meets_region`.
-2. **The cornices bake** — two cornices, neither of which would classify. `group_cornices` joins a
-   cornice to the wall it projects from; the cladding stops below one and the membrane needed no
-   new rule at all.
-3. **`substrate.role_of`** — the classify-an-element call both callers were duplicating, which now
-   names the element it refuses.
+1. **The Unit8 bake** (2026-08-19) — the storey below added, the first substrate to elect a
+   `flanged` wall. It found a defect: the turn-out matched an unbounded *plane* rather than the
+   elected faces, and dressed the membrane's parapet skirt into thin air 1.5 m above the roof.
+   Fixed by `_meets_region` — since superseded, see 4.
+2. **The cornices bake** (2026-08-19) — two cornices, neither of which would classify.
+   `group_cornices` joins a cornice to the wall it projects from.
+3. **`substrate.role_of`** (2026-08-19) — the classify-an-element call both callers duplicated,
+   which now re-raises naming the element.
+4. **The lap** (2026-08-20) — Duncan's observation that the skirt and the flange are one rule.
+   `_hem`, `_turn_out`, `_meets_region`, `membrane_skirts`, `membrane_flanges`, `cladding_skirts`,
+   the `turn_down`/`turn_out` spec fields and `_rules`' `flanged` are gone, replaced by `_lap` and
+   a per-skin `lap` predicate. It closed the V11 leak. It did **not** make the code smaller —
+   there is a measured table saying so.
+5. **The scupper finished** (2026-08-21) — `_opening` (a slot's cheeks and its floor, derived),
+   the membrane covering the cheeks, the cladding no longer lining the outlet, `_room` cutting a
+   lap to the face it lands on, and Duncan's **extended cornice**, which removed the knife at the
+   mouth and bought the mouth flange and the cornice-end drips for no code at all.
 
-**Duncan's next session is "some minor adjustments."** Two rule questions are deliberately parked
-and should be reopened when he says so, not before — both are in Open items, and both were
-deferred for the same stated reason, that settling a general rule on a single instance risks a
-rule that fits only that instance:
+### Where it stands, measured
 
-- **the in-line butt / V11 leak** — waiting on more instances; he expected the scupper's sides to
-  produce another. The cornices bake has now arrived, so this one may be ready to reopen.
-- **`clearance` cries wolf** on a skin that stops short of a projecting feature. The cornices bake
-  prints a self-intersection warning that is false. Not fixed: changing what the build asserts is
-  his call.
+| | separation | membrane / cladding clearance | crossings | buried |
+|---|---|---|---|---|
+| rig | 76.071 | 7.7760 / 84.6091 | 0 / 0 | none |
+| walls-and-caps | 77.000 | 7.8808 / 84.9999 | 0 / 0 | none |
+| extended cornices (live) | 25.654 | 7.8808 / 63.9999 | 0 / 0 | none |
 
-**Not run:** `/code-review high` on this branch. CLAUDE.md asks for it before a meaningful chunk
-lands, and this is one — `_turn_out`, `group_cornices` and `role_of` are all new seams. It is all
-committed, so there is no working diff to review: give it the branch, `/code-review high main`.
-Worth running first thing.
+73 tests, ~4.5 s. The cladding's `WARNING: 21.000 mm inside the requested offset` on the cornice
+bakes is the **known false alarm** — see the open item on `clearance`; four independent checks
+say the cladding stops correctly on its mitre against the cornice.
+
+### The three things to pick up
+
+- **The cladding does not cover the scupper cheeks**, though Duncan asked for it. Blocked on the
+  standing *"cladding overhangs a bare end by the offset"* item, not on any rule: its cheek panel
+  miters against the parapet's inner face and reaches 85 mm past it into the roof. One line in
+  `cladding_faces` the day a trim in plan exists.
+- **The south-junction sliver**, 205 x 7.3 mm, left by the lap's continuation. Needs the lap to
+  clip against a *neighbouring panel* rather than only against the face it lands on.
+- **The superseded cornices bake is now wrong to build** — with the cheeks covered it puts a
+  membrane vertex inside `Cornice-Headhouse-E`, the mouth knife the extension removed. Nothing
+  reads it; deleting it is Duncan's call.
 
 ## Why this exists
 
@@ -463,7 +483,7 @@ real ground level, and it only starts to bite once walls that reach the ground a
 
 | file | what |
 |---|---|
-| `skin/offset.py` | the solver. `planar_offset` (one constrained system), `skin_over` (union → offset → select faces → skirt → flange → trim), `Faces` (what a predicate may ask) |
+| `skin/offset.py` | the solver. `planar_offset` (one constrained system), `skin_over` (union → offset → select faces → lap → trim), `_lap` / `_across` / `_receivers` (the one continuation rule), `Faces` (what a predicate may ask) |
 | `skin/measure.py` | `clearance` (skin to substrate), `separation` (skin to skin) |
 | `skin/substrate.py` | `polyhedron` (from vertex/face lists), `from_obj` (a baked export, one part per `o` group), `snapped`, `prism`, `cube`, `l_block`, `u_block`, and `classify` / `horizontality` (WALL vs ROOF from shape) |
 | `skin/export.py` | OBJ writer that emits n-gons, not triangles. `write_obj` one per file for `build/`, `write_objs` many as `o` groups for a whole substrate |
@@ -1073,8 +1093,467 @@ Inert where there are no cornices: the rig and `headhouse-walls-parapets-caps-cl
 both come back **byte-identical**, checked against `HEAD`. 64 tests.
 
 
+## The lap: skirt and flange were the same thing (2026-08-20)
+
+Duncan, brainstorming, after asking for the north-side junction and the bare scupper cheeks:
+
+> is it possible we have been treating the flange and the skirt as separate things when really
+> they are the same? What about just one rule: When membrane meets an exterior vertical surface it
+> never terminates at that edge. It always flanges onto the vertical face. It can flange up, down,
+> horizontally, or around a corner.
+
+He was right, and the two defects he named turned out to have **one cause**. `wall_faces` sorts a
+wall's vertical faces three ways — exterior, interior, end — and only exterior and interior were
+ever dressed. Every bare termination of the membrane in the cornices bake was on an "end":
+
+| where | faces | why bare |
+|---|---|---|
+| scupper cheeks x2 | `Cornice-Headhouse-E`, `Parapet-Headhouse-E`, `CapPlate-Headhouse-E`/`E2`, taper ends | normals ±Y, across the parapet's fall |
+| north junction | `Headhouse-N`'s west end face at x = 8.08 | ditto |
+
+Fifteen edges, all of them. And the upstand that *did* exist at the north junction existed **by
+accident**: `_meets_region` passed it because the cap edge overlaps `Headhouse-E`'s elected face
+by the 8 mm the offset itself adds.
+
+### What replaced what
+
+`_hem`, `_turn_out`, `_meets_region`, `membrane_skirts`, `membrane_flanges`, `cladding_skirts`,
+the `turn_down`/`turn_out` spec fields and `_rules`' `flanged` are **gone**, replaced by `_lap`
+plus a per-skin `lap` predicate saying which faces a skin may continue onto. `CLAUDE.md` carries
+the rule; what belongs here is what it cost to get there.
+
+- **`_across` reads the direction off the receiving face**, from that triangle's own third vertex.
+  A centroid was tried first and is wrong: part 4's face runs the full width of the rig, past
+  *both* sides of the wall whose skirt turns onto it, so the centroid points whichever way the
+  longer side happens to lie. It turned the rig's collar into part 2 instead of away from it.
+- **Level, and only level, is snapped.** The upstand at the north junction came out 2.3° off
+  vertical, because the cap plate is laid to fall and perpendicular-to-the-arris inherits that.
+  It also broke the corner fold, whose arris test wants the lap direction to lie in the receiving
+  plane. Snapping a mostly-vertical lap to vertical and a mostly-sideways one to horizontal fixed
+  both and restored every measured figure to its pre-change value. This is `_turn_out`'s
+  dominant-axis snap arriving from the other side: it needed one because it extruded along the
+  *departing* panel's normal, and `_across` needs one only for the fall.
+- **Two datums, kept deliberately.** A drip is measured on the substrate and an upstand from the
+  skin edge — the pre-existing pair of conventions, now chosen by direction instead of by which
+  function you were in. Collapsing them was tried on paper and rejected: substrate-space selection
+  makes an upstand 8.3 mm short of what a roofer measures off the finished surface. Two authored
+  distances therefore stay.
+- **The knife at the scupper.** Making the receiver set geometric raised `_reconcile` twice, both
+  at the slot: the drip is exactly as wide as the slot, so its end faces are coplanar-and-opposed
+  to the cheeks, and the taper's end stands 8.6 mm proud of the sill on the parapet's own inner
+  plane. `_receivers` now settles these before the solve — a covered face outranks a lap, and
+  between two laps the concave arris wins. `Cornice-Headhouse-E`'s 100 x 70 mm ends stay bare;
+  that is the accepted price, and it is the same family as the 2026-08-16 sliver decision.
+- **Mitering is per receiving plane.** Chaining every lap that shares an endpoint, regardless of
+  plane, asks `lstsq` to intersect two lines that do not meet — it threw a **400 mm triangle
+  across the scupper's mouth** and dropped the skin separation to 8.667 mm. Two drips at a wall
+  corner need no miter anyway: `drip_at` solves their shared arris on both planes at once.
+- **A run's end is only free if nothing turns the same way there.** Without that, the two drips
+  meeting at the Unit8 cap's west corner each read the other's plane as "somewhere to fold onto",
+  folded, and the miter then collapsed both into nothing — the north drip lost its western 205 mm.
+- **A continuation runs only where the whole of it lands on substrate.** There is no cutting in
+  `_lap`, only whole quads. The parapet's inner face meets the cheek 8.6 mm above the sill, and a
+  62 mm drip run on down from there put two vertices **inside** `Parapet-Headhouse-E` —
+  `tests/test_import.py`'s `part.contains` assertion is what caught it, not `clearance`.
+
+### What it fixed, measured
+
+| | before | after |
+|---|---|---|
+| scupper cheeks (each 0.112 m²) | bare | covered, x 8.072…8.508, z 14.503…14.760 |
+| north drip east end | stopped dead at x = 8.08 | runs on to **x = 8.277** |
+| north upstand | 8 mm diagonal sliver, free vertical edge | exactly vertical, 13.1189 → **13.3239** |
+| north face wrap | none | **x 8.072…8.277, z 13.1189…13.3239** — what Duncan asked for |
+| membrane ↔ substrate | — | no vertex inside any part, either bake |
+
+And every figure that was already right is still right, which is the point: skin separation
+**76.071 / 77.000 / 29.308 mm** on the rig, the walls-and-caps bake and the cornices bake, and
+clearances **7.7760 / 7.8808 / 7.8808 mm**, all identical to the values before the change. The
+rig's four-panel collar still miters to x = 1.7865 and the cladding is untouched on all three.
+
+Not byte-identical, though — `_lap` numbers its vertices differently and the continuation adds
+panels the old code had no way to make. The regression check for this work was geometry
+(triangle sets up to renumbering) for the first two stages, then the printed figures.
+
+### What `/code-review high` caught (2026-08-20)
+
+Five, all real, all fixed. The first is the same trap this file already records twice:
+
+- **`_knives` paired faces on the plane equation alone.** Two walls 2.6 m apart presenting one
+  plane facing opposite ways were a knife, so covering one silently refused the lap onto the
+  other. *A shared plane is not a shared face* — the third time, after `_turn_out` and
+  `_next_lift`. The pair must now share a vertex, which is where the contradiction actually lives
+  since `_reconcile` is a per-vertex rule.
+- **Plane identity was exact equality of a 1 µm-rounded bucket.** manifold3d leaves faces up to
+  ~5e-7 m off plane, half a cell, and the headhouse taper's top is **already split** in the
+  shipping bake, its halves 7.8e-7 apart. On a vertical face that would silently defeat a run-on
+  and a miter — a run-on that does not happen is exactly the pinhole this work set out to close.
+  `_plane_ids` now matches each face against the representatives already found, within the same
+  tolerance as everything else, and everything downstream keys on its id.
+- **A run-on invalidated the run it lengthened.** It moves the seam, so every key read from
+  `runs()` before it fired was stale — the *other* end of that same run included, which then read
+  the first end's vertex as its own and was blocked by the `tip == root` guard for good. A
+  substrate symmetric about its own centre came out lapped on one side only. Continuations are now
+  applied one at a time, re-reading the runs after each.
+- **The raise for a zero `drop` and a zero `out` recommended something that crashed.** It said to
+  give the rule set no `lap`, and `partial(None, fall=fall)` is a `TypeError` even though
+  `skin_over` accepts `lap=None`. `skins()` now builds that spec, and it is a real thing to want:
+  a skin that stops where it ends.
+- **The schema and the parameter file still described `turn_out`** and the out-vs-turn_out
+  cross-check, neither of which exists. Documentation asserting a property the code does not have
+  is invisible to a test by construction — the standing reason this review runs at all.
+
+All three tests it prompted are in `tests/test_offset.py`.
+
+### What Duncan found in Blender, 2026-08-20
+
+Three observations on `build/Membrane.obj`, all real.
+
+**F40 and F41 were extraneous — fixed.** Two 205 mm panels across the mouth of the scupper at
+x = 8.492, which is `Roof_Headhouse_InsulationTaper`'s end face offset the *wrong* way: the knife
+at x = 8.5 that this bake has always folded at. `_receivers` refused it as a seam receiver, but
+`carry_on`'s fold was handed `allowed & ~kept` and never asked. The knife test is a property of
+the face, not of how a lap arrived at it, so it is now `_knifed`, shared by both paths.
+
+**The coplanar edges went with them.** E116, E83 and the ones on the cheeks were the seams where
+those two panels merged into their neighbours in `faces_as_ngons`. Measured after the fix: **0
+coplanar edges**, and self-crossing n-gons down from **2** (the baseline, before any of this work)
+to **1**.
+
+**The sliver at V85 / V87 / V45 is still open**, and it is not a rounding error. At the *south*
+junction two continuations run on from one corner along two different correct lines: the collar
+follows `CapPlate-Unit8-W`'s sloped top arris and the drip's run-on is flat, so they meet exactly
+at x = 11.108 and diverge to **7.3 mm** by x = 11.313. A "do not run on into ground another lap
+already holds" guard was written and removed again — it never fires, because the sliver is
+*between* the two panels rather than under either.
+
+### Why the scupper mouth and the cornice ends stay bare — it is not the lap rule
+
+Duncan, broadening the keep-or-drop question: he expected `F30`/`F32` (the cheek laps) to wrap
+round the mouth arris onto `Parapet-Headhouse-E`'s outer face, and `F22` (the sill) to turn down
+the **ends of the cornice**. All four of those fail at the **same two vertices**, and the lap rule
+is not what stops them.
+
+Vertices 55 `(8.08, 4.785, 14.495)` and 59 `(8.08, 5.185, 14.495)` are the lower corners of the
+scupper mouth. Four planes meet at each: the facade `-X`, the cornice's end `-Y`, the sill `+Z`,
+and the cheek `+Y`. The cornice's end and the cheek are the **knife** — the drip is exactly as
+wide as the slot — so `_reconcile` fires, re-reads the planes from the covered faces alone, and
+keeps only two:
+
+| vertex | planes present | kept | dropped |
+|---|---|---|---|
+| 55 | `-X`, `-Y`, `+Z`, `+Y` | `+Z`, `+Y` | `-Y` (cornice end), **`-X` (facade)** |
+| 59 | `-X`, `-Y`, `+Z`, `+Y` | `-Y`, `+Z` | `+Y` (cheek), **`-X` (facade)** |
+
+Dropping the facade is what blocks the mouth wrap: the vertex is left at `x = 8.08` instead of
+`8.072`, so the cheek lap's edge is not on the facade's offset plane and `_lap`'s fold declines it
+— correctly, since placing it would put the panel 8 mm inside the wall.
+
+**Tested, not argued.** Letting the knife faces be lapped onto anyway (keeping them out of
+`covered`, so the solve is untouched) *does* generate the cornice-end drips — and they land **on
+the substrate**, clearance `0.0000 mm`, because their seam springs from a vertex sitting 16 mm on
+the cheek's side of the plane it is meant to hang from. There is no lap rule that fixes that.
+
+**A narrower `_reconcile` unlocks half of it — built, measured, and backed out.** The rule drops
+*every* uncovered plane at a contradictory vertex, but the contradiction is only ever between one
+pair. Keeping the planes that contradict nothing — the facade at both vertices — moves the mouth
+corners to `x = 8.072`, and **the two mouth wraps then appear exactly as Duncan described them**:
+205 x 205 mm panels on the facade at `y 4.588…4.793` and `y 5.177…5.382`, `z 14.503…14.708`. It is
+about 20 lines (`_uncontradicted`, called from `_reconcile` where it currently returns `reduced`).
+
+It does not land, because it puts the two skins **through each other**:
+
+| | separation | membrane↔cladding crossings |
+|---|---|---|
+| as it stands | 29.308 mm | **0 / 0** |
+| + `_reconcile` narrowing | 8.667 mm | 2 / 7 |
+| + narrowing + "cladding does not floor an opening" | 23.000 mm | 1 / 1 |
+
+Zero crossings is the verified state of this bake (2026-08-19) and a crossing is exactly what the
+separation check exists to catch, so this is not a warning to reinterpret. The rig and the
+walls-and-caps bake are untouched by either change; all of it is at the scupper.
+
+The intermediate rule in that table is worth keeping a record of, because it took three attempts
+to get right and the first two were instructive. **The cladding should not line the inside of a
+400 mm outlet**: with the mouth vertices freed, its coping mitre flares out through the mouth to
+`(7.995, 4.7, 14.58)` and runs to within 8.7 mm of the membrane lining the cheek.
+
+- *"a wall top flanked by two faces looking **at** each other floors an opening"* — per element,
+  this drops the **coping** as well, because the slot cuts through the cap plates too and their
+  reveals look at each other across it.
+- *"a wall top flanked by two faces looking **away** from each other caps a wall"* — per element,
+  this keeps the sill, because the cornice is grouped into the parapet and its own two ends are an
+  away-facing pair on the very same coplanar region. It also drops part 1's hip in the rig.
+- *toward-facing, per **body*** — correct on all three bakes: 3 faces of `Parapet-Headhouse-E` in
+  both scupper bakes, nothing in the rig. A cap plate's own thickness is an away pair, the sill's
+  own flanks are only the cheeks. Per body rather than per element is the whole of the difference.
+
+Even with it, one crossing survives each way: the membrane's **sill panel** at `z = 14.503`, which
+runs out through the mouth to `x = 7.972` over the cornice, passes through the cladding's facade
+panel at `x = 7.995`. That is a detail question rather than a geometry one — *what does the
+cladding do at a scupper mouth that sits above a cornice?* — and it is Duncan's, particularly
+since it is his 2026-08-16 decision that the slot be open to the sky precisely so the cladding's
+claim on the sill would be correct. **Nothing here is blocked on code.**
+
+**The cornice-end drips need the folded vertex split**, which is the standing self-intersection
+item, unchanged since 2026-08-16. One vertex has to become two — `y = 4.777` for the cornice side
+and `y = 4.793` for the cheek — and nothing in the offset can do that today.
+
+So the answer to *"can the continuation be leveraged to buy this too?"* is **yes, but only behind
+a decision that is not about the lap rule**. The fold path is what places the mouth wraps, so with
+the narrowing the continuation has three customers rather than one — and without it, one.
+
+### The keep-or-drop call on the continuation: kept
+
+Duncan handed the call back. Kept, and the reasoning recorded so it can be reversed cheaply:
+
+- It delivers the **north junction**, which is what this whole piece of work was asked for on
+  2026-08-20. Dropping it to save 109 lines would un-deliver the thing that started it and reopen
+  a leak that was already deferred once.
+- It is **isolated**: `carry_on`, `arris_at`, the driver loop and `_inside`, behind one call site
+  and a `rounds` bound. Removing it is deleting those and passing `rounds=0`; nothing else reads
+  them.
+- It gains a second and third customer the moment the scupper-mouth detail above is settled.
+
+Against: the **south-junction sliver** is its and remains open — 205 x 7.3 mm on `y = 7.548`,
+between the collar's lower edge (which follows `CapPlate-Unit8-W`'s sloped top arris, rising to
+`z = 13.1262` at `x = 11.3129`) and the fold band's flat top at `z = 13.1189`. Both panels are
+right in themselves; the strip between them is genuinely uncovered, and closing it means clipping
+one to the other's boundary rather than emitting whole quads. It is the same clipping the lap
+lacks everywhere else. A guard that suppressed the run-on where another lap already held the
+ground was written and removed — it never fires, because the sliver is *between* the two panels
+rather than under either.
+
+### The scupper as an opening, and what covering the cheeks would take (2026-08-20)
+
+Duncan, on the baked result: *"There should be no cladding covering the scupper sill"*, and
+*"can we treat the scupper cheeks the same as the top of the cap plate? They should be skinned by
+both membrane and cladding... We might even get the membrane flanging out onto the exterior of
+Parapet-Headhouse-E for free."*
+
+**`_opening` landed**, and with it the first half. It reads the two things a slot cut through a
+wall leaves behind, from geometry alone:
+
+- **cheeks** — two vertical faces of one **body** looking *at* each other. The faces across a
+  wall's thickness and the two ends of a wall are also opposed, but look *away*; that sign is the
+  whole test, and it is `_next_lift`'s measure again.
+- **floor** — an upward face with a cheek pair standing **over** it.
+
+Both qualifiers were arrived at the hard way and both are load-bearing:
+
+- *per body, not per element.* The slot cuts the cap plates too, so per element
+  `CapPlate-Headhouse-E`'s reveal and `E2`'s look at each other and the **coping** reads as a
+  cheek pair. And the cornice is grouped into the parapet, so its own two ends are an away-facing
+  pair sitting on the very same coplanar region as the sill.
+- *cheeks that rise above it.* The same two cheeks touch the wall's own coping where the slot cuts
+  through it — but there they stop at that level rather than standing over it. Without this the
+  coping reads as the floor of its own opening. Tried first as "has a toward pair and no away
+  pair", which works on the bakes only because the roof buries the parapet's inner face at the
+  slot, and fails on a slot cut through a free-standing wall.
+
+`cladding_faces` now subtracts the floor. The cladding's 5-gon at `z = 14.58` — Duncan's E86–E90 —
+is gone, the rig and the walls-and-caps bake are unchanged, and the cornices bake keeps
+`29.308 mm` separation and **0 crossings**.
+
+**Covering the cheeks does produce the mouth flange — and does not land.** Adding
+`cheeks & climbed` to `membrane_faces` gives exactly what Duncan predicted: the membrane covers
+the cheeks as faces rather than arriving as three overlapping laps, the facade beside each cheek
+becomes a face the skin runs into, and the lap flanges out of the mouth onto it — panels at
+`y 4.588…4.793` and `y 5.177…5.382` on `x = 8.072`. It is right in principle. Two things stop it:
+
+- **13 membrane→cladding crossings.** The mouth flange runs `z 14.718 → 14.923`, which is 205 mm
+  above the parapet and straight through the cladding's coping. The lap has no way to stop at the
+  top of the wall.
+- **Cladding the cheeks pokes 85 mm into the roof.** With `cheeks` added to `cladding_faces` too,
+  the cheek panel miters against the parapet's inner face and reaches `x = 8.585`, `3.66 mm` from
+  the roof taper: cladding clearance `84.9999 → 3.6594 mm`. The reveal's inner end opens onto the
+  roof and there is no datum in plan to stop it — the same standing item as *"the cladding
+  overhangs part 4's bare ends by the offset"*.
+
+Both are the missing **clipping**, again: the lap places whole quads and `keep` places whole faces,
+and neither can stop at the boundary of what it is dressing. That is now the blocker on four
+separate things — the south sliver, the mouth flange, the clad reveal, and the `_reconcile`
+narrowing's crossings.
+
+## The extended cornice, and the scupper finished (2026-08-21)
+
+Duncan exported it. `Cornice-Headhouse-E` now runs `y 4.685…5.285`, 100 mm past each jamb;
+nothing else moved. **The prediction held, and it cost no code at all**: on the new bake, with the
+rules exactly as they were,
+
+- **folds 6 → 4.** Vertices 55 and 59, the scupper mouth's lower corners, are no longer
+  contradictory. The cornice's ends are no longer coplanar with the cheeks, so there is no knife
+  there, so `_reconcile` no longer drops the facade plane with it.
+- **the membrane flanges out of the mouth**, on `x = 8.072` at `y 4.472…4.793` and
+  `y 5.177…5.498` — what Duncan asked for and what the `_reconcile` narrowing was built to buy.
+- **the cornice's ends take their drips**, `x 7.972…8.072`, `z 14.433…14.503` — refused before,
+  where they landed *on* the substrate.
+- 0 crossings, nothing buried, `clearance 7.8808 mm`.
+
+The `_reconcile` narrowing recorded above is therefore **unnecessary rather than untaken**, and
+should stay untaken: it bought the same wrap by weakening a rule, where the substrate bought it by
+removing the degeneracy.
+
+### Covering the cheeks, and the clip that let it land
+
+Duncan: *"can we treat the scupper cheeks the same as the top of the cap plate? They should be
+skinned by both membrane and cladding."* Half of it landed.
+
+`membrane_faces` now adds `cheeks & climbed`. The cheeks lie *across* their parapet's fall, so
+`wall_faces` calls them ends and neither exterior nor interior could ever reach them — which is
+why the membrane used to arrive at them as three overlapping laps rather than covering them.
+
+It did not land on its own. Covering them put **13 membrane→cladding crossings** at `z ≈ 14.83`,
+all of them laps springing off the newly-covered cheek and running their full 205 mm onto faces
+far shorter than that — a 34 mm cap-plate reveal, most of them — ending 120 mm above the top of
+the wall and through the cladding's coping. So:
+
+**`_room` / `_leaves`: a lap is now cut to the face it lands on.** `carry_on` already refused a
+*continuation* that would leave the substrate; a round-1 lap had no such check at all. It marches
+along the lap direction over the coplanar triangles — marching rather than testing the far end,
+because the union triangulates a wall and a lap commonly crosses several of its triangles: the
+62 mm drip off a 34 mm cap plate must still run its full depth down the parapet's coplanar face
+below. A lap with no room is dropped.
+
+With it, the numbers on every bake are unchanged and covering the cheeks is clean:
+
+| | separation | clearance | crossings |
+|---|---|---|---|
+| rig | 76.071 | 7.7760 / 84.6091 | 0 / 0 |
+| walls-and-caps | 77.000 | 7.8808 / 84.9999 | 0 / 0 |
+| extended cornices | 25.654 | 7.8808 / 63.9999 | 0 / 0 |
+
+The scupper is now dressed all through: both cheeks `x 8.072…8.508`, `z 14.503…14.760`; both
+cornice ends `z 14.433…14.503`; the facade carrying membrane from `14.433` to `14.760` across the
+whole parapet, mouth flange included, and **not a millimetre above the cap**.
+
+**The cladding covering the cheeks did not land**, and is not a clipping problem. Its cheek panel
+miters against the parapet's inner face and reaches `x = 8.585` — 85 mm past it, `3.66 mm` from
+the roof taper, `clearance 84.9999 → 3.6593`. That is a `keep` face's offset against an *unskinned
+neighbour*, the standing *"the cladding overhangs part 4's bare ends by the offset"* item, and it
+needs a trim in plan that nothing here has. It is one line to add back the day that exists:
+`| (cheeks & faces.of_role(substrate.WALL))` in `cladding_faces`.
+
+**The superseded bake is now wrong to build.** With the cheeks covered,
+`unit8-parapets-caps-clt-insulation-headhouse-cornices.obj` puts a membrane vertex **inside**
+`Cornice-Headhouse-E` — the knife at the mouth, which is exactly what the extension removed.
+Nothing reads it; deleting it is Duncan's call, as the last three were.
+
+### What `/code-review high` caught (2026-08-21)
+
+Seven, all real, all fixed. Three of them were the lap doing by sampling what it should have done
+by marching, which is the same mistake three times:
+
+- **The run-on bridged a void.** It tested the tip and the far end and nothing between, so two
+  bodies presenting one plane with a 130 mm gap between them read as solid and the lap hung over
+  it. It marches with `_room` now, like a round-1 lap.
+- **The fold checked one end of the band it was placing**, while its comment claimed "all of it
+  has to land on the face". Both ends now, and marched.
+- **The continuation budget truncated silently.** `rounds * len(segs)` was read once, at the
+  *initial* count, and `carry_on` appends — 27 segments became 33 on the shipping bake. Exhausting
+  it dropped the membrane from 145 faces to 137 with no raise and no report, which is exactly the
+  silent omission this module is written against. The loop now terminates on `tried` alone and
+  `rounds` **raises** if it is ever reached.
+- **The 45-degree snap flipped a drip into an upstand.** `_across` rounded anything under 45° onto
+  the horizontal, and `reach` then read the flattened `t_z` and billed a lap raking 40° *down* the
+  205 mm upstand instead of the 62 mm drip. `RAKE = 0.05` now: a lap within 3° of level is level,
+  and one that genuinely rakes keeps its direction and is priced by it. The docstring also still
+  claimed there was no snapping at all.
+- **`corner()`'s parallel test was scale-dependent** — `|u1 × u2| < PLANE_TOL` on *unnormalised*
+  seam directions, so two 3 mm seams read parallel below 6.4° and two 1 mm seams at any angle, and
+  the miter was skipped. Carried over from `_turn_out` unexamined.
+- Dead `Counter` import, and `_plane_ids` recomputed ten times a build; it is cached on the body.
+
+One of the fixes then exposed an older bug of the same family: taking the seam direction from the
+two ends' *substrate vertices* blocked the second end of any segment whose first end had already
+run on, because running on clears that end's vertex. A symmetric substrate came out lapped on one
+side. It reads the direction from the ends as points now.
+
+### Extending the cornice past the scupper — yes, and here is exactly what it buys
+
+Duncan asked, with an independent reason of his own: water should not fall off the end of a
+cornice into the rainscreen cavity. On the geometry the answer is also yes, and specifically:
+
+The cornice is **exactly as wide as the slot**, so its two end faces are coplanar with the cheeks
+and face the other way. That single degeneracy is the **knife**, and the knife is behind all of
+this:
+
+- vertices 55 and 59 are folds only because of it. `_reconcile` then drops the **facade** plane
+  along with the cornice's end, which is what leaves the mouth corners at `x = 8.08` and refuses
+  every lap that wants to spring from them;
+- the cornice's own end faces cannot be lapped onto at all — tested, they land *on* the substrate,
+  clearance `0.0000 mm`;
+- `_receivers` has to carry a knife rule, and `_knifed` has to be shared with the fold path,
+  because of it;
+- two of the three attempts at `_opening` were broken by the cornice's ends and the sill being one
+  coplanar region.
+
+Extend the cornice past each jamb — any real overhang, 100–200 mm — and the ends are no longer
+coplanar with the cheeks. There is then **no knife at the mouth at all**: 55 and 59 stop being
+folds, the facade plane survives, the mouth corners offset properly, and the cornice's ends become
+ordinary faces to drip down. The `_reconcile` narrowing becomes unnecessary rather than merely
+untaken.
+
+It does **not** fix the clipping problems above — the mouth flange overrunning the parapet top and
+the clad reveal reaching into the roof are independent of it. Worth doing anyway: it removes a
+degeneracy that has cost four separate workarounds, and Duncan's own reason stands on its own.
+
+### Has it simplified the code? No — measured
+
+| | before | after |
+|---|---|---|
+| `skin/offset.py` code lines | 384 | **561** (+46%) |
+| `build.py` code lines | 440 | **425** |
+| removed | `_hem` 25 + `_turn_out` 97 + `_meets_region` 23 = **145** | |
+| added | | **322** |
+
+Where the 322 went, and this is the useful split:
+
+- **the lap proper — 163 lines** against the 145 it replaced. A wash, for two predicates instead
+  of four, one direction rule instead of two hand-elected face sets, and `flanged` retired.
+- **the continuation — 109 lines** (`carry_on`, `arris_at`, the driver loop, `_inside`). Entirely
+  new capability, not a replacement for anything, and the only thing that needs it is the north
+  junction: the scupper cheeks are covered **with or without it**, measured. Every defect above
+  is in it or was found by it.
+- **robustness the review demanded — 50 lines** (`_plane_ids`, `_knives`, `_knifed`). The old code
+  never asked "is this the same plane" structurally, so it never had to answer it correctly.
+
+So the *rule* is simpler and the *mechanism* is not. `build.py` is where the simplification
+actually shows.
+
+### The cladding is deliberately not done
+
+`cladding_laps` is still the old election — `interior`, nothing else — held back because Duncan
+asked to settle the membrane first. Widening it to `np.abs(faces.normals[:, 2]) < TOL` is the
+whole of the change; the machinery underneath is already general. Expect it to need its own
+conversation about what the cladding does where it runs into a cornice, since it is the skin that
+deliberately *stops* below one.
+
+### Left open by this work
+
+- **T-vertices at the run-on.** The drip's inner edge is now one edge from x = -0.178 to 8.277
+  while the covered cap top it springs from ends at 8.072, so the two meet along a T rather than
+  sharing a vertex. Coincident geometry, no hole, but it is the T-vertex item below arriving for
+  real.
+- **`rounds=3` is a cap, not a proof.** `_lap` iterates continuations until nothing grows, bounded
+  by a round count. It settles after two on every substrate here, because only an end that sits on
+  a substrate vertex can continue and a fold's rim end does not. That is an argument, not a test.
+- **The lap cannot clip.** It places whole quads, so where a continuation would overhang the face
+  it lands on, it is not placed at all rather than shortened. The 8.6 mm of cheek below the sill's
+  offset is the one place in these bakes where that shows.
+
 ## Open items
 
+- **The scupper mouth and the cornice ends are bare, and the fix is one decision away.** See the
+  2026-08-20 section: `_reconcile` drops the facade plane at the two mouth vertices along with the
+  knife it is actually reconciling, which is what stops the membrane wrapping out of the mouth.
+  Narrowing it to keep planes that contradict nothing is ~20 lines and **produces exactly the two
+  wraps Duncan asked for**, but it also runs the membrane's sill out through the mouth and through
+  the cladding's facade panel. What is needed first is Duncan's answer to *what does the cladding
+  do at a scupper mouth above a cornice* — it is his 2026-08-16 decision that the sill be clad at
+  all. The cornice-end drips need vertex splitting and are not in reach either way.
+- **The south-junction sliver**, 205 x 7.3 mm, left by the continuation. See above; it needs the
+  lap to clip against its neighbour rather than emit whole quads.
 - **`clearance` cannot tell "stops short of a feature" from "folds through itself".** The cornices
   bake makes the cladding read 63.9999 mm against an 85 mm offset and print
   `WARNING: … self-intersecting`, and it is wrong — four independent checks (crossings both ways,
@@ -1090,49 +1569,16 @@ both come back **byte-identical**, checked against `HEAD`. 64 tests.
   changing what the build asserts is Duncan's call.
 
 
-- **The membrane leaks at V11: an in-line butt has no wrap.** *Deferred by Duncan 2026-08-19,
-  to be reopened on the next import.* On the Unit8 bake the membrane's flange and skirt unify at
-  their **southern** junction and not at their **northern** one. V11 of `build/Membrane.obj`
-  (Blender 0-based; OBJ `v 12`) is the corner, at **(8.072, 2.422, 13.1138)**.
-
-  The two junctions are topologically different, which is why one works:
-
-  * **South — a T-junction, and it closes.** `Parapet-Unit8-W` runs *perpendicular* into
-    `Headhouse-S`'s south face, which is elected `flanged` because the Unit8 roof runs into it.
-    All three membrane panels at the parapet's end — inner climb, cap top, outer skirt — turn out
-    along their own normals and land **coplanar** on `y = 7.548`, where `_turn_out` miters them
-    into one panel, x 10.467…11.313, z 13.0436…13.3237. The open-edge run is continuous round the
-    corner.
-  * **North — an in-line butt, and it does not.** `Parapet-Unit8-N` butts *in line* with
-    `Headhouse-N`: both north faces are the same plane, y = 2.43, and the wall simply continues
-    upward. There is no face to turn out onto. The skirt's bottom edge stops dead at x = **8.08**
-    (the raw substrate plane, not the offset 8.072), an **8 mm diagonal sliver** closes it back up
-    to V11, and the upstand rises from V11 on x = 8.072 with a **free vertical edge**. Three open
-    edges converge on V11 — the pinhole.
-
-  What Duncan wants: the flange wrapped onto `Headhouse-N`'s north face and the skirt extended
-  onto the same face, their edges meeting at one corner — i.e. a panel on y = 2.422 running east
-  from x = 8.072, spanning z 13.0436 … 13.3188.
-
-  **Measured, so it need not be re-derived:** electing `Headhouse-N`'s exterior as a turn-out wall
-  cleans up the 8 mm sliver (the hem then miters to x = 8.072, because `_hem`'s `skinned_wall`
-  takes the `stop` faces) but produces **no wrap at all**. `_turn_out` extrudes along each panel's
-  *own dominant normal axis*, and at this junction that points north, off the building; the
-  direction that lands on the wall is +X, along the corner. So the existing mechanism cannot
-  produce it — this needs a rule the code does not have.
-
-  Four candidates were put to Duncan: dress onto every exposed face at the termination (general,
-  covers both junction types, needs `_turn_out` to chain a collar round a corner rather than
-  within one plane); a separate in-line-butt rule; fix it upstream in the substrate by returning
-  the parapet into the headhouse; or just close V11 without dressing onto the wall.
-
-  **Deferred deliberately.** Duncan is working on a new scupper detail, and the scupper's sides
-  will need cladding — at which point the in-line butt is probably **not unique**. Settling the
-  rule on one instance risks a rule that fits only this corner. Reopen when the import with the
-  new scupper detail arrives, with both cases visible. See also the scupper-cheek turn-up item,
-  which is the same family and also waiting on that import.
-
-
+- ~~**The membrane leaks at V11: an in-line butt has no wrap.**~~ Closed 2026-08-20 by the lap
+  rule — see above. The drip runs on past the butt to x = 8.277 and the upstand folds round the
+  corner onto `Headhouse-N`'s north face, spanning z 13.1189…13.3239, which is the panel Duncan
+  specified. Of the four candidates put to him, the one that landed is the first: dress onto every
+  exposed face at the termination, general, covering both junction types.
+- ~~**The membrane should turn up at the scupper cheeks.**~~ Closed 2026-08-20 by the same rule.
+  Both cheeks are covered from x 8.072 to 8.508 and z 14.503 to 14.760 — up from the sill, down
+  from the cap plate's reveal, and sideways off the parapet's inner face. The 2026-08-16 note
+  predicting the turn-up would make the two `x = 8.508` edges vertical is superseded: the fold
+  vertices there are all displaced 8–14 mm, which is a corner miter and not a defect.
 - **The brick skin is not built.** Everything it needs exists — `BRICK`,
   `facades_of(faces, BRICK, fall)`, `CLADDING_SYSTEMS` — but no part in the sample is
   stamped brick, so adding the `skins:` entry and its rule set would emit an empty mesh

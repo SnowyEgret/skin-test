@@ -17,7 +17,6 @@ slightly different tilt and distance than a perfect offset would give.
 
 from __future__ import annotations
 
-from collections import Counter
 from functools import cached_property
 
 import numpy as np
@@ -29,6 +28,10 @@ from . import substrate
 PLANE_TOL = 1e-6
 # keeps the KKT system non-singular where the soft equations underdetermine a vertex
 RIDGE = 1e-9
+# a lap this close to level is level: the direction cosine a cap plate's own fall
+# puts into a lap perpendicular to its arris, rounded off so an upstand is a
+# height. Not a plane tolerance -- see `_across`
+RAKE = 0.05
 
 
 def _vertex_normals(mesh: trimesh.Trimesh, vertex: int, tol: float, only=None) -> np.ndarray:
@@ -366,234 +369,693 @@ def _owner(body: trimesh.Trimesh, parts: list[trimesh.Trimesh]) -> np.ndarray:
     ).argmin(axis=0)
 
 
-def _hem(body, skin, verts, distance, height, wall, skinned_wall, against, project=0.0):
-    """Quads standing `height` metres off the edge each `wall` face shares with a
-    covered face in `against`.
+def _plane_rows(body) -> np.ndarray:
+    """`(n_x, n_y, n_z, d)` per face."""
+    return np.column_stack(
+        [body.face_normals, (body.triangles[:, 0] * body.face_normals).sum(axis=1)]
+    )
 
-    Negative `height` hangs a skirt below the wall's top edge; positive climbs an
-    upstand above the edge where the covered surface runs into the wall. Either
-    way the shared edge is the one the surface already ends on, so the hem
-    continues it without a seam, and the far corners are mitered across every
-    skinned vertical plane at that vertex — mitering across the turn-down walls
-    alone would split the corner open where two walls meet.
 
+def _plane_ids(body):
+    """One id per face, sharing an id where the faces share a plane, and the
+    representative plane row per id.
+
+    **Not** a rounded bucket. manifold3d leaves a union's faces up to ~5e-7 m off
+    their true planes, which is half a `PLANE_TOL` lattice cell, so two faces of
+    one plane fall either side of a boundary often enough to matter: the
+    headhouse taper's top does exactly that in the shipping bake, its two halves
+    7.8e-7 apart. Everything downstream that asks "is this the same plane" —
+    which lap runs chain together, which faces a run-on may carry onto, which
+    pairs are knives — would then silently answer no on a real surface, and a
+    run-on that silently does not happen is the pinhole this rule exists to
+    close. So each face is matched against the representatives already found,
+    within the same tolerance used everywhere else.
     """
-    hem: dict[int, int] = {}
-
-    def hem_vertex(v: int) -> int:
-        if v not in hem:
-            faces = body.vertex_faces[v]
-            faces = [f for f in faces[faces >= 0] if skinned_wall[f]]
-            normals = np.unique(np.round(body.face_normals[faces] / PLANE_TOL), axis=0)
-            t = np.linalg.lstsq(normals * PLANE_TOL, np.full(len(normals), distance), rcond=None)[0]
-            hem[v] = len(verts)
-            verts.append(body.vertices[v] + t + [0.0, 0.0, height])
-        return hem[v]
-
-    def quad(loop, outward):
-        corners = np.array([verts[i] for i in loop])
-        newell = np.cross(corners, np.roll(corners, -1, axis=0)).sum(axis=0)
-        if newell @ outward < 0:
-            loop = loop[::-1]
-        return [[loop[0], loop[1], loop[2]], [loop[0], loop[2], loop[3]]]
-
-    faces = []
-    for (f, g), (a, b) in zip(body.face_adjacency, body.face_adjacency_edges):
-        for near, far in ((f, g), (g, f)):
-            if wall[near] and against[far]:
-                faces += quad(
-                    [a, b, hem_vertex(b), hem_vertex(a)], body.face_normals[near]
-                )
-    return faces
+    held = body.metadata.get("plane_ids")
+    if held is not None:
+        return held
+    rows = _plane_rows(body)
+    reps: list[np.ndarray] = []
+    ids = np.empty(len(rows), dtype=int)
+    lookup: dict[tuple, int] = {}
+    for f, row in enumerate(rows):
+        key = tuple(np.round(row / PLANE_TOL).astype(np.int64))
+        if key in lookup:
+            ids[f] = lookup[key]
+            continue
+        found = next(
+            (i for i, rep in enumerate(reps) if np.abs(rep - row).max() < PLANE_TOL),
+            None,
+        )
+        if found is None:
+            found = len(reps)
+            reps.append(row)
+        lookup[key] = ids[f] = found
+    body.metadata["plane_ids"] = ids, np.array(reps) if reps else np.zeros((0, 4))
+    return body.metadata["plane_ids"]
 
 
-def _meets_region(p, q, tris, normal) -> bool:
-    """Does segment `p`-`q` touch any of these coplanar triangles?
+def _knives(body, ids, reps):
+    """Faces lying on one plane, facing exactly opposite ways, **and touching**.
 
-    All of them lie in the plane `normal` faces, so the test drops that axis and
-    runs in 2D. A segment meets a triangle when either end is inside it or when
-    it crosses one of its edges — checking crossings alone would miss a segment
-    lying wholly within one triangle, and checking containment alone would miss
-    one that only passes through.
+    The substrate has no thickness between such a pair, so a vertex they share
+    has no offset: it would have to move `distance` both ways at once.
+    `_reconcile` reports this where it survives into the solve; here it is a fact
+    to route around while there is still a choice.
 
-    Boundary contact counts: the panel that stops on a wall very often ends
-    exactly on the edge of the wall's own face. The `PLANE_TOL` slack is applied
-    to the side products after dividing out the edge length, so it is the same
-    metre tolerance used everywhere else rather than an area.
+    Sharing a vertex is the whole of "touching", because that is where the
+    contradiction lives — `_reconcile` is a per-vertex rule. Without it this is
+    the same trap `_turn_out` and `_next_lift` each fell into: a shared plane is
+    not a shared face. Two walls 2.6 m apart can present the same plane facing
+    opposite ways, and pairing them would silently refuse a lap onto one because
+    the skin happened to cover the other.
+    """
+    opposite = {}
+    for i, rep in enumerate(reps):
+        match = next(
+            (j for j, other in enumerate(reps) if np.abs(other + rep).max() < PLANE_TOL),
+            None,
+        )
+        if match is not None:
+            opposite[i] = match
+
+    at: dict[int, set] = {}
+    for f, plane in enumerate(ids):
+        for v in body.faces[f]:
+            at.setdefault((int(v), int(plane)), set()).add(f)
+
+    pairs: dict[int, set] = {}
+    for f, plane in enumerate(ids):
+        facing = opposite.get(int(plane))
+        if facing is None:
+            continue
+        for v in body.faces[f]:
+            for g in at.get((int(v), facing), ()):
+                pairs.setdefault(f, set()).add(g)
+                pairs.setdefault(g, set()).add(f)
+    return pairs
+
+
+def _knifed(body, kept):
+    """Faces the skin may never lap onto: coplanar with, opposed to, and touching
+    a face it covers.
+
+    The shared vertex has no offset -- it would have to move `distance` both ways
+    at once -- so a lap placed there is placed wrong, and covering both sides
+    turns a fold `_reconcile` would quietly drop into one it has to raise on. A
+    covered face outranks a lap onto its knife-mate, because `keep` is what the
+    skin *is* and a lap is only its continuation.
+
+    This is a property of the face, not of how the lap arrived at it, so both the
+    seam-adjacent receivers and the faces a continuation may fold onto are
+    filtered through it. Filtering only the receivers left the scupper's fold
+    turning onto the roof taper's end at `x = 8.5` -- the very knife the fold at
+    that plane has always been -- and put two 205 mm panels across the mouth of
+    the slot.
+    """
+    ids, reps = _plane_ids(body)
+    knife = _knives(body, ids, reps)
+    blocked = np.zeros(len(kept), dtype=bool)
+    for face, mates in knife.items():
+        if any(kept[other] for other in mates):
+            blocked[face] = True
+    return blocked
+
+
+def _receivers(body, kept, allowed):
+    """The faces a lap actually turns onto: `allowed`, uncovered, and adjacent to
+    what the skin covers.
+
+    A predicate says which faces a skin *may* lap onto; this is which ones it
+    reaches. The distinction matters twice over. It keeps the solve honest --
+    `covered` is what the skin puts a surface on, and claiming a whole facade
+    because one edge of it is lapped would hand `_reconcile` planes no skin ever
+    uses. And it is what makes a lap a *local* continuation rather than a second
+    face selection.
+
+    **A knife is refused.** Where a candidate is coplanar with and opposed to
+    something the skin already claims, the shared vertex has no offset at all,
+    and covering both sides turns a fold `_reconcile` would quietly drop into
+    one it has to raise on. So it is settled here, where there is still a choice
+    to make: the lap turns onto the face at the **concave** arris and stops at
+    the convex one. An internal corner is where the surface has to be
+    continuous; at an external corner the two offset surfaces have already
+    parted by twice the distance and there is nothing left to join.
+
+    The scupper poses both. Its drip is exactly as wide as its slot, so the
+    drip's end faces are coplanar with, and face the other way from, the slot's
+    cheeks: the cheeks are the internal corner and the membrane wraps them, the
+    drip's 100 x 70 mm ends are the external one and it stops there. And the
+    roof taper's end stands 8.6 mm proud of the sill on the very plane the
+    parapet's inner face occupies, which is the same contact the fold at
+    `x = 8.5` has always been.
+
+    Where a pair is convex on both sides, or concave on both, nothing is dropped
+    and the contradiction goes to `_reconcile` to be raised rather than guessed
+    at.
+    """
+    ids, reps = _plane_ids(body)
+    knife = _knives(body, ids, reps)
+    allowed = allowed & ~_knifed(body, kept)
+    concave: dict[int, bool] = {}
+    for (near, far), convex in zip(
+        np.vstack([body.face_adjacency, body.face_adjacency[:, ::-1]]),
+        np.concatenate([body.face_adjacency_convex] * 2),
+    ):
+        near, far = int(near), int(far)
+        if not (kept[near] and allowed[far] and not kept[far]):
+            continue
+        # a knife shares an edge and reads as a 0-degree fold; it is not a seam
+        # the surface can turn across, so it says nothing about this candidate
+        if near in knife.get(far, ()):
+            continue
+        concave[far] = concave.get(far, False) or not bool(convex)
+
+    claimed = kept.copy()
+    for far in concave:
+        claimed[far] = True
+
+    refused = set()
+    for far in concave:
+        for other in knife.get(far, ()):
+            if not claimed[other]:
+                continue
+            if kept[other]:
+                refused.add(far)  # `_knifed` already dropped these; belt and braces
+            elif concave[other] != concave[far] and not concave[far]:
+                refused.add(far)
+
+    receivers = np.zeros(len(kept), dtype=bool)
+    for far in concave:
+        if far not in refused:
+            receivers[far] = True
+    return receivers
+
+
+def _across(body, a, b, far) -> np.ndarray:
+    """The unit direction the skin continues in when it crosses onto face `far`.
+
+    In `far`'s plane, perpendicular to the arris `a`-`b` it just crossed, and
+    pointing into `far`. That is the whole of the direction rule, and it covers
+    every continuation this module used to spell out separately: a skirt goes
+    **down** because the wall face is below the coping's arris, an upstand goes
+    **up** because the wall face is above the roof's, a collar runs **sideways**
+    because the face it turns onto lies to the side.
+
+    There is no axis to snap to. The receiving face carries the direction, so a
+    turn off a shallow slope comes out exactly vertical by construction rather
+    than by being rounded there -- which is what `_turn_out` needed its dominant
+    axis for, because it extruded along the *departing* panel's normal instead.
+
+    Read off `far`'s own third vertex, which lies on the interior side because
+    `a`-`b` is one of that triangle's edges. A centroid would not do: it says
+    nothing where a face straddles the seam, and says the wrong thing where the
+    face is long and the seam near one end.
+    """
+    e = body.vertices[b] - body.vertices[a]
+    e = e / np.linalg.norm(e)
+    third = [v for v in body.faces[far] if v not in (a, b)][0]
+    t = body.vertices[third] - body.vertices[a]
+    t -= (t @ e) * e
+    t = t / np.linalg.norm(t)
+
+    # A lap springing off a *sloped* arris -- a cap plate laid to fall, run into
+    # by a wall -- comes out perpendicular to that arris and so tilted by the
+    # fall, and an upstand tilted 2 degrees is not what a 205 mm upstand means:
+    # like a drip, it is a height, measured vertically. So a lap already within
+    # `RAKE` of level is made exactly level, which is the same priority
+    # `planar_offset` gives level planes and the reason `drop` could be a plain
+    # `[0, 0, -drop]` before this.
+    #
+    # Only within `RAKE`. The threshold was 45 degrees at first, and that
+    # rounded a lap raking 40 degrees *down* onto the horizontal -- whereupon
+    # `reach` read the flattened `t_z` and billed it the 205 mm upstand instead
+    # of the 62 mm drip. A lap that genuinely rakes keeps the direction it has
+    # and is priced by it. Nothing is snapped to an *axis*: a wall at any plan
+    # angle laps along its own direction.
+    if abs(t[2]) > 1.0 - RAKE:
+        return np.array([0.0, 0.0, np.sign(t[2])])
+    if abs(t[2]) < RAKE:
+        flat = np.array([t[0], t[1], 0.0])
+        return flat / np.linalg.norm(flat)
+    return t
+
+
+def _key(point) -> tuple:
+    """A point's identity on the 1 um lattice, for joining laps end to end."""
+    return tuple(np.round(np.asarray(point) / PLANE_TOL).astype(np.int64))
+
+
+def _inside(tri, point, normal) -> bool:
+    """Is `point` inside this coplanar triangle? Boundary contact counts.
+
+    Boundary contact is the whole point: a lap reaching the end of the face it
+    laps onto touches the next face exactly on their shared arris, and a test
+    that wanted the interior would never see it.
     """
     axes = [k for k in range(3) if k != int(np.abs(normal).argmax())]
-    a, b = p[axes], q[axes]
-    t = tris[:, :, axes]
-
-    def side(u, v, w):
-        """Twice the signed area of u-v-w, over |v-u|: w's distance off line u-v."""
-        run = v - u
-        length = np.linalg.norm(run, axis=-1)
-        cross = run[..., 0] * (w - u)[..., 1] - run[..., 1] * (w - u)[..., 0]
-        return np.divide(cross, length, out=np.zeros_like(cross), where=length > 0)
-
-    for point in (a, b):
-        d = np.stack([side(t[:, i], t[:, (i + 1) % 3], point) for i in range(3)])
-        if np.any(np.all(d > -PLANE_TOL, axis=0) | np.all(d < PLANE_TOL, axis=0)):
-            return True
-
+    t, q = tri[:, axes], np.asarray(point)[axes]
+    side = []
     for i in range(3):
-        u, v = t[:, i], t[:, (i + 1) % 3]
-        d1, d2 = side(a, b, u), side(a, b, v)
-        d3, d4 = side(u, v, a), side(u, v, b)
-        straddles = ((d1 > PLANE_TOL) != (d2 > PLANE_TOL)) & (
-            (d3 > PLANE_TOL) != (d4 > PLANE_TOL)
-        )
-        if np.any(straddles):
-            return True
-    return False
+        u, v = t[i], t[(i + 1) % 3]
+        run = v - u
+        length = float(np.linalg.norm(run))
+        if length == 0.0:
+            return False
+        side.append(float(run[0] * (q - u)[1] - run[1] * (q - u)[0]) / length)
+    side = np.array(side)
+    return bool((side > -PLANE_TOL).all() or (side < PLANE_TOL).all())
 
 
-def _turn_out(body, verts, faces, wall, distance, out):
-    """Turn every panel that stops on a `wall` plane out along the axis it faces.
+def _leaves(tri, here, direction, normal) -> float:
+    """How far along `direction` from `here` this coplanar triangle reaches.
 
-    Where the surface runs into the wall it ends on a boundary edge. Each such
-    edge is extruded by `out` along the dominant axis of its own panel's normal,
-    so the whole termination folds outward together: the roof panels turn up, the
-    panel facing -X turns -X, the skirt facing +X turns +X. Turning only the
-    horizontal ones would leave the vertical panels stopping dead at the wall.
-
-    Snapping to the dominant axis rather than using the normal verbatim keeps a
-    turn off a shallow slope exactly vertical — the same priority the solver gives
-    level planes. The new panel carries the old one's outward face around the
-    fold, so it is wound to face the way the boundary edge did.
-
-    Those edges form a chain around the wall, and neighbouring panels turn along
-    different axes, so their outer edges are mitered where they meet rather than
-    each being extruded on its own. The miter is the intersection of the two outer
-    lines, which extends a pair that would otherwise leave a gap and trims a pair
-    that would otherwise overlap — the same treatment `planar_offset` gives a
-    corner, in the wall's plane instead of in space.
+    The largest parameter at which the ray is still inside it: the ray is
+    intersected with each edge in the triangle's own plane and the furthest
+    crossing wins. Zero if it leaves immediately.
     """
-    if not out or not wall.any():
-        return []
+    axes = [k for k in range(3) if k != int(np.abs(normal).argmax())]
+    p, d, t = np.asarray(here)[axes], np.asarray(direction)[axes], tri[:, axes]
+    far = 0.0
+    for i in range(3):
+        a, e = t[i], t[(i + 1) % 3] - t[i]
+        den = d[0] * e[1] - d[1] * e[0]
+        if abs(den) < 1e-15:
+            continue
+        gap = a - p
+        along = (gap[0] * e[1] - gap[1] * e[0]) / den
+        across = (gap[0] * d[1] - gap[1] * d[0]) / den
+        if -PLANE_TOL <= across <= 1 + PLANE_TOL and along > far:
+            far = float(along)
+    return far
 
-    elected = body.triangles[wall]
-    keys = (
-        np.round(
-            np.column_stack(
-                [
-                    body.face_normals[wall],
-                    (elected[:, 0] * body.face_normals[wall]).sum(axis=1) + distance,
-                ]
-            )
-            / PLANE_TOL
+
+def _room(body, here, direction, on_plane, normal, want) -> float:
+    """How far a lap can run from `here` before it leaves the surface it is on.
+
+    A lap places a whole quad — there is no cutting in `_lap` — so a band wider
+    than the face it lands on does not overhang, it is refused or shortened to
+    fit. This is what decides which.
+
+    It marches: find the coplanar triangle holding the point just past `here`,
+    take that triangle's exit, look for a coplanar neighbour holding the point
+    just past *that*, and carry on. Marching rather than testing the far end
+    alone, because the union triangulates a face and one lap commonly crosses
+    several triangles of it — the drip down a 34 mm cap plate runs straight on
+    over the parapet's coplanar face below and must be allowed its full 62 mm.
+    """
+    reached = 0.0
+    for _ in range(len(on_plane) + 1):
+        step = here + direction * (reached + PLANE_TOL * 8)
+        holder = next(
+            (f for f in on_plane if _inside(body.triangles[f], step, normal)), None
         )
-        * PLANE_TOL
-    )
-    # the elected faces kept WITH the plane they offset onto, not just the plane:
-    # an edge ends on the wall only if it also meets those faces there
-    walls = [
-        (key[:3], key[3], elected[np.all(keys == key, axis=1)])
-        for key in np.unique(keys, axis=0)
-    ]
+        if holder is None:
+            return reached
+        reached = max(reached, _leaves(body.triangles[holder], here, direction, normal))
+        if reached >= want:
+            return want
+    return min(reached, want)
+
+
+def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out, rounds=3):
+    """Continue the skin onto every substrate face it runs into.
+
+    Where a covered face meets a face this skin does not cover, the skin does
+    not stop on the arris: it turns and laps across the face beyond. `_across`
+    gives the direction, and which of the two authored distances applies follows
+    from that direction rather than from any face selection. That one rule is
+    the skirt, the flange and the collar together, which this module used to
+    hold as two functions elected by two predicates.
+
+    A lap that **hangs below** its arris is a drip, and is measured on the
+    substrate -- from the arris itself, mitered onto the offset planes of every
+    skinned vertical face meeting at that vertex. A lap that **rises or runs
+    sideways** is an upstand, and is measured from the skin's own edge. Both
+    conventions predate this function and both are deliberate: a drip is set out
+    from the edge of the coping it drips off, an upstand from the finished
+    surface it rises out of. They are the one thing that did not unify, and they
+    are why two distances are still authored.
+
+    **A lap does not stop where the face it laps onto stops** (Duncan,
+    2026-08-20). At the free end of a run it asks what the substrate presents
+    there, and there are exactly three answers:
+
+    * *the same plane carries on* -- an in-line butt, where a parapet runs into a
+      wall presenting the very same face. The lap runs on, which is the whole of
+      the fix for the pinhole at `Parapet-Unit8-N`'s east end where three open
+      edges used to converge on one vertex.
+    * *another face meets it at an arris* -- the lap folds round the corner onto
+      that face. This carries the upstand at that junction onto `Headhouse-N`'s
+      north face, and turns the rig's exterior-wall skirt out onto part 4.
+    * *nothing* -- the lap ends. Duncan's stop condition, exactly.
+
+    Laps are **chained and mitered within each receiving plane**, so a run that
+    changes direction along one face closes at the turn: the miter is the
+    intersection of the two outer lines, extending a pair that would gap and
+    trimming a pair that would overlap. Across planes there is nothing to miter
+    -- two outer lines on different faces do not meet, and asking for their
+    intersection gets a least-squares answer from out in space, which threw a
+    400 mm triangle across the scupper's mouth the one time it was tried. Two
+    drips at a wall corner need no miter anyway: `drip_at` already solves their
+    shared arris vertex on both planes at once.
+    """
+    mitered: dict[int, np.ndarray] = {}
+
+    def drip_at(v: int) -> np.ndarray:
+        """The arris vertex, mitered onto every skinned vertical plane at it."""
+        if v not in mitered:
+            at = body.vertex_faces[v]
+            at = [f for f in at[at >= 0] if skinned_wall[f]]
+            normals = np.unique(np.round(body.face_normals[at] / PLANE_TOL), axis=0)
+            t = np.linalg.lstsq(
+                normals * PLANE_TOL, np.full(len(normals), distance), rcond=None
+            )[0]
+            mitered[v] = body.vertices[v] + t
+        return mitered[v]
 
     V = np.asarray(verts, dtype=float)
-    seen: Counter = Counter()
-    holder: dict[tuple, list] = {}
-    for tri in faces:
-        for e in ((tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])):
-            key = (min(e), max(e))
-            seen[key] += 1
-            holder[key] = tri
+    planes = _plane_rows(body)
+    # plane identity is `_plane_ids`, not a rounded key: a run that failed to
+    # chain because its two halves landed either side of a lattice boundary would
+    # silently not run on, which is the whole failure this rule fixes
+    ids, _ = _plane_ids(body)
+    coplanar: dict[int, list] = {}
+    for f, plane in enumerate(ids):
+        coplanar.setdefault(int(plane), []).append(f)
 
-    def stops_on_wall(i, j):
-        """On one of the wall's offset planes, and on the wall's faces there.
+    def reach(t):
+        """A drip hangs `drop`; anything that rises or runs sideways goes `out`."""
+        return drop if t[2] < -PLANE_TOL else out
 
-        The plane alone is not enough. A plane is unbounded, and a building
-        shares one right up a stack: a parapet's outer face is the very plane
-        its wall's is, a storey higher. Matching on it turned the membrane's
-        parapet skirt out into thin air 1.5 m above the roof the flange was
-        elected for. So the segment is projected back onto the substrate and
-        must meet the elected faces themselves — see NOTES 2026-08-19.
-        """
-        for n, d, tris in walls:
-            if abs(V[i] @ n - d) < PLANE_TOL and abs(V[j] @ n - d) < PLANE_TOL:
-                return _meets_region(V[i] - distance * n, V[j] - distance * n, tris, n)
-        return False
+    def seg(pa, pb, qa, qb, t, far, va=None, vb=None):
+        return {
+            "pa": np.asarray(pa, float), "pb": np.asarray(pb, float),
+            "qa": np.asarray(qa, float), "qb": np.asarray(qb, float),
+            # the substrate vertices the seam sits on, where it sits on any. An
+            # end that has one can be asked what the substrate offers past it;
+            # an end that does not -- the far end of a run-on, the rim end of a
+            # fold -- is out over the offset and has nothing left to ask
+            "va": va, "vb": vb,
+            "t": t, "far": int(far), "plane": int(ids[far]),
+            "out": body.face_normals[far],
+        }
 
     segs = []
-    for (i, j), count in seen.items():
-        if count != 1 or not stops_on_wall(i, j):
-            continue
-        tri = holder[(i, j)]
-        p, q, r = (V[tri[0]], V[tri[1]], V[tri[2]])
-        normal = np.cross(q - p, r - p)
-        normal /= np.linalg.norm(normal)
-
-        axis = int(np.abs(normal).argmax())
-        step = np.zeros(3)
-        step[axis] = np.sign(normal[axis]) * out
-
-        # the way the panel faces at this edge: in its own plane, away from the
-        # third corner. The turn carries that face around, so it sets the winding.
-        third = V[[v for v in tri if v not in (i, j)][0]]
-        run = V[j] - V[i]
-        away = (V[i] + V[j]) / 2.0 - third
-        away -= (away @ run) / (run @ run) * run
-        away /= np.linalg.norm(away)
-        segs.append([i, j, step, away])
+    for (f, g), (a, b) in zip(body.face_adjacency, body.face_adjacency_edges):
+        for near, far in ((f, g), (g, f)):
+            if not (covered[near] and lappable[far] and not covered[far]):
+                continue
+            a, b, far = int(a), int(b), int(far)
+            t = _across(body, a, b, far)
+            want = reach(t)
+            if want == 0.0:
+                continue  # that direction is switched off for this skin
+            # shortened to what the receiving face actually offers, measured
+            # from both ends of the seam so the band stays a band. Without this
+            # a 205 mm upstand onto a 34 mm cap-plate reveal ran 120 mm above
+            # the wall and through the cladding's coping
+            want = min(
+                want,
+                *(
+                    _room(body, body.vertices[v], t, coplanar[int(ids[far])],
+                          body.face_normals[far], want)
+                    for v in (a, b)
+                ),
+            )
+            if want < PLANE_TOL:
+                continue
+            root = drip_at if t[2] < -PLANE_TOL else (lambda v: V[v])
+            step = t * want
+            segs.append(
+                seg(V[a], V[b], root(a) + step, root(b) + step, t, far, va=a, vb=b)
+            )
 
     if not segs:
         return []
 
-    touching: dict[int, list] = {}
-    for k, (i, j, _, _) in enumerate(segs):
-        touching.setdefault(i, []).append(k)
-        touching.setdefault(j, []).append(k)
+    def at_a(one, where):
+        return _key(one["pa"]) == where
 
-    def walk(start):
-        chain, cur = [], start
-        while True:
-            nxt = [k for k in touching[cur] if k not in taken]
-            if not nxt:
-                return chain
-            k = nxt[0]
-            taken.add(k)
-            i, j = segs[k][:2]
-            a, b = (i, j) if i == cur else (j, i)
-            chain.append((k, a, b))
-            cur = b
+    def inner(one, where):
+        return one["pa"] if at_a(one, where) else one["pb"]
 
-    taken: set = set()
-    chains = [walk(v) for v, ks in touching.items() if len(ks) == 1]
-    chains += [walk(segs[k][0]) for k in range(len(segs)) if k not in taken]
+    def outer(one, where):
+        return one["qa"] if at_a(one, where) else one["qb"]
 
-    def corner(k1, k2, v):
-        """Where the two outer lines meet, or the plain offset if they are parallel."""
-        (a1, b1, d1, _), (a2, b2, d2, _) = segs[k1], segs[k2]
-        u1, u2 = V[b1] - V[a1], V[b2] - V[a2]
-        if np.linalg.norm(np.cross(u1, u2)) < PLANE_TOL:
-            return V[v] + d1  # same panel continuing; nothing to miter
-        p1, p2 = V[v] + d1, V[v] + d2
-        t = np.linalg.lstsq(np.column_stack([u1, -u2]), p2 - p1, rcond=None)[0][0]
-        return p1 + t * u1
+    def sits_on(one, where):
+        return one["va"] if at_a(one, where) else one["vb"]
+
+    def runs():
+        """Runs of laps meeting end to end, grouped by the face they lap onto."""
+        by_plane: dict[tuple, list] = {}
+        for k, one in enumerate(segs):
+            by_plane.setdefault(one["plane"], []).append(k)
+        found = []
+        for members in by_plane.values():
+            touching: dict[tuple, list] = {}
+            for k in members:
+                touching.setdefault(_key(segs[k]["pa"]), []).append(k)
+                touching.setdefault(_key(segs[k]["pb"]), []).append(k)
+            taken: set = set()
+
+            def walk(start, touching=touching, taken=taken):
+                chain, cur = [], start
+                while True:
+                    nxt = [k for k in touching.get(cur, ()) if k not in taken]
+                    if not nxt:
+                        return chain
+                    k = nxt[0]
+                    taken.add(k)
+                    one, two = _key(segs[k]["pa"]), _key(segs[k]["pb"])
+                    chain.append((k, cur, two if one == cur else one))
+                    cur = chain[-1][2]
+
+            found += [walk(v) for v, ks in touching.items() if len(ks) == 1]
+            found += [walk(_key(segs[k]["pa"])) for k in members if k not in taken]
+        return [run for run in found if run]
+
+    convexity = {}
+    for (f, g), convex in zip(body.face_adjacency, body.face_adjacency_convex):
+        convexity[(int(f), int(g))] = bool(convex)
+        convexity[(int(g), int(f))] = bool(convex)
+
+    def arris_at(v, plane):
+        """Faces meeting this plane at an arris through substrate vertex `v`."""
+        at = body.vertex_faces[v]
+        at = {int(f) for f in at[at >= 0]}
+        found = []
+        for near in at:
+            if int(ids[near]) != plane:
+                continue
+            for far in at:
+                if (near, far) not in convexity:
+                    continue
+                if not onto[far] or covered[far] or int(ids[far]) == plane:
+                    continue
+                found.append((near, far, convexity[(near, far)]))
+        return found
+
+    def carry_on(k, back, here):
+        """Run the lap past its tip, fold it round the corner, or leave it.
+
+        The three answers Duncan's rule allows, asked in that order. Both need
+        to know where the tip stands on the substrate, so an end that is out
+        over the offset -- the far end of a run-on, the rim end of a fold --
+        simply stops, which is what bounds the recursion.
+        """
+        one = segs[k]
+        tip = sits_on(one, here)
+        if tip is None:
+            return False
+        # the seam's own direction, taken from its two ends as *points*. Taking
+        # it from their substrate vertices instead blocks the second end of any
+        # segment whose first end has already run on: running on clears that
+        # end's vertex, and the far end is exactly what this needs to know the
+        # direction. A symmetric substrate then came out lapped on one side.
+        along = inner(one, here) - inner(one, back)
+        span = float(np.linalg.norm(along))
+        if span < PLANE_TOL:
+            return False
+        along = along / span
+        # a run is only free at its end if nothing else turns the same way
+        # there. Two drips meeting at a building corner are one band turning
+        # through 90 degrees -- `drip_at` already solved their shared arris on
+        # both planes -- and treating either as free would fold it onto the
+        # other and leave a hole where the drip used to be. An upstand meeting a
+        # drip at the same vertex is a different matter: they turn opposite ways
+        # and the corner between them is genuinely open, which is the whole of
+        # the north junction.
+        for other in segs:
+            if other is one or not np.allclose(other["t"], one["t"], atol=PLANE_TOL):
+                continue
+            if here in (_key(other["pa"]), _key(other["pb"])):
+                return False
+        stand = body.vertices[tip]
+        if reach(along) == 0.0:
+            return False
+
+        # how far the plane actually carries on past the tip, marched rather
+        # than sampled. Testing the tip and the far end alone -- the first
+        # version -- ran the lap straight over a void between two coplanar
+        # bodies and left it hanging in the gap. A run-on is not cut to fit
+        # either, because it lengthens a quad rather than adding one, so it runs
+        # its whole length or not at all. The scupper is why the length matters:
+        # the parapet's inner face meets the cheek 8.6 mm above the sill, and a
+        # 62 mm drip run on down from there goes straight into the parapet.
+        probe = stand + along * PLANE_TOL * 8
+        want = reach(along)
+        whole = _room(
+            body, stand, along, coplanar[one["plane"]], one["out"], want
+        ) >= want - PLANE_TOL
+        for far in coplanar[one["plane"]] if whole else ():
+            if far == one["far"] or not _inside(body.triangles[far], probe, one["out"]):
+                continue
+            # the same plane carries on: lengthen this lap rather than starting
+            # another, so the two share an edge instead of butting along one
+            move = along * want
+            side = "a" if at_a(one, here) else "b"
+            one["p" + side] = one["p" + side] + move
+            one["q" + side] = one["q" + side] + move
+            one["v" + side] = None
+            return True
+
+        # nothing coplanar, so look for a face meeting this one at the arris the
+        # tip stands on, and fold the lap round onto it
+        for near, far, convex in arris_at(tip, one["plane"]):
+            n = body.face_normals[near]
+            # crossing an arris, the surface turns away from the face it leaves
+            # at a convex edge and toward it at a concave one. That sign is the
+            # whole of the direction: a centroid cannot supply it, because the
+            # receiving plane very often has surface on both sides of the arris
+            # -- part 4's face runs the full width of the rig, past both sides
+            # of the wall whose skirt turns onto it.
+            into = (-n if convex else n)
+            into = into - (into @ body.face_normals[far]) * body.face_normals[far]
+            if np.linalg.norm(into) < PLANE_TOL:
+                continue
+            into = into / np.linalg.norm(into)
+            if reach(into) == 0.0:
+                continue
+            step = into * reach(into)
+            side, rim = inner(one, here), outer(one, here)
+            if _key(side) == _key(rim):
+                continue
+            # the fold only works where the edge it springs from already lies on
+            # the receiving face's own offset plane, which is what a mitered
+            # arris gives it. Where it does not -- a drip whose outer point was
+            # mitered across other planes than this one -- the band would float
+            # off the face by the offset, so leave it rather than place it wrong
+            facing = body.face_normals[far]
+            level = planes[far, 3] + distance
+            if max(abs(side @ facing - level), abs(rim @ facing - level)) > PLANE_TOL:
+                continue
+            # ...and it has to land on the face from **both** ends of that edge.
+            # Checking one end said "all of it lands on the face" while testing a
+            # single point of it, so a fold onto a face shallower than its seam
+            # is long hung over the end of it. Marched on the substrate, so the
+            # ends come back off the offset plane first
+            on_plane = coplanar[int(ids[far])]
+            if any(
+                _room(body, end - facing * distance, into, on_plane, facing,
+                      reach(into)) < reach(into) - PLANE_TOL
+                for end in (side, rim)
+            ):
+                continue
+            seam = {_key(side), _key(rim)}
+            if any(
+                other["plane"] == int(ids[far])
+                and {_key(other["pa"]), _key(other["pb"])} == seam
+                for other in segs
+            ):
+                continue  # already lapped onto that face along this arris
+            segs.append(seg(side, rim, side + step, rim + step, into, far, va=tip))
+            return True
+        return False
+
+    # One continuation at a time, re-reading the runs after each. A run-on moves
+    # the seam it lengthens, so every key taken from `runs()` before it -- the
+    # *other* end of that same run included -- is stale the moment it fires. Held
+    # over a whole pass, that made a symmetric substrate come out asymmetric: a
+    # low wall butting a tall one at both ends ran on at one end and read the
+    # opposite end's vertex as its own, which the `tip == root` guard then
+    # blocked for good. `rounds` bounds the whole loop rather than the passes,
+    # since an end that has already been carried on no longer sits on a substrate
+    # vertex and cannot be carried on again.
+    tried: set = set()
+    while True:
+        pending = [
+            (k, back, here)
+            for run in runs()
+            for k, back, here in (
+                (run[0][0], run[0][2], run[0][1]),
+                (run[-1][0], run[-1][1], run[-1][2]),
+            )
+            if (k, here) not in tried
+        ]
+        if not pending:
+            break
+        # `tried` grows by one every pass and nothing is ever removed from it,
+        # so this terminates on its own: every end is asked once. `rounds` is
+        # the safety net, and it **raises** rather than stopping quietly --
+        # running out of it would drop laps with no sign that anything was
+        # missing, which is the silent-omission failure this module is written
+        # against. It was a fixed count of the *initial* segments before, and
+        # `carry_on` appends: 27 segments became 33 on the shipping bake and the
+        # bound was read once, at 27.
+        if len(tried) >= rounds * max(len(segs), 1):
+            raise ValueError(
+                f"the lap is still finding somewhere to continue after "
+                f"{len(tried)} attempts over {len(segs)} bands. Either the "
+                f"substrate has a run of faces this rule walks forever, or "
+                f"`rounds` is too low for it — it is a safety net, not a budget "
+                f"to spend, so raise it only after checking the geometry"
+            )
+        k, back, here = pending[0]
+        tried.add((k, here))
+        carry_on(k, back, here)
+
+    index: dict[tuple, int] = {_key(v): i for i, v in enumerate(verts)}
 
     def vertex(point):
-        verts.append(point)
-        return len(verts) - 1
+        where = _key(point)
+        if where not in index:
+            index[where] = len(verts)
+            verts.append(np.asarray(point, float))
+        return index[where]
 
-    new = []
-    for chain in chains:
-        if not chain:
-            continue
-        outer = [vertex(V[chain[0][1]] + segs[chain[0][0]][2])]
-        for (k1, _, b1), (k2, _, _) in zip(chain, chain[1:]):
-            outer.append(vertex(corner(k1, k2, b1)))
-        outer.append(vertex(V[chain[-1][2]] + segs[chain[-1][0]][2]))
+    def corner(k1, k2, where):
+        """Where the two outer lines meet, or one tip if they do not turn."""
+        p1, p2 = outer(segs[k1], where), outer(segs[k2], where)
+        u1 = segs[k1]["pb"] - segs[k1]["pa"]
+        u2 = segs[k2]["pb"] - segs[k2]["pa"]
+        # on unit vectors: the cross product of two raw seam directions scales
+        # with their lengths, so a pair of 3 mm seams read parallel below 6 deg
+        # and a pair of 1 mm ones at any angle at all, and the miter was skipped
+        if np.linalg.norm(np.cross(u1 / np.linalg.norm(u1), u2 / np.linalg.norm(u2))) < PLANE_TOL:
+            return p1  # the same lap continuing; nothing to miter
+        if np.linalg.norm(p1 - p2) < PLANE_TOL:
+            return p1  # already agreed -- two drips sharing one mitered arris
+        s = np.linalg.lstsq(np.column_stack([u1, -u2]), p2 - p1, rcond=None)[0][0]
+        return p1 + s * u1
 
-        for n, (k, a, b) in enumerate(chain):
-            loop = [a, b, outer[n + 1], outer[n]]
-            pts = np.array([verts[v] for v in loop])
-            if np.cross(pts, np.roll(pts, -1, axis=0)).sum(axis=0) @ segs[k][3] < 0:
+    faces = []
+    for run in runs():
+        rim = [vertex(outer(segs[run[0][0]], run[0][1]))]
+        for (k1, _, mid), (k2, _, _) in zip(run, run[1:]):
+            rim.append(vertex(corner(k1, k2, mid)))
+        rim.append(vertex(outer(segs[run[-1][0]], run[-1][2])))
+
+        for n, (k, a, b) in enumerate(run):
+            one = segs[k]
+            loop = [vertex(inner(one, a)), vertex(inner(one, b)), rim[n + 1], rim[n]]
+            if len(set(loop)) < 4:
+                continue  # a lap with no width or no length; nothing to emit
+            pts = np.array([verts[i] for i in loop])
+            if np.cross(pts, np.roll(pts, -1, axis=0)).sum(axis=0) @ one["out"] < 0:
                 loop = loop[::-1]
-            new += [[loop[0], loop[1], loop[2]], [loop[0], loop[2], loop[3]]]
-    return new
+            faces += [[loop[0], loop[1], loop[2]], [loop[0], loop[2], loop[3]]]
+    return faces
 
 
 def _trim_below(verts, faces, base):
@@ -676,42 +1138,39 @@ def skin_over(
     parts: list[trimesh.Trimesh],
     distance: float,
     keep=None,
-    turn_down=None,
+    lap=None,
     drop: float = 0.0,
-    turn_out=None,
     out: float = 0.0,
     base: float | None = None,
     classify=None,
 ) -> trimesh.Trimesh:
     """Offset an assembly of parts as a single body.
 
-    The parts are unioned only to find the outer surface — faces where parts
+    The parts are unioned only to find the outer surface -- faces where parts
     touch are interior to that union, so no skin is generated between them. The
     union is a local intermediate and is discarded; `parts` is left untouched
     and stays the substrate geometry.
 
-    `keep(Faces)` optionally selects a subset of the union's
-    faces, returning an open surface rather than a closed shell. The offset is
-    still solved over the whole body first, so vertices on the edge of the
-    selection sit on the same miter they would have if the neighbouring faces
-    were skinned too — the surface stops there rather than being offset in
-    isolation. The selections are therefore evaluated *before* the solve and
-    handed to it, but only so that it can tell a covered face from an uncovered
-    one where the surface folds back on itself; see `_reconcile`. Nothing else
-    in the solve knows what is being kept.
+    `keep(Faces)` selects the faces the skin covers, returning an open surface
+    rather than a closed shell. The offset is still solved over the whole body
+    first, so vertices on the edge of the selection sit on the same miter they
+    would have if the neighbouring faces were skinned too — the surface stops
+    there rather than being offset in isolation.
 
-    `turn_down` selects walls the surface should hang down, `drop` metres below
-    the substrate's top edge, continuing the surface past where `keep` ends it.
-    `turn_out` selects walls the surface stops against rather than covers. Every
-    panel that ends on such a wall is turned `out` metres along the axis it faces,
-    so the termination folds outward as one piece instead of ending on a bare edge.
+    `lap(Faces)` selects the faces the skin may **continue onto** where it runs
+    into them. It is not a second face selection: a lap is a band `drop` or
+    `out` metres wide springing off the arris where the covered surface ends,
+    and only the faces actually reached get one. `_lap` derives which of the two
+    distances applies from the direction it turns in, so a skirt hanging off a
+    coping, an upstand rising against a wall and a collar running sideways round
+    a corner are all one rule with no election between them.
 
     `base` cuts the finished surface at that height and keeps what is above it,
     for a skin that stops at a datum rather than at its own miter — the cladding
     at ground level. `None` is no trim, and is not the same as `0.0`: a height of
     zero is a height, where a `drop` or an `out` of zero is a feature switched
-    off. It is applied last, after the hems and the turn-outs, so it means "no
-    part of this skin goes below `base`" rather than "the offset stops there".
+    off. It is applied last, after the laps, so it means "no part of this skin
+    goes below `base`" rather than "the offset stops there".
 
     `classify(part) -> role` is handed to `Faces` for the predicates to read. It
     is the caller's, thresholds already bound, because those thresholds are
@@ -724,32 +1183,38 @@ def skin_over(
 
     surface = Faces(body, parts, _owner(body, parts), classify)
     kept = keep(surface)
-    none = np.zeros(len(kept), dtype=bool)
-    stop = none if turn_out is None else turn_out(surface)
-    down = none if turn_down is None else turn_down(surface)
+    allowed = (
+        np.zeros(len(kept), dtype=bool) if lap is None else lap(surface)
+    )
+    receivers = _receivers(body, kept, allowed)
 
     # everything this skin puts a surface on. Only a fold consults it
-    skin = planar_offset(body, distance, covered=kept | down | stop)
+    skin = planar_offset(body, distance, covered=kept | receivers)
 
     verts = list(skin.vertices)
     faces = [f.tolist() for f in skin.faces[kept]]
 
-    if turn_down is not None:
+    if receivers.any():
         height = np.abs(body.face_normals[:, 2])
-        faces += _hem(
+        faces += _lap(
             body,
-            skin,
             verts,
             distance,
-            -drop,
-            down,
-            # every skinned vertical plane miters the hem, walls it stops on included
-            skinned_wall=(kept | down | stop) & (height < PLANE_TOL),
-            against=kept & (height > PLANE_TOL),
+            covered=kept,
+            lappable=receivers,
+            # a lap turning a corner lands on a face that need not itself adjoin
+            # anything covered -- at the north junction it turns onto a wall the
+            # roof never reaches -- so what it may spread onto is the whole of
+            # what the skin is allowed to lap onto, not just what it reached.
+            # Knives are the one exception, and they are the same exception
+            # `_receivers` makes: there is no offset for the vertex at all
+            onto=allowed & ~kept & ~_knifed(body, kept),
+            # every skinned vertical plane miters a drip, the ones it laps onto
+            # included -- otherwise the corner where two walls meet splits open
+            skinned_wall=(kept | receivers) & (height < PLANE_TOL),
+            drop=drop,
+            out=out,
         )
-
-    # last, so that hems terminating on the wall turn out along with the panels
-    faces += _turn_out(body, verts, faces, stop, distance, out)
 
     if base is not None:
         faces = _trim_below(verts, faces, base)
