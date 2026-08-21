@@ -269,6 +269,14 @@ triangles: a 62 mm drip off a 34 mm cap plate must still run its full depth down
 coplanar face below. Without it, covering the scupper cheeks sent a 205 mm upstand onto a 34 mm
 reveal, 120 mm above the wall and through the cladding's coping.
 
+Each step of that march reads **every** coplanar triangle holding the probe, not the first one
+found. A lap starts on an arris, so the probe sits on a shared edge or a shared corner every
+single time, and a triangle that merely *corners* on it exits at once and reports no room at all.
+Reading the first in index order made the answer depend on how manifold3d happened to triangulate
+the face, which is mirrored by nothing: the scupper's two sides are one detail mirrored, and the
+march ran the full 205 mm off the cornice's north end and stopped dead at its south end. Do not
+put the `next(...)` back.
+
 **A continuation runs only where the whole of it lands on substrate**, and never onto a knife — `_knifed`
 is shared by the seam receivers and by the faces a continuation may fold onto, because being a
 knife is a property of the face and not of how the lap arrived at it. Filtering only the receivers
@@ -278,7 +286,24 @@ put two 205 mm panels across the mouth of the scupper, on the roof taper's end f
 the substrate presents there, and there are three answers: *the same plane carries on* (an in-line
 butt — the lap runs on), *another face meets it at an arris* (the lap folds round the corner, its
 direction the departing face's normal signed by whether that arris is convex or concave), or
-*nothing* (it ends — Duncan's stop condition). Two guards, both learned the hard way:
+*nothing* (it ends — Duncan's stop condition).
+
+**A run-on runs `out`.** It runs sideways, along the surface, so it is an upstand and never a
+drip — `drop` is for a lap that hangs *below its arris*, which a run-on never does. It used to be
+priced by `reach`, which answers "which way does this lap leave its arris" and is the wrong
+question about the direction of a *run*: a seam raking down a coping laid to fall then read as a
+drip at one end and an upstand at the other, purely because the two ends face opposite ways along
+the same fall, and one straight arris ran on 62 mm one way and 205 mm the other. A skin whose
+`out` is zero has nowhere to run on.
+
+**The fold's probe starts on the arris.** The seam it springs from lies on the offset of the face
+the lap is *leaving* as well as of the face it is turning onto, so it sits `distance` off the
+arris along the fold direction — past it at a concave corner, which is harmless, and short of it
+at a convex one, where the march starts out over the void beyond the corner and reports no room at
+all. Until that was fixed no fold was ever placed at a convex corner, which is why the Unit8
+coping's upstand stopped dead at the building corner instead of wrapping onto `Headhouse-N`.
+
+Two guards on all of it, both learned the hard way:
 
 - A run is only free at its end if **nothing else turns the same way there**. Two drips meeting at
   a building corner are one band turning through 90°, and treating either as free folded it onto

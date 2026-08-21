@@ -306,6 +306,7 @@ def test_the_transcribed_substrate_round_trips_through_obj(tmp_path):
 
 REPO = Path(__file__).resolve().parent.parent
 BAKE = REPO / "headhouse-walls-parapets-caps-clt-insulation.obj"
+LIVE = REPO / "unit8-parapets-caps-clt-insulation-headhouse-extended-cornices.obj"
 
 
 def test_the_baked_headhouse_reads_and_skins():
@@ -391,6 +392,57 @@ def test_the_baked_headhouse_reads_and_skins():
     # because closest_point returns an unsigned distance
     for skin in built.values():
         assert not any(part.contains(skin.vertices).any() for part in parts)
+
+
+def test_the_scupper_comes_out_symmetrical_on_the_live_bake():
+    """Duncan, 2026-08-21: *"The scupper is symmetrical."*
+
+    It is — the slot, its cheeks, the cornice that runs past both jambs and the
+    parapet around them are all mirrored about `y = 4.985` — so the membrane
+    over it has to be, and it was not: the south side was missing the drip's
+    return round the cornice end and 205 mm of the upstand beside the mouth.
+    Nothing in the rules was asymmetric. `_room` read the first coplanar triangle
+    that held its probe rather than every one of them, so the answer came out of
+    the union's triangulation order, which is mirrored by nothing.
+
+    The **vertex set** is pinned and the triangulation is not: the two sides
+    agree point for point, while which diagonal each quad is split on does not
+    have to mirror and does not.
+    """
+    from build import FACADE, RAINSCREEN, classifier, group_caps, group_cornices
+    from build import skins, _skin_from
+    from skin import parameters, substrate
+
+    parts = substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN})
+    params = parameters.load_validated()
+    group_cornices(parts)
+    group_caps(parts, classifier(params))
+    membrane = _skin_from(
+        next(spec for spec in skins(params) if spec["name"] == "Membrane"), parts
+    )
+
+    # the scupper's own neighbourhood: outboard of the parapet's inner face,
+    # within a jamb's reach of the slot, and above the cornice's drip
+    tri = membrane.triangles
+    near = (
+        (tri[:, :, 0] <= 8.6).all(axis=1)
+        & (tri[:, :, 1] >= 4.3).all(axis=1)
+        & (tri[:, :, 1] <= 5.7).all(axis=1)
+        & (tri[:, :, 2] >= 14.3).all(axis=1)
+    )
+    assert near.sum() > 20, "the scupper is not dressed at all"
+
+    axis = 4.985
+    lattice = lambda p: tuple(np.round(np.asarray(p) / 1e-6).astype(np.int64))
+    points = tri[near].reshape(-1, 3)
+    here = {lattice(p) for p in points}
+    mirrored = {lattice((p[0], 2 * axis - p[1], p[2])) for p in points}
+    stray = here ^ mirrored
+    assert not stray, (
+        f"{len(stray)} vertices of the scupper have no counterpart across "
+        f"y = {axis}: " + str(sorted(np.round(np.array(k) * 1e-6, 4).tolist()
+                                     for k in stray)[:8])
+    )
 
 
 def test_the_bake_needs_ear_clipping_to_read_at_all():

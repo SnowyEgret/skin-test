@@ -657,22 +657,37 @@ def _room(body, here, direction, on_plane, normal, want) -> float:
     than the face it lands on does not overhang, it is refused or shortened to
     fit. This is what decides which.
 
-    It marches: find the coplanar triangle holding the point just past `here`,
-    take that triangle's exit, look for a coplanar neighbour holding the point
-    just past *that*, and carry on. Marching rather than testing the far end
-    alone, because the union triangulates a face and one lap commonly crosses
-    several triangles of it — the drip down a 34 mm cap plate runs straight on
-    over the parapet's coplanar face below and must be allowed its full 62 mm.
+    It marches: find the coplanar triangles holding the point just past `here`,
+    take the furthest exit any of them offers, look for coplanar neighbours
+    holding the point just past *that*, and carry on. Marching rather than
+    testing the far end alone, because the union triangulates a face and one lap
+    commonly crosses several triangles of it — the drip down a 34 mm cap plate
+    runs straight on over the parapet's coplanar face below and must be allowed
+    its full 62 mm.
+
+    **Every triangle holding the probe, not the first one found.** A lap starts
+    on an arris, so the probe sits on a shared edge or a shared corner every
+    time, and two or three coplanar triangles hold it while only some of them
+    carry the ray onward. Reading the first in index order made the answer depend
+    on how the union happened to triangulate the face: the cornice's two ends are
+    one detail mirrored, and the march ran the full 205 mm off the north one and
+    stopped dead at the south one, where a triangle cornering on the probe came
+    first and reported no room at all.
     """
     reached = 0.0
     for _ in range(len(on_plane) + 1):
         step = here + direction * (reached + PLANE_TOL * 8)
-        holder = next(
-            (f for f in on_plane if _inside(body.triangles[f], step, normal)), None
-        )
-        if holder is None:
+        onward = [
+            _leaves(body.triangles[f], here, direction, normal)
+            for f in on_plane
+            if _inside(body.triangles[f], step, normal)
+        ]
+        if not onward:
             return reached
-        reached = max(reached, _leaves(body.triangles[holder], here, direction, normal))
+        moved = max(onward)
+        if moved <= reached + PLANE_TOL:
+            return reached  # the surface is held here but carries the ray no further
+        reached = moved
         if reached >= want:
             return want
     return min(reached, want)
@@ -723,10 +738,30 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
     mitered: dict[int, np.ndarray] = {}
 
     def drip_at(v: int) -> np.ndarray:
-        """The arris vertex, mitered onto every skinned vertical plane at it."""
+        """The arris vertex, mitered onto every skinned vertical plane at it.
+
+        Raises where there is no such plane. `np.linalg.lstsq` on a zero-row
+        system returns `[0, 0, 0]` rather than complaining, which would root the
+        drip on the **substrate** instead of `distance` out from it -- geometry
+        buried in the solid, with a clean residual and nothing to report it. The
+        two shipped `lap` predicates cannot reach this, since both admit only
+        vertical faces and a drip's receiver is one of them; a predicate that
+        admits a sloped receiver can, and should be told so rather than skinned
+        wrongly.
+        """
         if v not in mitered:
             at = body.vertex_faces[v]
             at = [f for f in at[at >= 0] if skinned_wall[f]]
+            if not at:
+                raise ValueError(
+                    f"no skinned vertical face at vertex {v} "
+                    f"{body.vertices[v].tolist()} to miter a drip onto. A drip is "
+                    f"measured on the substrate, from the arris mitered onto the "
+                    f"offset planes of the vertical faces meeting there, and this "
+                    f"vertex has none — the skin is lapping downward onto a face "
+                    f"that is not vertical. Either narrow this skin's `lap` "
+                    f"predicate to vertical faces, or give it `drop: 0.0`"
+                )
             normals = np.unique(np.round(body.face_normals[at] / PLANE_TOL), axis=0)
             t = np.linalg.lstsq(
                 normals * PLANE_TOL, np.full(len(normals), distance), rcond=None
@@ -892,8 +927,20 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
             if here in (_key(other["pa"]), _key(other["pb"])):
                 return False
         stand = body.vertices[tip]
-        if reach(along) == 0.0:
-            return False
+        # A run-on runs **sideways**, along the surface, so it is an upstand's
+        # `out` and never a drip's `drop`. `reach` prices a *lap* direction --
+        # the way the band leaves its arris -- and asking it about the direction
+        # of the run is a category error: it read a seam raking down a sloped
+        # coping as a drip and billed the run-on 62 mm at one end of that coping
+        # and 205 mm at the other, purely because the two ends face opposite ways
+        # along the fall.
+        #
+        # A skin whose `out` is zero has nowhere to run on -- but it may still
+        # **fold**, which is priced by `reach(into)` and is `drop` for a fold
+        # that turns downward. So this gates the run-on alone and not the whole
+        # of `carry_on`: an early return here would have denied the cladding,
+        # whose `out` is 0.0 and whose `drop` is not, every corner it turns.
+        want = out
 
         # how far the plane actually carries on past the tip, marched rather
         # than sampled. Testing the tip and the far end alone -- the first
@@ -904,8 +951,7 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
         # the parapet's inner face meets the cheek 8.6 mm above the sill, and a
         # 62 mm drip run on down from there goes straight into the parapet.
         probe = stand + along * PLANE_TOL * 8
-        want = reach(along)
-        whole = _room(
+        whole = want > 0.0 and _room(
             body, stand, along, coplanar[one["plane"]], one["out"], want
         ) >= want - PLANE_TOL
         for far in coplanar[one["plane"]] if whole else ():
@@ -954,10 +1000,22 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
             # Checking one end said "all of it lands on the face" while testing a
             # single point of it, so a fold onto a face shallower than its seam
             # is long hung over the end of it. Marched on the substrate, so the
-            # ends come back off the offset plane first
+            # ends come back off the offset plane first -- and then back onto the
+            # arris, which is the second offset. The seam lies on the offset of
+            # the face the lap is *leaving* as well, so it sits `distance` off the
+            # arris along `into`: past it at a concave corner, which is harmless,
+            # and short of it at a convex one, where the march then starts out
+            # over the void beyond the corner and reports no room at all. That is
+            # what stopped the Unit8 coping's upstand wrapping the building corner
+            # onto `Headhouse-N`. `tip` is on the arris, so it supplies the slide.
             on_plane = coplanar[int(ids[far])]
+
+            def at_arris(end, into=into, facing=facing, stand=stand):
+                base = end - facing * distance
+                return base + ((stand - base) @ into) * into
+
             if any(
-                _room(body, end - facing * distance, into, on_plane, facing,
+                _room(body, at_arris(end), into, on_plane, facing,
                       reach(into)) < reach(into) - PLANE_TOL
                 for end in (side, rim)
             ):
@@ -996,14 +1054,22 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
         if not pending:
             break
         # `tried` grows by one every pass and nothing is ever removed from it,
-        # so this terminates on its own: every end is asked once. `rounds` is
-        # the safety net, and it **raises** rather than stopping quietly --
-        # running out of it would drop laps with no sign that anything was
-        # missing, which is the silent-omission failure this module is written
-        # against. It was a fixed count of the *initial* segments before, and
-        # `carry_on` appends: 27 segments became 33 on the shipping bake and the
-        # bound was read once, at 27.
-        if len(tried) >= rounds * max(len(segs), 1):
+        # so this terminates on its own. `rounds` is the safety net, and it
+        # **raises** rather than stopping quietly -- running out of it would drop
+        # laps with no sign that anything was missing, which is the
+        # silent-omission failure this module is written against. It was a fixed
+        # count of the *initial* segments before, and `carry_on` appends: 27
+        # segments became 33 on the shipping bake and the bound was read once,
+        # at 27.
+        #
+        # A band costs up to **four** entries, not two: it has two ends, and a
+        # run-on moves the end it lengthens, so that end is asked again under its
+        # new key and refused at once because the run-on cleared its substrate
+        # vertex. Against a bound of `rounds` per band the rig already measures
+        # 2.00, which left a substrate whose laps run on at both ends tripping a
+        # raise that blames the geometry for a correct model. The ceiling is 2
+        # per end; `rounds` is headroom above it.
+        if len(tried) >= rounds * 2 * max(len(segs), 1):
             raise ValueError(
                 f"the lap is still finding somewhere to continue after "
                 f"{len(tried)} attempts over {len(segs)} bands. Either the "

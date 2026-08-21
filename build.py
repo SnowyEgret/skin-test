@@ -176,7 +176,17 @@ def _wall_planes(bodies) -> np.ndarray:
         rows.append(np.column_stack([normals, offsets]))
     if not rows:
         return np.zeros((0, 4))
-    return np.unique(np.round(np.vstack(rows) / TOL) * TOL, axis=0)
+    # deduplicated on a rounded key but returned **unrounded**. `_next_lift`
+    # matches these rows against each other within `TOL`, and rounding both
+    # sides onto the same lattice first turns that tolerance into exact equality
+    # of a rounded key — the thing CLAUDE.md's Tolerances section forbids and
+    # `_plane_ids` was rewritten to stop doing. A wall running diagonally in plan
+    # has a `d` that lands nowhere near the lattice, so two triangles of one face
+    # can straddle a boundary; `flush` would then find no shared plane and `rise`
+    # would raise `flat top` on a wall that plainly has a lift above it.
+    rows = np.vstack(rows)
+    _, first = np.unique(np.round(rows / TOL, 0), axis=0, return_index=True)
+    return rows[np.sort(first)]
 
 
 def _next_lift(parts, elements, members) -> list:

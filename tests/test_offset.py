@@ -708,9 +708,11 @@ def test_a_skin_with_no_datum_is_not_trimmed():
     assert membrane["base"] is None
 
     low = _skin_from(dict(membrane, base=1.5), parts)
-    # 1.090, not the 1.164 this read before 2026-08-20: the membrane now laps
-    # onto part 3's -X end as well, and drips 62 mm down it from a lower corner
-    assert np.isclose(_skin_from(membrane, parts).vertices[:, 2].min(), 1.090, atol=1e-3)
+    # 0.959, not the 1.090 this read before 2026-08-21: the turn-out against
+    # part 4 now folds round the corner onto the wall beside it — the fold's
+    # probe used to start `distance` short of the arris and read the void past
+    # the corner as no room — and that band then runs on 205 mm down the wall
+    assert np.isclose(_skin_from(membrane, parts).vertices[:, 2].min(), 0.959, atol=1e-3)
     assert low.vertices[:, 2].min() == 1.5  # the same skin, cut where told
 
 
@@ -930,6 +932,205 @@ def test_an_in_line_butt_runs_on_the_same_way_at_both_ends():
         f"ran on to x {west:.4f} at one end and {east:.4f} at the other, on a "
         "substrate symmetric about x = 1.5"
     )
+
+
+def test_a_run_on_is_priced_as_an_upstand_whichever_way_the_seam_rakes():
+    """Duncan, 2026-08-21: *"F39 does not extend as far east as before (.062 east
+    of V48 — should be .205)."*
+
+    A run-on runs **sideways**, along the surface, so it is an upstand's `out`
+    and never a drip's `drop`. It used to be priced by `reach` — which answers
+    "which way does this lap leave its arris" — applied to the direction of the
+    *run*, and a seam raking down a coping laid to fall therefore read as a drip
+    at one end and an upstand at the other, purely because the two ends face
+    opposite ways along the same fall. Measured on this fixture before the fix:
+    199 mm west, 60 mm east, off one straight arris.
+
+    So the assertion is symmetry in plan. The wedge's top slopes, but its two
+    ends sit at x = 1 and x = 2 against identical neighbours, and a run-on of the
+    same length along the seam projects to the same length in x at each end.
+    """
+    top = substrate.polyhedron(
+        [(1, 0, 0), (2, 0, 0), (2, 0.4, 0), (1, 0.4, 0),
+         (1, 0, 1.0), (2, 0, 0.9), (2, 0.4, 0.9), (1, 0.4, 1.0)],
+        [(0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4),
+         (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)],
+    )
+    parts = [
+        top,
+        substrate.prism((0.0, 0.0, 0.0), (1.0, 0.4, 2.0)),
+        substrate.prism((2.0, 0.0, 0.0), (3.0, 0.4, 2.0)),
+    ]
+    d = 0.01
+    skin = skin_over(
+        parts, d,
+        keep=lambda faces: (faces.normals[:, 2] > 1e-6) & (faces.centres[:, 2] < 1.5),
+        lap=lambda faces: np.abs(faces.normals[:, 2]) < 1e-6,
+        drop=0.06, out=0.2,
+    )
+    on = np.abs(skin.triangles[:, :, 1] - (0.0 - d)).max(axis=1) < 1e-6
+    x = skin.triangles[on][:, :, 0]
+    west, east = float(x.min()), float(x.max())
+    assert west < 1.0 - d and east > 2.0 + d, "neither end ran on at all"
+    assert (1.5 - west) == pytest.approx(east - 1.5, abs=1e-6), (
+        f"ran on to x {west:.4f} at one end and {east:.4f} at the other, off one "
+        "straight arris on a substrate symmetric in plan about x = 1.5"
+    )
+
+
+def test_room_reads_every_triangle_holding_the_probe_not_the_first():
+    """`_room` marches, and a lap always starts on an arris, so its probe sits on
+    a shared edge or a shared corner every single time. Two or three coplanar
+    triangles hold it and only some of them carry the ray onward — a triangle
+    that merely *corners* on the probe exits at once and reports no room at all.
+
+    Reading the first such triangle in index order made the answer depend on how
+    manifold3d happened to triangulate the face. These two are transcribed from
+    the shipping bake's east facade at the cornice's south end, where it bit:
+    marching south the corner triangle comes first and says 0, and the same
+    detail mirrored at the cornice's *north* end had the carrying triangle first
+    and ran the full 205 mm. That is Duncan's *"F34 is missing on the south side
+    of the scupper. The scupper is symmetrical."*
+
+    A made-up pair will not reproduce it. `_inside` admits the corner triangle
+    only within `PLANE_TOL` — the probe is 9.6e-7 outside its edge — and a
+    triangle that genuinely contained the probe would carry the ray too.
+    """
+    from skin.offset import _room
+
+    corners_on_it = [
+        [8.079999971389771, 5.185000052452087, 14.49500005340576],
+        [8.079999971389771, 7.119999995231628, 14.717999983787536],
+        [8.079999971389771, 5.284999957084655, 14.49500005340576],
+    ]
+    carries_the_ray = [
+        [8.079999971389771, 5.284999957084655, 14.425000000953673],
+        [8.079999971389771, 5.284999957084655, 14.49500005340576],
+        [8.079999971389771, 7.119999995231628, 14.717999983787536],
+    ]
+    here = np.array([8.079999971389771, 5.284999957084655, 14.49500005340576])
+    facing = np.array([-1.0, 0.0, 0.0])
+    south = np.array([0.0, 1.0, 0.0])
+
+    for label, order in (("corner first", 0), ("carrier first", 1)):
+        pair = [corners_on_it, carries_the_ray][:: 1 if order == 0 else -1]
+        body = trimesh.Trimesh(
+            vertices=np.array(pair).reshape(-1, 3),
+            faces=np.arange(6).reshape(2, 3),
+            process=False,
+        )
+        assert _room(body, here, south, [0, 1], facing, 0.205) == pytest.approx(
+            0.205
+        ), f"{label}: the march stopped on a triangle that only corners on it"
+
+
+def test_a_lap_folds_round_a_convex_corner_it_reaches():
+    """Duncan, 2026-08-21: *"F28 does not wrap the corner like before."*
+
+    A low wall runs into a tall one and the lap turns up its face; that face ends
+    at the building corner, and the lap folds round onto the return. The check
+    that the fold lands on substrate marches from the seam, and the seam lies on
+    the offset of the face the lap is *leaving* as well as of the face it is
+    turning onto — so it sits `distance` off the arris. Past it at a concave
+    corner, which is harmless; short of it at a convex one, where the march
+    starts out over the void beyond the corner and reports no room at all. No
+    fold was ever placed at a convex corner before this was fixed.
+
+    `drop` is zero here so that the only bands in the skin are the ones this
+    tests: with a drip the low wall's own face would carry one too.
+    """
+    low = substrate.prism((0.0, 0.0, 0.0), (1.0, 0.4, 1.0))
+    tall = substrate.prism((1.0, 0.0, 0.0), (2.0, 1.0, 2.0))
+    parts = [low, tall]
+    d, out = 0.01, 0.2
+
+    skin = skin_over(
+        parts, d,
+        keep=lambda faces: (faces.normals[:, 2] > 1e-6)
+        & (faces.centres[:, 2] < 1.5),
+        lap=lambda faces: np.abs(faces.normals[:, 2]) < 1e-6,
+        drop=0.0, out=out,
+    )
+    round_it = np.abs(skin.triangles[:, :, 1] - (0.0 - d)).max(axis=1) < 1e-6
+    assert round_it.any(), (
+        "the upstand stopped at the building corner instead of folding round "
+        "onto the tall wall's return face"
+    )
+    reach = skin.triangles[round_it][:, :, 0].max()
+    assert reach == pytest.approx(1.0 - d + out, abs=1e-6), (
+        f"the fold ran to x = {reach:.4f} rather than {1.0 - d + out}"
+    )
+    assert clearance(parts, skin) > d - 1e-6
+
+
+def test_wall_planes_are_not_snapped_onto_the_tolerance_lattice():
+    """`_next_lift` matches one element's vertical planes against another's
+    within `TOL`. Rounding both sides onto the `TOL` lattice first turns that
+    into **exact equality of a rounded key**, which CLAUDE.md's Tolerances
+    section forbids and which `_plane_ids` was rewritten to stop doing: two
+    triangles of one face can land either side of a lattice boundary, `flush`
+    then finds no shared plane, and `rise` raises `flat top` on a wall that
+    plainly has a lift above it.
+
+    Axis-aligned walls hide it, because their `d` is already a whole number of
+    micrometres. A wall running diagonally in plan does not, which is what this
+    pins. Found by `/code-review high` 2026-08-21; latent on all three
+    substrates, every one of which is axis-aligned.
+    """
+    from build import TOL, _wall_planes
+
+    wedge = substrate.polyhedron(
+        [(0, 0, 0), (1, 0, 0), (0.4, 0.7, 0),
+         (0, 0, 1), (1, 0, 1), (0.4, 0.7, 1)],
+        [(0, 2, 1), (3, 4, 5), (0, 1, 4, 3), (1, 2, 5, 4), (2, 0, 3, 5)],
+    )
+    rows = _wall_planes([wedge])
+    assert len(rows) == 3, "three vertical faces on a triangular prism"
+
+    diagonal = rows[np.abs(np.abs(rows[:, :3]).max(axis=1) - 1.0) > 1e-9]
+    assert len(diagonal), "the fixture has no plane that is off-axis in plan"
+    off = np.abs(diagonal[:, 3] / TOL - np.round(diagonal[:, 3] / TOL))
+    assert off.max() > 1e-6, (
+        "a diagonal wall's offset came back exactly on the TOL lattice, so it "
+        "was rounded: `_next_lift`'s tolerance match is exact equality again"
+    )
+
+
+def test_a_drip_with_no_vertical_face_to_miter_onto_raises():
+    """`np.linalg.lstsq` on a zero-row system returns `[0, 0, 0]` rather than
+    complaining, so `drip_at` used to hand back the **substrate** vertex where no
+    face at it was a skinned vertical one — rooting the drip band on the solid
+    instead of `distance` out from it.
+
+    Measured on this fixture with the guard removed: it built, four faces,
+    `offset_residual` 4.34e-17, and `clearance` **0.0000 mm** against an 8 mm
+    offset. Nothing in the stack reports that, which is the silent-omission
+    failure this module is written against. Found by `/code-review high`
+    2026-08-21.
+
+    Unreachable through either shipped `lap` predicate — both admit only
+    vertical faces, and a drip's receiver is one of them — so the fixture leans
+    a face over and laps onto that.
+    """
+    lean = substrate.polyhedron(
+        [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0),
+         (0, 0, 1), (0.7, 0, 1), (0.7, 1, 1), (0, 1, 1)],
+        [(0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4),
+         (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)],
+    )
+    sloped = (np.abs(lean.face_normals[:, 2]) > 0.1) & (
+        np.abs(lean.face_normals[:, 2]) < 0.9
+    )
+    assert sloped.any(), "the fixture has no leaning face to lap onto"
+
+    with pytest.raises(ValueError, match=r"no skinned vertical face at vertex"):
+        skin_over(
+            [lean], 0.01,
+            keep=lambda faces: faces.normals[:, 2] > 1 - 1e-6,
+            lap=lambda faces: (np.abs(faces.normals[:, 2]) > 0.1)
+            & (np.abs(faces.normals[:, 2]) < 0.9),
+            drop=0.06, out=0.0,
+        )
 
 
 def test_a_knife_is_only_a_knife_where_the_two_faces_touch():
