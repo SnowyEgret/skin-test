@@ -44,12 +44,23 @@ fall: 0.707
 # skin's `distance` is not degenerate. `null` means the skin is not trimmed at
 # all — and note that `null` and `0.0` differ here, where for `drop` and `out`
 # zero *is* the off switch. A trim height of zero is a real height.
+#
+# `close` is not a seed either, for the same reason turned the other way up: it
+# is a bound on a cleanup, not a distance any surface is built to. It is the
+# widest tear `skin/clean.py` will gusset — see "Cleaning a mesh" in CLAUDE.md —
+# and zero switches that off. It is authored rather than derived because a
+# cleanup may author a bound where a rule may not, and because the obvious
+# derivation is wrong: the membrane's one tear is twice the offset across in
+# plan, but 18.016 mm along its own sloped plane, so `2 x distance` would miss
+# the very tear it was reasoned from.
 skins:
   - name: Membrane
     distance: 0.008
     drop: 0.062      # a lap hanging below its arris — the drip over a coping
     out: 0.205       # a lap rising or running sideways — the upstand at an abutment
     base: null       # nothing of it reaches the ground; nothing to trim
+    close: 0.025     # the scupper tear is 18.016 mm across; the narrowest free
+                     # edge that must NOT be filled is 248.268 mm
     display: solid
   - name: Cladding
     distance: 0.085
@@ -57,4 +68,5 @@ skins:
     out: 0.0         # the cladding never laps upward or sideways
     base: 0.0        # stops at ground level rather than at its own miter, which
                      # would hang `distance` below the substrate's underside
+    close: 0.0       # the cladding tears nowhere; nothing to gusset
     display: wire

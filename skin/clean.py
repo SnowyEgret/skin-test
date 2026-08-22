@@ -22,13 +22,15 @@ and it takes holes.
 
 from __future__ import annotations
 
+import collections
+
 import manifold3d
 import numpy as np
 import trimesh
 from shapely import STRtree
-from shapely.geometry import Polygon
+from shapely.geometry import LineString, Polygon
 from shapely.geometry.polygon import orient
-from shapely.ops import unary_union
+from shapely.ops import polygonize, unary_union
 
 from .offset import PLANE_TOL, _basis, _flat, _plane_rows
 
@@ -193,14 +195,156 @@ def _straightened(ring, corners: set[int]):
     return [index[k] for k in keep], plan[keep], way
 
 
-def clean(mesh: trimesh.Trimesh, dissolve: bool = False) -> trimesh.Trimesh:
+def _border(mesh: trimesh.Trimesh) -> set[tuple[int, int]]:
+    """The half-edges with no face on the other side, each in its face's own
+    direction.
+
+    Direction is the whole point of reading them as half-edges rather than as
+    unordered pairs: two faces sharing an edge traverse it opposite ways, so a
+    face filling a hole has to run the *reverse* of the border half-edge it
+    lands on. That is what orients a gusset, and it is read off the mesh rather
+    than guessed from a normal.
+    """
+    free = trimesh.grouping.group_rows(mesh.edges_sorted, require_count=1)
+    return {(int(a), int(b)) for a, b in mesh.edges[free]}
+
+
+def _loops(half: set[tuple[int, int]]) -> list[set[tuple[int, int]]]:
+    """The border split into its connected pieces, each a set of half-edges.
+
+    Connected rather than walked: where a surface is torn at a fold the tear
+    pinches to a point, and the membrane's is exactly that — two triangles
+    meeting at one vertex of degree four. A walk would have to guess which way
+    to turn there, so nothing walks; `polygonize` reads the piece as the planar
+    graph it is.
+    """
+    adjacent = collections.defaultdict(set)
+    for a, b in half:
+        adjacent[a].add(b)
+        adjacent[b].add(a)
+    seen, pieces = set(), []
+    for start in adjacent:
+        if start in seen:
+            continue
+        seen.add(start)
+        stack, part = [start], {start}
+        while stack:
+            here = stack.pop()
+            for there in adjacent[here]:
+                if there not in seen:
+                    seen.add(there)
+                    part.add(there)
+                    stack.append(there)
+        pieces.append({(a, b) for a, b in half if a in part})
+    return pieces
+
+
+def _gussets(mesh: trimesh.Trimesh, width: float) -> tuple[list[list[int]], int]:
+    """Triangles closing every border loop that is flat and no wider than `width`.
+
+    A **gusset** is the one face here that is not the offset of anything: it
+    bridges a tear the offset could not span. Where the substrate has no
+    thickness — a roof knifing into a wall on the wall's own plane — the two
+    offset surfaces part by twice the distance and the skin opens along the
+    contact, which is `offset._reconcile` declining to move one vertex two ways
+    at once. The tear is bounded by vertices the offset already placed, so
+    closing it invents no point; only the surface between them is new.
+
+    Two conditions on the loop, and they do different jobs:
+
+    - **flat**, to `PLANE_TOL`. A loop that does not lie in a plane has no
+      surface to be filled with, only a choice of surfaces, and choosing is not
+      a cleanup's business. Measured, this is not a close call: the membrane's
+      tear is flat to 1.5e-15 m, and every legitimate free edge in either skin
+      on any of the three substrates stands at least 94 mm off its own best-fit
+      plane, because a skin's perimeter wraps a building.
+    - **narrow**, to the caller's `width`. This is an **authored** bound, which
+      a cleanup is allowed and a derivation is not. It is deliberately not
+      derived as twice the offset: the membrane's tear is 16 mm across in plan
+      but 18.016 mm along its own plane, because the roof it opens on falls, so
+      twice the distance would not catch the very tear it was reasoned from.
+
+    The width is the spread across the loop's minor principal axis — a slot's
+    own thinness. An exact minimal width would be rotating calipers; with 18 mm
+    to measure against a 248 mm next-smallest there is nothing here for the
+    difference to change.
+
+    And one condition on the region rather than on the loop, which is derived
+    and does the load-bearing safety work: **a region the mesh already covers is
+    not a tear**. Without it the worst case is silent and severe — the perimeter
+    of any flat sheet narrower than `width` is a flat narrow loop, so a 20 mm
+    cover flashing would have its own outline "closed" and come out doubled,
+    two coincident surfaces reported as a tidy-up. A tear is by construction
+    where the surface is *missing*, so nothing coplanar with it is there; the
+    membrane's is coplanar with nothing at all. This is what lets the authored
+    bound stay a bound on size rather than a guess about what a loop means.
+    """
+    half = _border(mesh)
+    faces, closed = [], 0
+    for piece in _loops(half):
+        loop = sorted({v for edge in piece for v in edge})
+        points = mesh.vertices[loop]
+        centre = points.mean(axis=0)
+        # the plane the loop lies in, if it lies in one: the least-spread
+        # direction is its normal, and the next-least is the way it is thin
+        axes = np.linalg.svd(points - centre)[2]
+        spread = (points - centre) @ axes.T
+        if np.abs(spread[:, 2]).max() > PLANE_TOL or np.ptp(spread[:, 1]) > width:
+            continue
+
+        u, v = _basis(axes[2])
+        plan = _flat(points, centre, u, v)
+        held = {tuple(q): i for q, i in zip(plan, loop)}
+        at = dict(zip(loop, plan))
+
+        # what the mesh already covers in this plane, matched either way up for
+        # the reason `_groups` is. A tear is where the surface is missing, so a
+        # region that is already surface is not one
+        row = np.append(axes[2], axes[2] @ centre)
+        rows = _plane_rows(mesh)
+        coplanar = (
+            Polygon(_flat(corners, centre, u, v))
+            for corners, other in zip(mesh.triangles, rows)
+            if min(np.abs(other - row).max(), np.abs(other + row).max()) < PLANE_TOL
+        )
+        covered = unary_union([face for face in coplanar if face.is_valid and face.area > 0])
+        for region in polygonize(LineString([at[a], at[b]]) for a, b in piece):
+            if region.intersection(covered).area > 0:
+                continue
+            region = orient(region, 1.0)  # exteriors CCW, holes CW: what triangulate reads
+            rings = [region.exterior, *region.interiors]
+            index = [held[tuple(q)] for ring in rings for q in ring.coords[:-1]]
+            # a face filling this region shares every border edge with the face
+            # already on it, so it must traverse that edge the other way. If the
+            # oriented ring runs *with* a half-edge, the fill is wound against it
+            outline = [held[tuple(q)] for q in region.exterior.coords[:-1]]
+            along = any(
+                (outline[k], outline[(k + 1) % len(outline)]) in half
+                for k in range(len(outline))
+            )
+            for tri in manifold3d.triangulate(
+                [np.array(ring.coords[:-1]) for ring in rings], allow_convex=False
+            ):
+                corner = [index[i] for i in tri]
+                faces.append(corner[::-1] if along else corner)
+            closed += 1
+    return faces, closed
+
+
+def clean(
+    mesh: trimesh.Trimesh, dissolve: bool = False, close: float = 0.0
+) -> trimesh.Trimesh:
     """`mesh` with each of its planes unioned in 2D and re-triangulated.
 
     Faces that overlap within a plane are resolved into one covering, so the
     area is the area actually covered rather than the sum of the triangles.
     Faces on different planes are untouched by each other: this says nothing
-    about two planes intersecting, and it cannot close a hole — both are
-    separate mechanisms.
+    about two planes intersecting.
+
+    Closing a hole is a separate mechanism, and is `close` — a **third**
+    operation, off at zero, taking the widest tear that may be gusseted. See
+    `_gussets`: nothing about a hole falls out of a coplanar union, because a
+    tear at a fold is coplanar with nothing.
 
     Which faces are one sheet, and which are two sheets back to back, is
     `_sheets`; the two ways up are unioned apart and re-triangulated together,
@@ -212,6 +356,11 @@ def clean(mesh: trimesh.Trimesh, dissolve: bool = False) -> trimesh.Trimesh:
     holds it and that no ring turns at. That is a tidy-up rather than a
     derivation — it is allowed an authored bound where a rule is not — and it
     is separate because the outlines it thins are correct either way.
+
+    The three run in that order — union, dissolve, close — because each reads
+    the outline the one before it left. In particular a gusset is fitted to the
+    border of the *finished* surface: the union retraces the boundary a bowtie
+    left, and a border edge that is an artefact is not a tear.
     """
     points, plans = _Points(), []
     for rep, group in _groups(mesh):
@@ -291,6 +440,18 @@ def clean(mesh: trimesh.Trimesh, dissolve: bool = False) -> trimesh.Trimesh:
     )
     out.update_faces(out.nondegenerate_faces())
     out.remove_unreferenced_vertices()
+
+    # measured before any gusset is added, so that `overlap_removed` stays what
+    # the union dissolved rather than that less what a gusset put back
+    dissolved = float(mesh.area - out.area)
+    gussets, closed = _gussets(out, close) if close > 0 else ([], 0)
+    if gussets:
+        # the gussets use vertices the mesh already has, so only the faces grow
+        out = trimesh.Trimesh(
+            vertices=out.vertices,
+            faces=np.vstack([out.faces, np.array(gussets, dtype=np.int64)]),
+            process=False,
+        )
     # what made the mesh is worth carrying — the offset's distance, its residual
     # — but nothing keyed on an index is: `offset._plane_ids` holds an id per
     # face and `folds` a list of vertex indices, and both were rebuilt here.
@@ -299,6 +460,10 @@ def clean(mesh: trimesh.Trimesh, dissolve: bool = False) -> trimesh.Trimesh:
     out.metadata.update(
         {k: v for k, v in mesh.metadata.items() if k not in ("plane_ids", "folds")}
     )
-    out.metadata["overlap_removed"] = float(mesh.area - out.area)
+    out.metadata["overlap_removed"] = dissolved
     out.metadata["vertices_dissolved"] = thinned
+    out.metadata["tears_closed"] = closed
+    out.metadata["gusset_area"] = float(
+        sum(out.area_faces[len(out.faces) - len(gussets):])
+    )
     return out

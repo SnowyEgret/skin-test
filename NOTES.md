@@ -42,10 +42,9 @@ Three things, all on top of `07c3e4d`, all in one commit — the head of the bra
 - **The membrane's four bowties.** A lap miter running out past the rim of a band that lies wholly
   inside its neighbour — a different mechanism from the one `_tiling` fixed, and still only
   dissolved after the fact by `clean`. The cladding has none left.
-- **The gusset**, still deferred and still specified — see *"Is the gusset worth its complexity?"*.
-  `skin/clean.py` is now the module it would go in, as a third opted-in operation.
 - **`clearance` depends on the triangulation**, which is the part of that open item that survives
-  today's correction. Read the correction before acting on the item.
+  the 2026-08-21 correction. Read the correction before acting on the item. It is **not** coupled
+  to the gusset — see *"The gusset as built"*.
 - **The south-junction sliver**, 205 x 7.3 mm, unchanged.
 
 ### State of the tree
@@ -143,14 +142,17 @@ tiling was fixed. See *"The notch is fixed at source"*.
 
 ### After the pass, in the order they became live
 
-- **The gusset, if Duncan wants the outlet closed.** Deliberately deferred, not forgotten: two
-  triangles, 1729.5 mm² each, every vertex already in the mesh. If it is built it goes in
-  `skin/clean.py` as a second opted-into operation with an authored bound — **not** in the rules.
-  See *"Is the gusset worth its complexity?"*.
-- **The cladding does not cover the scupper cheeks**, though Duncan asked for it. Blocked on the
-  standing *"cladding overhangs a bare end by the offset"* item, not on any rule: its cheek panel
-  miters against the parapet's inner face and reaches 85 mm past it into the roof. One line in
-  `cladding_faces` the day a trim in plan exists.
+- ~~**The gusset, if Duncan wants the outlet closed.**~~ **Built 2026-08-22**, in
+  `skin/clean.py` as the third opted-in operation with an authored bound, exactly where this line
+  said it should go — and **not** in the rules. See *"The gusset as built"*.
+- **The cladding covers the scupper cheeks, and the lining is wrong.** The `cladding_faces` line
+  is right and stays; the geometry it produces is not. Four corrections from Duncan, three causes,
+  all diagnosed with coordinates in *"The cheek lining is wrong, and what it is"*. This is the
+  next job.
+- **`offset._trim_beside` is probably for the bin.** Built 2026-08-22 to unblock the cheeks; its
+  only live case is one it gets wrong, because the defect was two mis-offset vertices at the knife
+  and not the length of the miter. It costs nothing anywhere else, which is why it is left in
+  rather than reverted, but assume it comes out. Same section.
 - **`cladding_laps` is still the old election** — `interior`, nothing else — held back while the
   membrane was settled. Widening it to `np.abs(faces.normals[:, 2]) < TOL` is the whole change;
   expect it to need its own conversation about what the cladding does at a cornice.
@@ -1793,6 +1795,11 @@ of a reconciled fold vertex is the tear that fold left, and is triangulated*. De
 and local; the design question is whether `clearance` should stop being the build's verdict first
 — which is the standing item below.
 
+*(Answered 2026-08-22. Duncan said yes, and it was built in `clean` — where `clearance` turns out
+not to be a precondition, because `build()` measures the raw emission. Both halves of the rule
+sketched here are wrong, and knowingly so: the `2 x distance` bound was already refuted below, and
+the surviving criteria are flat / narrow / not-already-covered. See "The gusset as built".)*
+
 ## Overlapping laps, and what a cleanup pass would and would not fix (2026-08-21)
 
 Duncan: *"The membrane mesh needs cleaning up. There are coplanar edges (140, 99). There are
@@ -1984,7 +1991,9 @@ student-house model rather than anything here — but it costs nothing to keep: 
 
 **Decided, Duncan 2026-08-21: build the pass, leave the gusset.** If the outlet should close, it
 goes in the same module later as a second, opted-into operation with an authored bound, where a
-bound is honest. That keeps the one thing the student-house module lost: the rules stay a set of
+bound is honest. *(It did, on 2026-08-22 — see "The gusset as built", which also corrects the
+`clearance` coupling costed here: it is a cost of putting the gusset in `skin_over`, and does not
+follow it into `clean`.)* That keeps the one thing the student-house module lost: the rules stay a set of
 derivations, and everything that merely tidies geometry sits outside them. The spec for the pass
 is at the top of this file.
 
@@ -2312,6 +2321,91 @@ below — *demote `clearance` to a number rather than a verdict* — should **no
 strength of that warning: it caught a defect nothing else in the stack could see. The real
 complaint against it stands and is narrower: its answer moves when the triangulation moves.
 
+## The gusset as built (2026-08-22)
+
+Duncan, asked the standing question: *"1. Yes, close it in clean. 2. I do not fully understand the
+implications of each option."*
+
+**On (2), the answer turned out to be that there were no implications to weigh — the two questions
+are not coupled, and the 2026-08-21 costing above is what made them look coupled.** That costing
+measured the gusset *inside `skin_over`*, where it is a face the offset produced, and there
+`clearance` reads 7.8808 → 5.8793 mm and `build.py` prints a self-intersection warning on a skin
+with nothing buried in anything. In `skin/clean.py` it is not: `build()` **measures the raw
+emission and writes the cleaned mesh**, so the printed verdict is taken on `skin_over`'s output
+before any gusset exists. Reproduced, on the live bake:
+
+| | membrane clearance |
+|---|---|
+| raw emission — **what `build.py` prints** | 7.8808 mm |
+| cleaned | 7.8808 mm |
+| cleaned and gusseted | 5.8793 mm |
+
+So the printed line is byte-identical before and after, and *"demote `clearance` to a number
+rather than a verdict"* stays open on its own merits, blocking nothing. The 5.8793 mm is real and
+is the honest reading of the written mesh — a gusset **is** a chord across a fold — which is why
+the build says out loud that it placed one. It is the same discipline as printing folds: a surface
+the module invented must not arrive silently.
+
+**What it does.** Third opted-in operation, `clean(mesh, dissolve=..., close=m)`, zero off. On all
+three bakes:
+
+| | triangles | border edges | n-gons written | area |
+|---|---|---|---|---|
+| membrane, `close: 0.0` | 115 | 35 | 43 | 125.943129 m² |
+| membrane, `close: 0.025` | 117 | **29** | 45 | 125.946588 m² |
+
+2 tears closed, 3459.06 mm² — 2 × 1729.5288 mm², the two triangles this file bounded on
+2026-08-21, to the last digit quoted then. Winding consistent, no non-manifold edge, no
+T-junction, no vertex invented. The cladding is byte-identical, and stays so even when handed the
+membrane's own bound. The rig has no tear and is untouched.
+
+### Why one tear reports as two
+
+The tear **pinches to a point**: two triangles meeting at one vertex of degree four, at
+`(8.492, 4.985, 14.503)`. It is one border component of 5 vertices and 6 half-edges, and no ring
+walk can turn at that vertex without guessing which way to go — the same condition `offset._rings`
+refuses outright. So nothing walks. The component is read as the planar graph it is and handed to
+`shapely.polygonize`, which returns both regions. `tears_closed` counts regions filled.
+
+### The three conditions, and which one is doing the work
+
+The 2026-08-21 costing rejected two detection criteria and found only one that was derived — *every
+vertex lies on one of the two offset planes of a knife plane* — which needs `_plane_ids` and
+`_knives` and therefore drags the gusset into `skin_over`. Landing it in `clean` instead means the
+authored bound the costing said a cleanup is entitled to. But an authored width **alone** is not
+safe, and the third condition is what makes it so:
+
+- **flat**, to `PLANE_TOL`. Measured across both skins on all three substrates: the tear is flat
+  to **1.5e-15 m**; the next flattest border loop stands **94.14 mm** off its own best-fit plane.
+  Thirteen orders of margin, because a skin's perimeter wraps a building and a tear does not.
+- **narrow**, to the authored `close`. The tear is **18.016 mm** across; the narrowest loop that
+  must stay open is **248.268 mm**. Authored at **0.025** — 39% above the one and an order below
+  the other. Deliberately **not** derived as `2 x distance`: the tear is 16 mm across in plan but
+  18.016 mm along its own plane, because the roof it opens on falls, so the obvious derivation
+  misses the very tear it was reasoned from. That is worth remembering as a small lesson in its
+  own right — the number that *sounds* derived was measured and found wrong.
+- **not already covered by the mesh**, which is derived and is the load-bearing safety condition.
+  Without it the worst case is silent and severe, and it is not exotic: the perimeter of *any*
+  flat sheet narrower than `close` is a flat narrow loop, so a 20 mm cover flashing would have its
+  own outline "closed" and come back **doubled** — two coincident surfaces, reported as a tidy-up.
+  A tear is by construction where the surface is **missing**. A test pins it.
+
+Orientation is read off the mesh, not guessed: the border is taken as **half-edges in their own
+faces' directions**, and a gusset must traverse each shared edge the other way. A normal-based
+guess gets one of the two ways up right by luck, so the test runs the fixture both ways up.
+
+The order is union → dissolve → close, each reading the outline the one before left. A gusset is
+fitted to the border of the *finished* surface, and a border edge a bowtie left is an artefact
+rather than a tear.
+
+### What it cost
+
+Ten tests, eight of them hand-made with no substrate behind them, two on the bakes because the
+pinch is produced by the rules and not by hand. 110 tests, ~6.6 s. `skin/offset.py` and `RULES`
+are unchanged and still do not know the module exists. `close` joins the parameter file under
+STRICT-COMPLETE — required on every skin, in the schema, ignored by `check_seeds` for the same
+reason `base` is: it bounds a cleanup, not a surface.
+
 ## Open items
 
 - ~~**The scupper mouth and the cornice ends are bare.**~~ Closed 2026-08-21 by the extended
@@ -2325,10 +2419,10 @@ complaint against it stands and is narrower: its answer moves when the triangula
   top of this file. **Built 2026-08-21** — see *"The pass as built"*: area is now exactly the
   area covered, on both skins. The two source-level alternatives are measured and ruled out; the
   *cause* — the lap emitting whole quads that overlap — stays open above.
-- **The membrane has one hole: the scupper outlet**, 6 border edges, two triangles. Every other
-  border component in either skin is a legitimate free edge — the skin's own perimeter. Bounded
-  since the cheeks were covered, so it is fillable with the vertices already there; what it needs
-  is Duncan's decision on gussets. Fully diagnosed and measured in the section above.
+- ~~**The membrane has one hole: the scupper outlet**~~ — **closed 2026-08-22** by
+  `clean(mesh, close=m)`, on Duncan's decision. See *"The gusset as built"*. Every other border
+  component in either skin is a legitimate free edge — the skin's own perimeter — and three
+  conditions keep them that way.
 - **`clearance` cannot tell "stops short of a feature" from "folds through itself".** *(Read the
   correction in "The notch is fixed at source" first: the cornices warning this item was built on
   was **right**, and the cladding really did have surface 21 mm inside its offset. What survives

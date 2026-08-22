@@ -209,6 +209,7 @@ skin names would sit there looking maintained while emitting nothing.
   drop: m          # a lap that hangs below its arris; 0.0 switches that way off
   out: m           # a lap that rises or runs sideways; 0.0 switches that way off
   base: m | null   # trim: cut here and keep what is above; null for none
+  close: m         # widest tear `clean` may gusset; 0.0 switches that off
   display: solid | wire
 ```
 
@@ -221,10 +222,13 @@ skin names would sit there looking maintained while emitting nothing.
 on every arris it reaches — `skins()` raises. Either alone is fine: the cladding has no upstand
 and never did. `base` pairs with no rule — it is a datum rather than a face selection — and `null`
 is **not** `0.0`: zero is a real height to cut at, where a zero `drop` or `out` is that direction
-switched off. It is also not a seed, so `check_seeds` ignores it.
+switched off. It is also not a seed, so `check_seeds` ignores it. Nor is `close`, which bounds a
+cleanup rather than any surface — see **Cleaning a mesh**.
 The rules take `(Faces, fall)`; `skins()` binds `fall` from the file, so what `skin/` receives
 still has the `Faces -> bool[nfaces]` signature it expects. A built spec is *exactly*
-`skin_over`'s argument list plus `name` and `display`.
+`skin_over`'s argument list plus `name`, `display` and `close` — the last two are read by
+`build()` and never reach the offset: one says how Blender shows the skin, the other how wide a
+tear `skin/clean.py` may gusset.
 
 `keep` and `lap` are predicates `Faces -> bool[nfaces]` over the union's faces. `Faces` (in
 `skin/offset.py`) carries `body`, `parts`, `owner`, `normals`, `centres`, plus `roles` (WALL/ROOF
@@ -454,11 +458,53 @@ bake the membrane goes 153 → 115 triangles and 67 → 35 border edges, the cla
 54 → 45, and T-junctions fall (membrane 3 → 0) because a vertex no ring turns at **is** the
 T-junction anchor. Pass `dissolve=False` — the default — to keep every vertex.
 
-What it does **not** do: it says nothing about two *different* planes intersecting, and it cannot
-close a hole — the scupper outlet comes through untouched, because its two triangles span a knife
-plane and are coplanar with nothing. If the outlet is ever to be closed, the gusset belongs here
-as a second, opted-into operation with an authored bound — a cleanup may author a bound where a
-derivation may not — and **not** in the rules. See NOTES for why that is where it goes.
+What it does **not** do: it says nothing about two *different* planes intersecting. Closing a hole
+is a wholly separate mechanism, because nothing about a hole falls out of a coplanar union — the
+scupper outlet is coplanar with nothing — and it is the third operation below.
+
+`clean(mesh, close=m)` closes a **tear**: a hole the offset could not span, gusseted shut. Off at
+zero, authored per skin as `close` in the parameter file, and built 2026-08-22 on Duncan's
+decision. Where the substrate has no thickness — a roof knifing into a wall on the wall's own
+plane — the two offset surfaces part by twice the distance and the skin opens along the contact,
+which is `_reconcile` declining to move one vertex two ways at once. A **gusset** is the one face
+in a written skin that is not the offset of anything; `build.py` prints how many and how much,
+for the same reason it prints folds. It bridges vertices the offset already placed, so it invents
+no point — only the surface between them is new.
+
+Three conditions, and they do different jobs:
+
+- **flat**, to `PLANE_TOL`. A loop that does not lie in a plane offers a *choice* of filling
+  surfaces, and choosing is not a cleanup's business. Not a close call: the membrane's tear is
+  flat to 1.5e-15 m, and every legitimate free edge in either skin on all three substrates stands
+  at least 94 mm off its own best-fit plane, because a skin's perimeter wraps a building.
+- **narrow**, to the authored `close`. Deliberately **not** derived as twice the offset: the tear
+  is 16 mm across in plan but 18.016 mm along its own plane, because the roof it opens on falls,
+  so `2 x distance` would miss the very tear it was reasoned from. Authored at 0.025 against a
+  248.268 mm narrowest-free-edge-that-must-stay-open.
+- **not already covered**, which is derived and does the load-bearing safety work. The worst case
+  is otherwise silent and severe: the perimeter of *any* flat sheet narrower than `close` is a
+  flat narrow loop, so a 20 mm cover flashing would have its own outline "closed" and come back
+  doubled — two coincident surfaces, reported as a tidy-up. A tear is by construction where the
+  surface is **missing**. This is what lets the authored bound stay a bound on size rather than a
+  guess about what a loop means.
+
+The border is read as **half-edges**, in their own faces' directions, and split into connected
+pieces rather than walked. Both matter. A gusset shares every border edge with the face already
+on it, so it must traverse that edge the other way — which orients it off the mesh instead of off
+a guess about a normal. And the membrane's tear **pinches to a point**: two triangles meeting at
+one vertex of degree four, which no ring walk can turn at without guessing. `shapely.polygonize`
+reads the piece as the planar graph it is and returns both regions, which is why one tear reports
+as two.
+
+The three run in the order union → dissolve → close, each reading the outline the one before left:
+a gusset is fitted to the border of the *finished* surface, and a border edge a bowtie left is an
+artefact rather than a tear.
+
+`clearance` is untouched by any of this, and that is the point of where the gusset lives. A gusset
+is a chord across a fold, so it does read 7.8808 → 5.8793 mm **on the written mesh** — but
+`build()` measures the raw emission and writes the cleaned one, so the verdict stays a property of
+the offset. Putting the gusset inside `skin_over` instead, as was costed on 2026-08-21, is what
+would have made `build.py`'s verdict change with it.
 
 ## Classifying parts
 

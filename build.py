@@ -805,8 +805,10 @@ def classifier(params: dict):
 def skins(params: dict | None = None) -> tuple[dict, ...]:
     """The skin specs: the authored numbers joined to `RULES` by name.
 
-    One spec per skin, holding exactly what `skin_over` takes plus `name` and
-    `display`. The predicates come out already bound to the authored `fall`, and
+    One spec per skin, holding exactly what `skin_over` takes plus `name`,
+    `display` and `close` — the last two are read by `build()`, not by the
+    offset: one says how Blender shows the skin and the other how wide a tear
+    `skin/clean.py` may gusset. The predicates come out already bound to the authored `fall`, and
     the classifier to the authored thresholds, so what `skin/` receives still has
     the `Faces -> bool[nfaces]` and `part -> role` signatures it expects — the
     parameter layer stops at this function and no geometry code sees a knob.
@@ -866,6 +868,7 @@ def skins(params: dict | None = None) -> tuple[dict, ...]:
                 "drop": spec["drop"],
                 "out": spec["out"],
                 "base": spec["base"],
+                "close": spec["close"],
                 "display": spec["display"],
                 "keep": partial(rules["keep"], fall=fall),
                 "lap": None
@@ -968,7 +971,7 @@ def build(
         # moves the samples and would quietly change the verdict without any
         # surface moving. So the numbers stay on what `skin_over` produced, and
         # the file gets the mesh with the double cover resolved
-        tidy = clean(skin, dissolve=True)
+        tidy = clean(skin, dissolve=True, close=spec["close"])
         named.append((spec["name"], tidy, spec["display"], "skin"))
 
         gap = clearance(parts, skin)
@@ -995,6 +998,15 @@ def build(
                 + (f" {thinned} collinear vertices dissolved," if thinned else "")
                 + f" {len(skin.faces)} -> {len(tidy.faces)} triangles,"
                 f" {border} -> {borders(tidy)} border edges"
+            )
+        # a gusset is the one face in the written mesh that is not the offset of
+        # anything, so it is said out loud for the same reason a fold is: a
+        # surface the module invented must not arrive silently
+        if tidy.metadata["tears_closed"]:
+            print(
+                f"           gusseted: {tidy.metadata['tears_closed']} tear(s) closed,"
+                f" {tidy.metadata['gusset_area'] * 1e6:.1f} mm2 of face that is not"
+                f" the offset of any substrate face"
             )
         if slope > TOL:
             print(f"           sloped planes absorb up to {slope * 1000:.3f} mm")

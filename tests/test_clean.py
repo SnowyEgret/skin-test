@@ -348,3 +348,181 @@ def test_an_empty_mesh_cleans_to_an_empty_mesh():
 
     assert out.vertices.shape == (0, 3) and out.faces.shape == (0, 3)
     assert out.metadata["overlap_removed"] == 0.0
+
+
+def _slotted_annulus(slot=((1.9, 1.0), (2.1, 3.0)), lift=0.0):
+    """A 4x4 sheet with a narrow slot cut through the middle of it.
+
+    A hole needs surface all the way round, so it is tiled as four quads about
+    the slot rather than as two disjoint sheets — two sheets with a gap between
+    them have two perimeters and no hole at all. `lift` raises one slot corner
+    out of the plane, which is the only way this fixture makes a loop that does
+    not lie in one.
+    """
+    (x0, y0), (x1, y1) = slot
+    outer = [(0, 0, 0), (4, 0, 0), (4, 4, 0), (0, 4, 0)]
+    inner = [(x0, y0, lift), (x1, y0, 0), (x1, y1, 0), (x0, y1, 0)]
+    return _mesh(
+        *[
+            _sheet([outer[i], outer[(i + 1) % 4], inner[(i + 1) % 4], inner[i]])
+            for i in range(4)
+        ]
+    )
+
+
+def test_close_is_off_unless_asked():
+    """The default is the behaviour every caller had before gussets existed."""
+    mesh = _slotted_annulus()
+    out = clean(mesh, dissolve=True)
+
+    assert out.metadata["tears_closed"] == 0
+    assert _borders(out) == 8, "the slot and the perimeter, four edges each"
+    assert np.isclose(out.metadata["gusset_area"], 0.0)
+
+
+def test_a_flat_narrow_tear_is_gusseted():
+    """The condition the gusset exists for, without a substrate behind it: a
+    hole that lies in a plane and is narrower than the caller's bound."""
+    out = clean(_slotted_annulus(), close=0.5)
+
+    assert out.metadata["tears_closed"] == 1
+    assert _borders(out) == 4, "the perimeter alone; the slot is gone"
+    assert np.isclose(out.metadata["gusset_area"], 0.2 * 2.0)
+    assert np.isclose(out.area, 16.0), "the sheet is whole again"
+
+
+def test_a_gusset_invents_no_vertex():
+    """It bridges vertices the offset already placed. Only the surface between
+    them is new, which is what makes it a fill rather than a fresh solve."""
+    mesh = _slotted_annulus()
+    open_, closed = clean(mesh, close=0.0), clean(mesh, close=0.5)
+
+    assert len(closed.vertices) == len(open_.vertices)
+    for point in closed.vertices:
+        assert min(np.linalg.norm(open_.vertices - point, axis=1)) < 1e-12
+
+
+def test_a_gusset_is_wound_with_the_surface_it_joins():
+    """A face filling a hole shares every border edge with the face already on
+    it, so it has to traverse that edge the other way. Read off the half-edges
+    rather than guessed from a normal — and checked both ways up, because a
+    normal-based guess gets one of the two right by luck."""
+    for flip in (False, True):
+        mesh = _slotted_annulus()
+        if flip:
+            mesh = trimesh.Trimesh(
+                vertices=mesh.vertices, faces=mesh.faces[:, ::-1], process=False
+            )
+        out = clean(mesh, close=0.5)
+
+        assert out.metadata["tears_closed"] == 1
+        assert out.is_winding_consistent, "the gusset faces the other way"
+        assert np.allclose(np.abs(out.face_normals[:, 2]), 1.0)
+        assert len(set(np.sign(out.face_normals[:, 2]))) == 1
+
+
+def test_a_tear_wider_than_the_bound_is_left_open():
+    """The bound is the whole of what stops a skin that happens to be flat all
+    through from having its own perimeter filled in."""
+    out = clean(_slotted_annulus(), close=0.1)
+
+    assert out.metadata["tears_closed"] == 0
+    assert _borders(out) == 8
+    assert np.isclose(out.area, 16.0 - 0.2 * 2.0)
+
+
+def test_a_tear_that_does_not_lie_in_a_plane_is_left_open():
+    """A loop that is not flat has no surface to be filled with, only a choice
+    of surfaces, and choosing is not a cleanup's business."""
+    out = clean(_slotted_annulus(lift=0.05), close=0.5)
+
+    assert out.metadata["tears_closed"] == 0
+    assert _borders(out) == 8
+
+
+def test_a_gusset_does_not_count_as_overlap_removed():
+    """`overlap_removed` is what the coplanar union dissolved. A gusset adds
+    area back, and a number that netted the two off would report neither."""
+    big = _sheet([(0, 0, 0), (4, 0, 0), (4, 4, 0), (0, 4, 0)])
+    small = _sheet([(1, 1, 0), (2, 1, 0), (2, 2, 0), (1, 2, 0)])
+    out = clean(_mesh(big, small), close=0.5)
+
+    assert np.isclose(out.metadata["overlap_removed"], 1.0)
+    assert out.metadata["tears_closed"] == 0
+
+
+def test_the_baked_scupper_tear_closes_and_the_perimeters_do_not():
+    """The real condition, and the one instance of it in any substrate here.
+
+    Where the roof taper knifes into the parapet on the parapet's own plane the
+    substrate has no thickness, the two offset surfaces part by twice the
+    distance, and the membrane opens along the contact. The tear pinches to a
+    point — two triangles meeting at one vertex — so it closes as two regions
+    and could not be walked as a ring.
+
+    The margins are the point of the numbers here: the tear is flat to 1.5e-15 m
+    and 18.016 mm across, while the narrowest free edge that must stay open is
+    248.268 mm and stands 94 mm off its own best-fit plane.
+    """
+    from build import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins, _skin_from
+    from skin import parameters, substrate
+    from tests.test_import import BAKE
+
+    params = parameters.load_validated()
+    parts = substrate.from_obj(BAKE, metadata={FACADE: RAINSCREEN})
+    group_cornices(parts)
+    group_caps(parts, classifier(params))
+    spec = next(s for s in skins(params) if s["name"] == "Membrane")
+    skin = _skin_from(spec, parts)
+
+    open_ = clean(skin, dissolve=True, close=0.0)
+    closed = clean(skin, dissolve=True, close=spec["close"])
+
+    assert open_.metadata["tears_closed"] == 0
+    assert closed.metadata["tears_closed"] == 2, "one tear, pinched to a point"
+    assert np.isclose(closed.metadata["gusset_area"], 2 * 1729.5288562739836e-6)
+    assert _borders(closed) == _borders(open_) - 6
+    assert closed.is_winding_consistent
+    assert not _nonmanifold(closed)
+    assert len(closed.vertices) == len(open_.vertices), "no vertex invented"
+
+
+def test_the_cladding_has_nothing_to_gusset_at_the_membranes_bound():
+    """The negative half of the same check. The cladding's narrowest free edge
+    is a 9 m trough only 248 mm across — the closest thing in any skin here to a
+    tear — and neither test lets it through: it is 94 mm off its own plane, and
+    it is wider than any bound that catches the membrane's 18 mm."""
+    from build import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins, _skin_from
+    from skin import parameters, substrate
+    from tests.test_import import LIVE
+
+    params = parameters.load_validated()
+    parts = substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN})
+    group_cornices(parts)
+    group_caps(parts, classifier(params))
+    spec = next(s for s in skins(params) if s["name"] == "Cladding")
+    cladding = _skin_from(spec, parts)
+
+    membrane_bound = next(s for s in skins(params) if s["name"] == "Membrane")["close"]
+    out = clean(cladding, dissolve=True, close=membrane_bound)
+
+    assert out.metadata["tears_closed"] == 0
+    assert np.isclose(out.area, clean(cladding, dissolve=True).area)
+
+
+def test_a_narrow_flat_sheets_own_perimeter_is_not_a_tear():
+    """The worst case the region test exists for, and it is silent without it.
+
+    A 20 mm cover flashing is a flat sheet whose perimeter is a flat loop 20 mm
+    across — indistinguishable from a tear by the two loop tests alone — so a
+    bound wide enough to catch the membrane's would have this sheet "closed"
+    over itself and come back doubled, two coincident surfaces reported as a
+    tidy-up. It is not a tear because the mesh is already there.
+    """
+    strip = _sheet([(0, 0, 0), (0.02, 0, 0), (0.02, 1, 0), (0, 1, 0)])
+    mesh = _mesh(strip)
+    out = clean(mesh, close=0.5)
+
+    assert out.metadata["tears_closed"] == 0
+    assert np.isclose(out.area, mesh.area), "not doubled"
+    assert _borders(out) == 4

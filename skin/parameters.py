@@ -85,6 +85,11 @@ def check_seeds(params: dict) -> dict:
     and zero is an integer multiple of everything, so including it would fail
     every file that has one.
 
+    `base` and `close` are not seeds and are not read here, which is why the keys
+    are listed rather than taken from the entry: `base` is a datum in the model
+    and `close` a bound on a cleanup, so neither is a distance between two
+    surfaces that a bug could swap for another.
+
     This is a seeding discipline for a test rig, not a code requirement, so it is
     a named function the caller opts into rather than part of `validate`. A
     production what-if that genuinely wants two skins 100 mm apart calls
