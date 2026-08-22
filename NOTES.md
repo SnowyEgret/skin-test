@@ -3,27 +3,55 @@
 Offsetting a **substrate** (an assembly of solid parts) outward by a fixed distance to
 produce **skins**: open surfaces that cover a chosen subset of faces.
 
-Last worked: 2026-08-21.
+Last worked: 2026-08-22.
 
 `CLAUDE.md` has the commands, the architecture and its invariants, and the tolerance
 rationale. This file is the running log: what the geometry currently is, what was tried
 and rejected, and what is still open.
 
-## Start here (picking up after 2026-08-21)
+## Start here (picking up after 2026-08-22)
 
 ### Where to pick up
 
-**First job: `/code-review high` over the whole branch diff.** It is owed and has not run. The
+**First job: the cheek lining is wrong, and Duncan has said exactly how.** He read the built
+cladding back in Blender and gave four corrections; all four are diagnosed, with coordinates and
+causes, in *"The cheek lining is wrong, and what it is"* below. **Read that before touching
+anything**, because one of its conclusions is that `offset._trim_beside` — built the same day —
+is treating a symptom and probably should not stay. The working tree is left as it was, wrong
+geometry included, deliberately: nothing is reverted so the next session can see it.
+
+**Second job: `/code-review high` over the whole branch diff.** It is owed and has not run. The
 fourth-pass review below covered `skin/clean.py` *as it stood before its `_sheets` rewrite*;
-everything since is **unreviewed** — `_sheets`, the `dissolve` operation, and all of
-`offset._tiling` / `_rings` / `_retiled`. A second run was launched and died on an API session
-limit before producing a finding. Given that the fourth pass found four real defects in code of
-exactly this kind, do not treat the unreviewed half as settled.
+everything since is **unreviewed** — `_sheets`, the `dissolve` operation, `clean`'s third
+operation `close`, and all of `offset._tiling` / `_rings` / `_retiled`. A second run was launched
+and died on an API session limit before producing a finding. Given that the fourth pass found four
+real defects in code of exactly this kind, do not treat the unreviewed half as settled.
 
-### What landed today
+### What landed on 2026-08-22
 
-Three things, all on top of `07c3e4d`, all in one commit — the head of the branch, so
-`git show --stat HEAD` is the whole of it:
+**The cladding covers the scupper cheeks.** Duncan, weighing the cheeks against the floor's own
+*"a rainscreen stops at the opening"* reasoning, chose to clad them. The one line in
+`cladding_faces` is right and stays.
+
+**The trim in plan — `offset._trim_beside`.** Built to unblock that, and **it does not produce
+the geometry Duncan wants** — he read the result back the same day. It is in the tree, tested and
+documented, but its central case is now in question. See *"The trim in plan, and the reveal it was
+blocked on"* for what it is and what it measured, and then *"The cheek lining is wrong, and what
+it is"* for why that is not enough. Do not treat it as settled work.
+
+**The gusset — `clean(mesh, close=m)`.** Duncan, asked the standing question, answered *"Yes,
+close it in `clean`."* The membrane's one hole, the scupper outlet, is now gusseted shut: 6 border
+edges and 3459.06 mm² of it, on all three bakes. Built as the third opted-in operation of
+`skin/clean.py`, exactly where the 2026-08-21 costing said it should go if it were ever wanted,
+and **not** in the rules. See *"The gusset as built"*.
+
+The second half of that question — *should `clearance` stop being the build's verdict first?* —
+turned out **not to be a precondition at all**, and that is the useful finding. It stays open on
+its own merits and blocks nothing. See the same section.
+
+### What landed on 2026-08-21
+
+Three things, all on top of `07c3e4d`, all in one commit:
 
 1. **`skin/clean.py`** — the coplanar-overlap pass, built to the spec that stood here and
    measured against it in *"The pass as built"*. `clean(mesh) -> mesh`, its own module, the only
@@ -49,13 +77,29 @@ Three things, all on top of `07c3e4d`, all in one commit — the head of the bra
 
 ### State of the tree
 
-Everything above is **committed** at the head of `skin-the-walls-and-caps-bake`, working tree
-clean, nothing pushed. 100 tests green in ~5.5 s (with `-W error::DeprecationWarning`), all three substrates
-build, and the live bake was built last so `build/` and `display.reload()` show it. What
-`skin_over` **emits** is unchanged from `07c3e4d` everywhere but the cornices bake's cladding
-(134 → 122 triangles) — the rig and walls-and-caps skins are triangle for triangle what they
-were, which is the property `_tiling` was written to keep. What `build/` **writes** differs
-everywhere, because it is now cleaned and thinned.
+Everything above is **committed** on `skin-the-walls-and-caps-bake`, working tree clean, nothing
+pushed. 114 tests green in ~7.7 s (with `-W error::DeprecationWarning`), all three substrates
+build, and the live bake was built last so `build/` and `display.reload()` show it.
+
+2026-08-22 landed as **three commits, split on purpose** rather than one, because one of them is
+expected to come out:
+
+1. `471d0e4` — the gusset, `clean(mesh, close=m)`. Decided, measured, and independent of
+   everything else that day.
+2. `f0c4e13` — `_cut`, the one half-space cutting primitive, with `_trim_below` expressed through
+   it. A pure refactor: the live bake's `Membrane.obj` and `Cladding.obj` are byte-identical
+   across it, build log included. It stands on its own whatever happens to the trim.
+3. `HEAD` — the cladding over the scupper cheeks and `offset._trim_beside`. **This is the one
+   under question**, and it is alone in its commit so that backing the trim out is a revert rather
+   than surgery. The cheek selection in `cladding_faces` is right and would have to be kept.
+
+What
+`skin_over` **emits** is unchanged from `07c3e4d` everywhere but the cornices bakes' cladding:
+`_tiling` took it 134 → 122 triangles on 2026-08-21, and the cheek lining takes it back to 134
+today. The rig and walls-and-caps skins are triangle for triangle what they were, which is the
+property `_tiling` was written to keep, and no other skin on any substrate moves for the cheeks —
+the live bake's membrane line is character for character what it was. What `build/` **writes**
+differs everywhere, because it is now cleaned and thinned.
 
 ### The substrate
 
@@ -2406,6 +2450,215 @@ are unchanged and still do not know the module exists. `close` joins the paramet
 STRICT-COMPLETE — required on every skin, in the schema, ignored by `check_seeds` for the same
 reason `base` is: it bounds a cleanup, not a surface.
 
+## The trim in plan, and the reveal it was blocked on (2026-08-22)
+
+Duncan, asked whether the cheeks should be clad at all given that the scupper **floor** is
+deliberately excluded on the reasoning *"a rainscreen stops at the opening; the membrane lines
+it"*: **"Cheeks are clad."** So the reveal is lined and stops at the sill, the way a rainscreen
+returns into a window opening, and the floor stays out. The two are now a deliberate pair rather
+than an unexamined inconsistency.
+
+### Re-measured first, because everything underneath had moved
+
+The blocker was recorded on 2026-08-21, before `_tiling`, `clean` and the gusset. Re-measured on
+the current stack it was **unchanged**: adding `| (cheeks & faces.of_role(substrate.WALL))` to
+`cladding_faces` took the live bake's cladding from `clearance 84.1503 → 3.6593 mm` and the skin
+separation from `76.230 → 4.337 mm`.
+
+It also turned out to be **one end, not two**, which the old note did not record.
+`Parapet-Headhouse-E` spans `x 8.080…8.500`, and its **west** face is already clad — 20 triangles
+at `x = 7.995`, `y 2.345…7.625`, spanning the whole slot — so the cheek panel's west arris miters
+against a *covered* neighbour and was always right. Its **east** face is clad only from
+`z = 14.707` up, the coping's return lip; below that it is bare, and the panel ran to `x = 8.585`
+down to `z = 14.5036`, 85 mm past the wall face and into `Roof_Headhouse_InsulationTaper`.
+
+### Three attempts, and what each one taught
+
+The rule went through three shapes before it was right, and the two rejected ones are the useful
+part of the record.
+
+1. **"Cut at the plane of an uncovered, non-receiving, convex neighbour."** Does not fire at all.
+   The parapet's east face is a lap **receiver** — it takes the coping's drip — so excluding
+   receivers excludes the very arris in question. The lesson: *a receiving face is one face, and a
+   lap onto it is one band off one arris*. `_lap` now reports `sprung`, the arrises it actually
+   placed a seam on, and the test is per arris.
+2. **"Cut at every uncovered, non-sprung, convex neighbour."** Fires everywhere, and **reverses a
+   documented invariant** — *"vertices on the edge of a selection sit on the miter they would have
+   had if the neighbours were skinned too"*. Three existing tests assert that behaviour, and a
+   plate skinned on its top alone lost the `distance` it reaches past its own sides:
+   `17.48 → 15.84 m²`. Rejected on the spot. A rule that makes three tests fail because it changed
+   what they were written to pin is not a fix, it is a different design.
+3. **"...and the miter lands inside the substrate", tested with `contains`.** Also does not fire.
+   The reveal's miter is not *inside* the roof — it hangs **3.66 mm above** it. Measured, not
+   assumed, and it is why the shipped test is a distance and not a predicate.
+
+### What it is
+
+**At a convex arris to a face the skin neither covers nor laps onto, a miter that lands closer to
+the substrate than `distance` is cut back.** Being `distance` off the substrate is the whole
+definition of this surface, so a point of it that is nearer has stopped being an offset of
+anything — which is a fact about the geometry rather than a judgement about intent, and it is what
+keeps the rule a repair to the invariant rather than a reversal of it. The bound is `distance`
+itself less the `slope_deviation` the solve already declares, so nothing is authored.
+
+**It is cut twice, and it needs both.** Once to the plane of the face it mitered against, and once
+clear of the **offset** of whatever it broke against — always a third body, because the two faces
+a miter is made of are exactly `distance` away by construction. With only the first cut the reveal
+came back at **41.8148 mm**, because the cut inherited a bottom edge the bad miter had raked. Both
+together give the reveal lining it should be:
+
+| | cladding clearance | separation | cheek panel |
+|---|---|---|---|
+| cheeks not clad | 84.1503 mm | 76.230 mm | — |
+| clad, no trim | 3.6593 mm | 4.337 mm | `x 7.995…8.585`, `z 14.5036…14.718` |
+| clad, first cut only | 41.8148 mm | 33.860 mm | `x 7.995…8.500`, `z 14.5418…14.718` |
+| **clad, both cuts** | **84.1503 mm** | **76.230 mm** | `x 7.995…8.500`, `z 14.585…14.718` |
+
+Both cheeks, symmetrical. The bake reads exactly what it read before the cheeks were covered at
+all, and no bake prints a warning.
+
+### What it did not move
+
+Every clearance and separation on all four substrates is unchanged, to the last digit, with the
+trim in and the cheeks out — and with the cheeks in, only the cladding's face and border counts
+move. The rig is byte-identical. That is the property the second attempt failed and this one has:
+**the only thing cut on any substrate here is the reveal.**
+
+### Known conservativeness
+
+A miter vertex belongs to **two** arrises, so a break at one corner cuts both of them along their
+whole length, taking free edge that was never wrong. On a box with a close neighbour the `-y` and
+`+y` edges come back flush with the wall's ends though only their `+x` corners were ever broken.
+It errs toward not leaving surface that is not an offset of anything, which is the safe direction,
+and it costs nothing on any substrate here. A test pins it on a box, where it is easy to pose and
+easy to see; do not "fix" it by loosening the trim without a case that needs it.
+
+### What it cost
+
+`_cut` is now the one cutting primitive, a half-space with its crossings cached per edge, and
+`_trim_below` is expressed as `-z <= -base` through it — every bake byte-identical across that
+refactor. `_tiling` returns a plane id per triangle and `_lap` returns `sprung`; both were
+single-caller functions, so neither signature change reaches beyond `skin_over`. Five new tests,
+four of them synthetic. 114 tests, ~8.9 s.
+
+## The cheek lining is wrong, and what it is (2026-08-22)
+
+Duncan, reading `build/Cladding.obj` back in Blender on the live bake, on the **north** cheek:
+
+> *"The geometry is incorrect. At the north cheek for example, V52 should be at V49, V5 should be
+> at V4. V62 (on the skirt) should also be on the cheek plane (y=4.87). E72 should be at the
+> height of V6 and extend to x=8.585."*
+
+Vertex numbers are the exported OBJ's own order, which is what Blender shows: `skin/export.py`
+writes every mesh vertex as a `v` line before any face, so Blender's index *is* the index into
+`mesh.vertices`. All four corrections are consistent under that reading and they describe one
+shape, which is how the mapping was confirmed.
+
+### The four, in coordinates
+
+| | is | should be | what it is |
+|---|---|---|---|
+| V5 | `(7.995, 4.87, 14.718)` | V4 `(7.995, 4.87, 14.84009)` | lining's top-west corner |
+| V52 | `(8.500, 4.87, 14.718)` | V49 `(8.585, 4.87, 14.819018)` | lining's top-east corner |
+| E72 | see below | `z 14.580` (V6's height), out to `x = 8.585` | lining's bottom edge |
+| V62 | `(8.585, 4.785, 14.707)` | `y = 4.870` | skirt's outer edge, at the slot |
+
+**On E72, one loose end, recorded rather than smoothed over.** Reconstructing Blender's edge
+numbering the documented way — first appearance while walking each face's loop in order, see the
+`expressing-geometry-requirements` memory — makes **E72** the lining's *west* edge, `V5–V51`,
+vertical at `x = 7.995` from `z 14.718` to `14.585034`. The **bottom** edge, `V51–V53` at
+`z = 14.585034` running `x 7.995…8.500`, comes out as **E71**. Duncan's description — *"at the
+height of V6 and extend to x=8.585"* — can only be the bottom edge, so either the reconstruction
+is one step out on this mesh or the number was. It changes nothing: the target quad is pinned
+by V4, V49 and V6 independently. Worth re-deriving on the next mesh before trusting an edge
+number to the digit.
+
+So the lining wants to be the full reveal — a trapezoid from the facade's offset plane out to the
+east return's, and from the sill's offset up to the coping:
+
+```
+(7.995, 4.87, 14.84009) ── (8.585, 4.87, 14.819018)      the coping, sloped
+(7.995, 4.87, 14.580)   ── (8.585, 4.87, 14.580)         the sill's offset, flat
+```
+
+with the skirt's outer edge run out to `y = 4.87` to close the corner against it. Built today it
+is `x 7.995…8.500`, `z 14.585…14.718`.
+
+### Three causes, and they are independent
+
+**1. The top stops at the parapet, not the coping** (V5→V4, V52→V49). The cap over this parapet
+is authored as **two bodies** — `CapPlate-Headhouse-E` (`y 2.430…4.785`) and `CapPlate-Headhouse-E2`
+(`y 5.185…7.540`) — split by the slot. `build._opening` reads cheeks **per body**, deliberately and
+for the reasons in its own docstring, and pairs vertical coplanar regions of one body that look
+*at* each other. Neither plate contains a pair: each has exactly one reveal. So union faces **198**
+and **199**, at `y = 4.785`, `z 14.718…14.752`, come back `cheek False` / `kept False`, and the
+lining stops at `z = 14.718` where the parapet's own cheek ends.
+
+Note what this is *not*: it is not the role filter and not `~floor`. Those faces read
+`role WALL True`. The per-body pairing simply cannot see a reveal whose opposite number is in
+another body — and per element is already ruled out in that docstring for two other reasons, so
+this wants thought rather than a flag flip.
+
+**2. The bottom edge is kinked and dives** (E72). Two substrate vertices, both at the scupper
+knife, and neither is a tolerance question:
+
+- **v66** `(8.500, 4.785, 14.495)` → offsets to **`(8.415, 4.870, 14.580)`**. Its planes are the
+  sill (`z = 14.495`), the cheek (`y = 4.785`), and the **roof taper's west end face**, normal
+  `−x` at `x = 8.500`. That third plane's offset is `x = 8.415`, so the corner moves 85 mm the
+  wrong way and the bottom edge kinks back at `x = 8.415`. The parapet's east face — normal `+x`,
+  same `x = 8.500`, offset `8.585` — does not touch this vertex at all.
+- **v67** `(8.500, 4.785, 14.503618)` → offsets to `(8.585, 4.870, 14.503618)`, **z unchanged**.
+  This is the long-documented **fold vertex 67** (see *"The hole at the scupper outlet"*): the two
+  opposed planes at `x = 8.500` are a knife, `_reconcile` drops one, and the ridge leaves z where
+  it started. That is what rakes the bottom edge down 76 mm over the last 170 mm of its run.
+
+Both are the knife the scupper has always had. **This, and not the length of the miter, is where
+the `clearance 3.6593 mm` reading came from.**
+
+**3. The skirt ends in a slant** (V62). The drip on `x = 8.585` has its **root** mitered onto the
+cheek's offset plane — V49 is at `y = 4.870`, correctly — but its **outer** edge is not: V62 sits
+at `y = 4.785`, the substrate plane. So the band ends on a diagonal from `(4.785, 14.707)` to
+`(4.870, 14.819)` instead of square, and leaves an 85 mm gap against the lining. `drip_at` mitres
+a lap's root onto every skinned vertical plane at that vertex; nothing does the same for the rim.
+
+### What this says about `_trim_beside`
+
+**It is treating the symptom.** The trim cut the lining back to `x = 8.500` and lifted it to
+`z = 14.585` to get the offset property back, and that is exactly what Duncan says is wrong: he
+wants the miter **kept**, out to `x = 8.585`, with the bottom edge fixed instead. Fix cause 2 and
+the miter needs no trimming.
+
+That does not automatically condemn the mechanism — it is derived, tested, and it moves nothing
+anywhere else on any substrate — but its only live case is one it gets wrong. **The default
+assumption for the next session should be that it comes out**, and that the argument for keeping
+it has to be made fresh from some other case.
+
+### One measurement to have before deciding
+
+Duncan's target quad, sampled against the substrate:
+
+| corner | to the substrate |
+|---|---|
+| `(7.995, 4.87, 14.84009)` | 149.0296 mm |
+| `(8.585, 4.87, 14.819018)` | 145.5229 mm |
+| `(8.585, 4.87, 14.580)` | **79.9702 mm** |
+| `(7.995, 4.87, 14.580)` | 84.9999 mm |
+
+So **the geometry Duncan wants reads 79.97 mm against an 85 mm offset** and `build.py` will print
+`WARNING: … inside the requested offset` on the cornice bakes. It is inherent, not a defect: the
+reveal's mouth sits directly on the headhouse roof, so no correct panel can stand 85 mm off
+everything there. It is the documented `clearance` exception — *"a skin that deliberately stops
+short of something standing proud"* — arriving for real. But it does end the property recorded
+yesterday that **no bake prints a warning any more**, and that is worth saying out loud rather
+than discovering later. It also strengthens the standing item below about demoting `clearance`
+from a verdict to a number.
+
+### Order to take them in
+
+1 and 3 are contained. 2 is the knife, which is `_reconcile` and the most delicate thing in the
+module, and it is also the one that decides `_trim_beside`'s fate — so it is the one to think
+about first even though it is the one to change last.
+
 ## Open items
 
 - ~~**The scupper mouth and the cornice ends are bare.**~~ Closed 2026-08-21 by the extended
@@ -2486,8 +2739,12 @@ reason `base` is: it bounds a cleanup, not a surface.
   x = 2.421661 where the wrapped top mitres with the unskinned end planes. Same family as
   the z = −0.085 hang that `base` now trims — every skin edge does this against an
   unskinned neighbour — but the trim does not reach it: `base` is a horizontal datum, and
-  a bare end is not a datum the model shares, so there is nothing in plan to author. Still
-  open, and a different thing to specify.
+  a bare end is not a datum the model shares, so there is nothing in plan to author.
+  **Still open after `_trim_beside` (2026-08-22), and deliberately so.** That trim fires only
+  where a miter lands *closer to the substrate than the offset*, and these hang in free air —
+  they break nothing, they are just longer than a builder would want. Cutting them is the
+  wider rule the second attempt was, and it reverses the miter invariant; it wants its own
+  decision and its own measured pass, not a widening of this one.
 - ~~**`_fan_is_valid` treats a redundant collinear vertex as concavity, but only next to
   vertex 0.**~~ Settled 2026-08-19 by ear clipping, which accepts both readings faithfully —
   the corner is an ordinary triangle vertex where an ear is available there and is dropped

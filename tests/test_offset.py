@@ -1327,3 +1327,128 @@ def test_a_hole_corner_crossing_a_tiling_diagonal_is_tiled_again():
         assert np.isclose(skin.vertices[:, 1:], corner, atol=1e-6).all(axis=1).any(), (
             f"the hole lost its corner at {corner}"
         )
+
+
+def _neighbours(gap):
+    """A wall, and a taller one standing `gap` away from its face.
+
+    The gap is the whole fixture: it is the third body a miter off the wall's
+    top can break against. Neither of the two faces the miter is made of is
+    ever nearer than the offset — that is what a miter is — so anything nearer
+    has to be something else.
+
+    The neighbour runs past the wall at both ends, because what is tested is the
+    **miter vertices**, and those sit at the ends of the arris. A neighbour
+    flush with the wall in plan leaves them `distance` out past it, in clear
+    air, with the break in between them and nothing wrong at either.
+    """
+    wall = trimesh.creation.box(extents=(1.0, 4.0, 2.0))
+    wall.apply_translation([0.5, 2.0, 1.0])
+    other = trimesh.creation.box(extents=(2.0, 6.0, 3.0))
+    other.apply_translation([1.0 + gap + 1.0, 2.0, 1.5])
+    return [wall, other]
+
+
+def _top_of(parts):
+    """The lower wall's top face alone — the one thing every case here skins."""
+    def keep(faces):
+        return (faces.normals[:, 2] > 0.9) & (faces.centres[:, 2] < 2.5)
+
+    return skin_over(parts, D, keep=keep)
+
+
+def test_a_free_miter_still_reaches_past_the_face_it_covers():
+    """The invariant `_trim_beside` must not reverse.
+
+    The offset is solved over the whole body and the faces selected after, so
+    the edge of a selection keeps the miter it would have had if the neighbours
+    were skinned too. That is deliberate, and a miter with room around it is
+    left exactly where it is — on all four sides, three of which have no
+    neighbour at all.
+    """
+    parts = _neighbours(gap=3 * D)
+    skin = _top_of(parts)
+
+    assert np.allclose(skin.bounds[0], [-D, -D, 2.0 + D])
+    assert np.allclose(skin.bounds[1], [1.0 + D, 4.0 + D, 2.0 + D])
+    assert np.isclose(skin.area, (1.0 + 2 * D) * (4.0 + 2 * D))
+    assert clearance(parts, skin) > D - 1e-6
+
+
+def test_a_miter_that_breaks_the_offset_is_cut_back():
+    """A neighbour closer than the offset leaves the miter nearer the substrate
+    than the distance it is supposed to stand off it. It is then not an offset
+    of anything, so it is cut.
+
+    The cut is **conservative where arrises share a corner**, and this pins
+    that rather than hiding it. A box's top has four arrises and four corners,
+    and each corner is a miter vertex of two of them — so a break at one corner
+    cuts both, and the `-y` and `+y` edges come back flush with the wall's own
+    ends even though only their `+x` corners were ever wrong. It errs toward not
+    leaving surface that is not an offset of anything, which is the safe
+    direction, and on all three bakes it costs nothing: the only thing any of
+    them cuts is the scupper reveal.
+    """
+    gap = D / 2
+    parts = _neighbours(gap=gap)
+    skin = _top_of(parts)
+
+    assert clearance(parts, skin) > D - 1e-6, "still nearer than the offset"
+    # cut clear of the neighbour's own offset plane, which binds before the
+    # face the miter was against does
+    assert np.isclose(skin.bounds[1][0], 1.0 + gap - D)
+    # the side with no neighbour anywhere near it keeps its miter
+    assert np.isclose(skin.bounds[0][0], -D)
+    # ...and the two that only touch the break at a corner are cut flush
+    assert np.isclose(skin.bounds[0][1], 0.0) and np.isclose(skin.bounds[1][1], 4.0)
+
+
+def test_the_cut_lands_on_planes_the_substrate_owns():
+    """Both cuts are the substrate's own — the face the miter was against, and
+    the offset of the body it broke against — so nothing here is a number
+    anyone chose. The answer therefore tracks the gap exactly."""
+    for gap in (D / 4, D / 2, D * 0.9):
+        parts = _neighbours(gap=gap)
+        skin = _top_of(parts)
+        assert np.isclose(skin.bounds[1][0], 1.0 + gap - D), f"gap={gap}"
+        assert clearance(parts, skin) > D - 1e-6, f"gap={gap}: offset still broken"
+
+
+def test_the_baked_scupper_reveal_is_clad_and_cut_to_the_wall_face():
+    """The condition all of this was built for, on the substrate that poses it.
+
+    The cladding covers the scupper cheeks (Duncan, 2026-08-22). Without the
+    trim its cheek panel mitered against the parapet's east face and reached
+    85 mm past it, to 3.66 mm from the headhouse roof taper butting that very
+    face — cladding clearance 84.1503 -> 3.6593 mm. With it the panel is the
+    reveal lining it should be, and the bake's clearance is what it was before
+    the cheeks were covered at all.
+    """
+    from build import (
+        FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins, _skin_from,
+    )
+    from skin import substrate as sub
+    from tests.test_import import LIVE
+
+    params = parameters.load_validated()
+    parts = sub.from_obj(LIVE, metadata={FACADE: RAINSCREEN})
+    group_cornices(parts)
+    group_caps(parts, classifier(params))
+    spec = next(s for s in skins(params) if s["name"] == "Cladding")
+    cladding = _skin_from(spec, parts)
+
+    assert clearance(parts, cladding) > 0.0841, "the reveal is poking into the roof"
+    for y in (4.870, 5.100):
+        panel = [
+            t
+            for i, t in enumerate(cladding.triangles)
+            if abs(abs(cladding.face_normals[i][1]) - 1) < 1e-6
+            and abs(t[0][1] - y) < 1e-6
+            and t[:, 0].max() > 7.9
+        ]
+        assert panel, f"no cheek panel at y={y}"
+        box = np.array(panel).reshape(-1, 3)
+        # x: from the facade's own offset to the wall face, not 85 mm past it
+        assert np.isclose(box[:, 0].min(), 7.995) and np.isclose(box[:, 0].max(), 8.500)
+        # z: clear of the roof it opens onto, up to the coping
+        assert np.isclose(box[:, 2].min(), 14.585) and np.isclose(box[:, 2].max(), 14.718)

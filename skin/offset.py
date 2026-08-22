@@ -907,6 +907,9 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
             "out": body.face_normals[far],
         }
 
+    # the arrises a seam actually springs from. `_trim_beside` reads it to tell
+    # a miter that is a joint with a lap from one that continues onto nothing
+    sprung: set[tuple[int, int]] = set()
     segs = []
     for (f, g), (a, b) in zip(body.face_adjacency, body.face_adjacency_edges):
         for near, far in ((f, g), (g, f)):
@@ -933,12 +936,13 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
                 continue
             root = drip_at if t[2] < -PLANE_TOL else (lambda v: V[v])
             step = t * want
+            sprung.add((int(near), far))
             segs.append(
                 seg(V[a], V[b], root(a) + step, root(b) + step, t, far, va=a, vb=b)
             )
 
     if not segs:
-        return []
+        return [], sprung
 
     def at_a(one, where):
         return _key(one["pa"]) == where
@@ -1232,17 +1236,17 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
             if np.cross(pts, np.roll(pts, -1, axis=0)).sum(axis=0) @ one["out"] < 0:
                 loop = loop[::-1]
             faces += [[loop[0], loop[1], loop[2]], [loop[0], loop[2], loop[3]]]
-    return faces
+    return faces, sprung
 
 
 def _cut(verts, faces, normal, d):
     """Cut `faces` at the plane `normal . p = d`, keeping `normal . p <= d`.
 
-    The one cutting primitive. Its only caller so far is `base`, the horizontal
-    datum a skin stops at, but nothing about it is particular to a level plane.
-    A cut, not a projection or a clamp: both of those would move vertices off
-    their offset planes, and re-cutting the straddling triangles instead leaves
-    every remaining plane where it was.
+    The one cutting primitive, shared by the two trims — `base`, which is a
+    horizontal datum, and `_trim_beside`, which is a substrate plane the skin
+    has run past. A cut, not a projection or a clamp: both of those would move
+    vertices off their offset planes, and re-cutting the straddling triangles
+    instead leaves every remaining plane where it was.
 
     Crossings are cached per edge, so the two triangles sharing one get the same
     vertex rather than two that agree to within a rounding — the seam between
@@ -1320,10 +1324,10 @@ def _trim_below(verts, faces, base):
     plane. That is correct as offset geometry and wrong as building: cladding
     stops at the ground. `base` is the datum it stops at.
 
-    The cut itself is `_cut`, which this expresses as the half-space
-    `-z <= -base`. What is particular to a datum is only that missing it
-    entirely is a mistake worth naming: a `base` above the whole skin leaves
-    nothing at all.
+    The cut itself is `_cut`, which this expresses as the half-space `-z <= -base`
+    — the same primitive `_trim_beside` uses against a substrate plane. What is
+    particular to a datum is only that missing it entirely is a mistake worth
+    naming: a `base` above the whole skin leaves nothing at all.
     """
     kept, _ = _cut(verts, faces, np.array([0.0, 0.0, -1.0]), -base)
     if not kept:
@@ -1335,7 +1339,149 @@ def _trim_below(verts, faces, base):
     return kept
 
 
-def _tiling(body, skin, kept) -> list[list[int]]:
+def _trim_beside(body, verts, faces, planes, kept, sprung, distance, slack):
+    """Cut a covered face back where its miter runs somewhere it cannot be.
+
+    The offset is solved over the whole body and the faces are selected after,
+    so a vertex on the edge of the selection sits on the miter it would have had
+    if the neighbours were skinned too. Where the skin *does* carry on past that
+    arris — the neighbour is covered as well, or a lap springs onto it — that is
+    exactly right, and the miter is the joint between the two. Where nothing
+    carries on it is usually still right, and deliberately so: a free perimeter
+    reaching `distance` past the last face it covers is the documented
+    behaviour, and this leaves every one of them alone.
+
+    What it repairs is the case where that miter lands **closer to the substrate
+    than `distance`** — where the skin stops being an offset of anything. The
+    cladding's scupper reveal did: its miter reached 85 mm past the wall face
+    and hung 3.66 mm over the headhouse roof taper, which butts the very face it
+    mitered against.
+
+    Such a miter is cut back twice, and it needs both: **to the plane of the
+    face it mitered against**, so the surface stops at the substrate corner
+    rather than reaching past it, and **clear of the offset of whatever it broke
+    against**, which is always a third body. With only the first the reveal
+    still read 41.8148 mm against an 85 mm offset, because the cut inherited a
+    bottom edge the bad miter had raked. With both it is exactly the reveal
+    lining it should be: `x 7.995…8.500`, `z 14.585…14.718`, on both cheeks.
+
+    It is the `keep` half of what `_room` already does for a lap — a skin does
+    not overhang the thing it dresses — and it authors nothing: the two cut
+    planes are the substrate's own, and the bound is the offset distance.
+
+    **Conservative where arrises share a corner.** A miter vertex belongs to two
+    arrises, so a break at one corner cuts both of them along their whole
+    length, taking free edge that was never wrong. That errs toward not leaving
+    surface which is not an offset of anything, which is the safe direction, and
+    it costs nothing on any substrate here — the only thing cut on any of the
+    three bakes is the scupper reveal. A test pins the behaviour on a box, where
+    it is easy to pose and easy to see.
+
+    Four conditions, and each is load-bearing:
+
+    - **convex.** At a concave arris the miter folds inward and there is no
+      overhang to cut; cutting there would truncate a surface that is where it
+      should be.
+    - **not covered.** Two covered faces miter together and the joint is the
+      miter. This is the ordinary case and most arrises are it.
+    - **no lap springs there** — `sprung`, reported by `_lap` for the arrises it
+      actually placed a seam on. Not "the neighbour receives a lap": a receiving
+      face is one *face*, and a lap onto it is one *band* off one arris. The
+      parapet's east face receives the coping's drip and is also the far side of
+      the scupper cheek's arris, and only the first of those two continues the
+      surface. Asking about the arris and not the face is the whole of that
+      distinction.
+    - **the miter breaks the offset.** This is what keeps the rule a repair to
+      the invariant above rather than a reversal of it. A miter hanging in free
+      air at the edge of a selection is the documented behaviour and stays
+      untouched — a plate skinned on its top alone still reaches `distance` past
+      its own sides, and every free perimeter on all three bakes is unmoved to
+      the last digit. What is cut is a miter that ends up **closer to the
+      substrate than `distance`**, which is not a judgement about intent: being
+      `distance` off the substrate is the whole definition of this surface, so a
+      point of it that is nearer has stopped being an offset of anything. The
+      scupper reveal's miter reached 85 mm past the wall face and hung 3.66 mm
+      over the headhouse roof taper. The bound is `distance` itself less the
+      slack the solve already declares in `slope_deviation`, so there is no
+      threshold authored here; a sloped plane is allowed exactly what it was
+      allowed everywhere else.
+
+    Cutting is bounded to the tiled faces of the **covered plane the arris
+    belongs to** — `planes`, carried out of `_tiling` — so a lap, which lies on
+    the face beyond and not on this one, is never cut by the arris it springs
+    from, and a covered plane elsewhere in the model is not cut by a plane it
+    never meets. All the faces at one cut plane go through `_cut` together, so
+    they share its crossing cache and the cut does not crack.
+    """
+    ids, _ = _plane_ids(body)
+    rows = _plane_rows(body)
+    convexity = {}
+    for (f, g), convex in zip(body.face_adjacency, body.face_adjacency_convex):
+        convexity[(int(f), int(g))] = convexity[(int(g), int(f))] = bool(convex)
+
+    candidates = []
+    for (f, g), (a, b) in zip(body.face_adjacency, body.face_adjacency_edges):
+        for near, far in ((int(f), int(g)), (int(g), int(f))):
+            if not kept[near] or kept[far] or (near, far) in sprung:
+                continue
+            if int(ids[near]) == int(ids[far]) or not convexity[(near, far)]:
+                continue
+            candidates.append((near, far, int(a), int(b)))
+    if not candidates:
+        return faces
+
+    # one proximity query for every candidate arris: a miter vertex is the offset
+    # position of one of the arris's own substrate vertices, and a sound one sits
+    # exactly `distance` off the body -- it is that far from both of the faces it
+    # is made of, and no nearer to anything else
+    at = np.array([verts[v] for _, _, a, b in candidates for v in (a, b)])
+    _, gap, on_face = trimesh.proximity.closest_point(body, at)
+    gap, on_face = gap.reshape(-1, 2), on_face.reshape(-1, 2)
+    broken = gap < distance - slack - PLANE_TOL
+
+    beside: dict[int, dict[tuple, np.ndarray]] = {}
+
+    def cut(on: int, row: np.ndarray) -> None:
+        """Cut the covered plane `on` at the half-space `row[:3] . p <= row[3]`."""
+        key = tuple(np.round(row / PLANE_TOL).astype(np.int64))
+        beside.setdefault(on, {})[key] = row
+
+    for k, (near, far, _, _) in enumerate(candidates):
+        if not broken[k].any():
+            continue
+        # back to the plane of the face it mitered against, so the surface stops
+        # at the substrate corner instead of reaching past it
+        cut(int(ids[near]), rows[far])
+        # ...and clear of whatever it broke against, which is a **third** body:
+        # the two the miter is made of are exactly `distance` away by
+        # construction, so anything nearer is something else entirely. That
+        # body's own offset plane is where this surface is allowed to be again.
+        # The scupper reveal needs both cuts -- the first takes the panel off the
+        # roof in plan, the second lifts its raked bottom edge clear of it -- and
+        # with only the first it still read 41.8148 mm against an 85 mm offset
+        for third in on_face[k][broken[k]]:
+            row = rows[int(third)]
+            cut(int(ids[near]), np.append(-row[:3], -(row[3] + distance)))
+    if not beside:
+        return faces
+
+    pairs = list(zip(faces, planes))
+    for key, row in sorted({k: r for at in beside.values() for k, r in at.items()}.items()):
+        at = [i for i, (_, on) in enumerate(pairs) if key in beside.get(on, {})]
+        if not at:
+            continue
+        # every face cut at this plane goes through one `_cut`, so they share its
+        # crossing cache and the cut cannot crack. Each survivor keeps the covered
+        # plane it came from, because it may still have another plane to be cut at
+        on = [pairs[i][1] for i in at]
+        cut_faces, source = _cut(verts, [pairs[i][0] for i in at], row[:3], row[3])
+        held = set(at)
+        pairs = [pair for i, pair in enumerate(pairs) if i not in held]
+        pairs += [(tri, on[source[k]]) for k, tri in enumerate(cut_faces)]
+    return [tri for tri, _ in pairs]
+
+
+def _tiling(body, skin, kept) -> tuple[list[list[int]], list[int]]:
     """The kept faces, with any patch the offset turned inside out tiled again.
 
     `planar_offset` moves vertices and keeps the union's triangulation, and
@@ -1356,20 +1502,26 @@ def _tiling(body, skin, kept) -> list[list[int]]:
     Applies to a patch that inverted and nowhere else — every other patch is
     passed through in its original order, triangle for triangle — so nothing
     that tiles correctly today changes by a bit.
+
+    Each triangle is returned with the id of the plane it lies on, which is the
+    one thing about it a re-tiling does not preserve — the triangles change but
+    the plane cannot — and which `_trim_beside` needs to know what a face may be
+    cut by.
     """
+    ids, _ = _plane_ids(body)
     index = np.flatnonzero(kept)
     faces = [skin.faces[i].tolist() for i in index]
     corners = skin.vertices[skin.faces[index]]
     turned = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])
     inverted = np.einsum("ij,ij->i", turned, body.face_normals[index]) < 0
+    on = [int(ids[i]) for i in index]
     if not inverted.any():
-        return faces
+        return faces, on
 
     # patches are coplanar faces joined edge to edge. Sharing a plane is not
     # enough: two walls in line share one, and tiling across the gap between
     # them would invent surface. `_plane_ids` keys on `(n, d)`, so the two sides
     # of a knife are already separate ids and cannot be joined here
-    ids, _ = _plane_ids(body)
     parent = list(range(len(faces)))
 
     def root(i):
@@ -1391,18 +1543,21 @@ def _tiling(body, skin, kept) -> list[list[int]]:
     for k in range(len(faces)):
         members.setdefault(root(k), []).append(k)
 
-    tiled = []
+    tiled, planes = [], []
     for k, tri in enumerate(faces):
         patch = members[root(k)]
         if not any(inverted[m] for m in patch):
             tiled.append(tri)
+            planes.append(on[k])
         elif k == patch[0]:  # the whole patch, at the first of its faces
-            tiled += _retiled(
+            again = _retiled(
                 [faces[m] for m in patch],
                 skin.vertices,
                 body.face_normals[index[patch[0]]],
             )
-    return tiled
+            tiled += again
+            planes += [on[k]] * len(again)
+    return tiled, planes
 
 
 def skin_over(
@@ -1436,6 +1591,12 @@ def skin_over(
     coping, an upstand rising against a wall and a collar running sideways round
     a corner are all one rule with no election between them.
 
+    A covered face whose miter continues onto nothing is cut back to the
+    substrate plane beyond it — `_trim_beside`. The offset is solved over the
+    whole body, so the edge of a selection sits on the miter it would have had
+    if the neighbours were skinned too; that is a joint where the skin does
+    carry on and an overhang where it does not.
+
     `base` cuts the finished surface at that height and keeps what is above it,
     for a skin that stops at a datum rather than at its own miter — the cladding
     at ground level. `None` is no trim, and is not the same as `0.0`: a height of
@@ -1463,11 +1624,12 @@ def skin_over(
     skin = planar_offset(body, distance, covered=kept | receivers)
 
     verts = list(skin.vertices)
-    faces = _tiling(body, skin, kept)
+    faces, planes = _tiling(body, skin, kept)
 
+    lapped, sprung = [], set()
     if receivers.any():
         height = np.abs(body.face_normals[:, 2])
-        faces += _lap(
+        lapped, sprung = _lap(
             body,
             verts,
             distance,
@@ -1486,6 +1648,14 @@ def skin_over(
             drop=drop,
             out=out,
         )
+
+    # the covered faces are cut back where their miter carries on onto nothing,
+    # then the laps go on: a lap lies on the face beyond the arris, not on this
+    # one, so it is not the thing being trimmed
+    faces = _trim_beside(
+        body, verts, faces, planes, kept, sprung,
+        distance, skin.metadata["slope_deviation"],
+    ) + lapped
 
     if base is not None:
         faces = _trim_below(verts, faces, base)

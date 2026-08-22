@@ -122,6 +122,11 @@ Key invariants, each of which spans several files:
   selection filters on `owner`, not on the plane.
 - **The offset is solved over the whole body, then faces are selected.** Vertices on the edge of
   a selection therefore sit on the miter they would have had if the neighbours were skinned too.
+  That stands, and `_trim_beside` is a repair to it rather than a reversal: a free perimeter still
+  reaches `distance` past the last face it covers, and every one of them on every bake is unmoved.
+  What is cut is a miter that ends up **closer to the substrate than `distance`** — where the
+  surface has stopped being an offset of anything, which is not a judgement about intent. See
+  **The trim in plan** below.
 - **A runaway vertex is refused.** `planar_offset` places each vertex where its offset planes
   intersect; if that lands further out than the body's own diagonal, those planes are effectively
   parallel and the intersection means nothing. It raises, naming the vertex. Not a tolerance to
@@ -335,6 +340,55 @@ Two guards on all of it, both learned the hard way:
   only whole quads, so a lap that would overhang is not placed at all. The scupper is why: the
   parapet's inner face meets the cheek 8.6 mm above the sill, and a 62 mm drip run on down from
   there goes straight into the parapet.
+
+## The trim in plan
+
+> **Under question, 2026-08-22.** Duncan read the result back and the cheek lining is wrong: he
+> wants the miter **kept** out to `x = 8.585`, with the bottom edge fixed instead. The defect it
+> was built to repair turns out to be two mis-offset vertices at the scupper knife, not the length
+> of the miter — so this is treating a symptom, and its only live case is one it gets wrong. It is
+> still in the tree, tested, and moves nothing anywhere else; assume it comes out. **Read
+> NOTES.md, *"The cheek lining is wrong, and what it is"*, before relying on anything below.**
+
+`_trim_beside` is the `keep` half of what `_room` does for a lap: a skin does not overhang the
+thing it dresses. Built 2026-08-22, when Duncan asked for the cladding to cover the scupper
+cheeks — the standing blocker on that, and on *"the cladding overhangs part 4's bare ends"*.
+
+The condition is narrow on purpose. At a **convex** arris to a face the skin neither **covers**
+nor **laps onto**, the miter continues onto nothing — and that is usually still correct, because a
+free perimeter reaching `distance` past its last face is the documented behaviour. It is repaired
+only where the miter lands **closer to the substrate than `distance`**, less the slack the solve
+already declares in `slope_deviation`. The reveal panel reached 85 mm past the wall face and hung
+3.66 mm over the headhouse roof taper, which butts the very face it mitered against: cladding
+clearance `84.1503 → 3.6593 mm`.
+
+Such a miter is cut back **twice, and it needs both**: to the plane of the face it mitered
+against, so the surface stops at the substrate corner; and clear of the **offset** of whatever it
+broke against, which is always a third body — the two faces a miter is made of are exactly
+`distance` away by construction. With only the first cut the reveal still read 41.8148 mm, because
+the cut inherited a bottom edge the bad miter had raked. With both, the lining comes out
+`x 7.995…8.500`, `z 14.585…14.718` on both cheeks and the bake reads what it read before the
+cheeks were covered at all — **which is not what the lining should be**: see the note above. That
+raked bottom edge is a defect in its own right, and is what should have been fixed.
+
+Three things make it safe rather than sweeping:
+
+- **`sprung` is per arris, not per face.** `_lap` reports the arrises it actually placed a seam
+  on. A receiving face is one *face* and a lap onto it is one *band* off one arris: the parapet's
+  east face receives the coping's drip **and** is the far side of the cheek's arris, and only the
+  first of those continues the surface. Asking about the face would have missed this entirely.
+- **Cutting is bounded to the covered plane the arris belongs to**, carried out of `_tiling` as a
+  plane id per triangle. A lap lies on the face beyond the arris, not on this one, so it is never
+  cut by the arris it springs from.
+- **It is conservative where arrises share a corner.** A miter vertex belongs to two arrises, so a
+  break at one corner cuts both along their whole length. That errs toward not leaving surface
+  which is not an offset of anything, and it costs nothing here — the only thing cut on any of the
+  three bakes is the reveal.
+
+`_cut` is the one cutting primitive, shared with `base`: a half-space, crossings cached per edge
+so the two triangles sharing one get the same vertex, sides decided exactly with no tolerance
+band. A caller with several planes cuts **all** the faces at one plane before moving to the next,
+or the cache does not do its job and the cut cracks.
 
 `_trim_below` (`base`) runs **after** the laps, so it means "no part of this skin goes below the
 datum" rather than "the offset stops there". It is a **cut**, not a clamp: triangles straddling
@@ -575,7 +629,13 @@ listed — there are no plane coordinates and no part indices in them:
   the same cheeks meet the wall's own coping where the slot cuts through it, but stop at that
   level. The cladding subtracts the floor — a rainscreen stops at a 400 mm outlet rather than
   lining it, and "every wall top" otherwise claimed the scupper sill and flared the coping's mitre
-  out through the mouth. The membrane still lines it, as an upward face of a climbed wall.
+  out through the mouth. The membrane still lines it, as an upward face of a climbed wall. The
+  **cheeks** are a separate decision and go the other way (Duncan, 2026-08-22): the cladding lines
+  the reveal and stops at the sill, the way a rainscreen returns into a window opening. That
+  selection is right; the **geometry it currently produces is not**, and neither is the reveal's
+  full height — `_opening` reads cheeks per body, and this cap is two bodies split by the slot, so
+  the plate's own reveal never becomes a cheek and the lining stops at the parapet. See NOTES,
+  *"The cheek lining is wrong, and what it is"*.
 - **both skins cap a wall, deliberately.** A top the membrane carries over is also claimed by
   `cladding_faces`' "every wall top", so a parapet coping belongs to two skins at once — a
   membrane upstand with a metal coping over it, which is what a parapet is built as. Decided

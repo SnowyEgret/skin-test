@@ -758,10 +758,18 @@ def cladding_faces(faces, fall):
     # flared the coping's own mitre out through the mouth to within 8.7 mm of the
     # membrane. A rainscreen stops at the opening; the membrane lines it, and
     # still does. Duncan, 2026-08-20.
-    _, floor = _opening(faces)
+    # ...and the cheeks of an opening, but not its floor. A rainscreen lines the
+    # reveal of an opening cut through a wall and stops at its sill, the same
+    # way it stops at a window's. Duncan, 2026-08-22, having weighed it against
+    # the floor's own reasoning above and kept the two apart. It waited on
+    # `_trim_beside`: the cheek panel's miter against the parapet's east face
+    # ran 85 mm past it and into the roof taper butting that very face, taking
+    # the cladding's clearance from 84.1503 mm to 3.6593 mm.
+    cheeks, floor = _opening(faces)
     return (
         facades_of(faces, RAINSCREEN, fall)
         | (_upward(faces.normals) & faces.of_role(substrate.WALL))
+        | (cheeks & faces.of_role(substrate.WALL))
     ) & ~faces.tagged(CORNICE, True) & ~floor
 
 
