@@ -1235,6 +1235,82 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
     return faces
 
 
+def _cut(verts, faces, normal, d):
+    """Cut `faces` at the plane `normal . p = d`, keeping `normal . p <= d`.
+
+    The one cutting primitive. Its only caller so far is `base`, the horizontal
+    datum a skin stops at, but nothing about it is particular to a level plane.
+    A cut, not a projection or a clamp: both of those would move vertices off
+    their offset planes, and re-cutting the straddling triangles instead leaves
+    every remaining plane where it was.
+
+    Crossings are cached per edge, so the two triangles sharing one get the same
+    vertex rather than two that agree to within a rounding — the seam between
+    them would otherwise crack open. The cache is per call, which is why a
+    caller with several planes to cut at cuts **all** the faces at one plane
+    before moving to the next.
+
+    Which side a vertex is on is decided **exactly**, with no tolerance band. A
+    band is the obvious thing to reach for and is wrong here: the crossing
+    interpolates to exactly the plane, so a vertex inside the band but past it
+    would be called "inside" while the interpolation, solving for a plane it is
+    already past, runs the parameter negative and puts the cut vertex *outside*
+    the edge it was cutting. A near-horizontal panel a fraction of a micron
+    under the datum came out 333 mm wide that way. The tolerance belongs on the
+    positions instead, where the duplicate drop below applies it.
+
+    Returns the surviving faces and, for each, the index of the face it came
+    from, so a caller carrying anything per-face can carry it through the cut.
+    """
+    normal = np.asarray(normal, dtype=float)
+
+    cuts: dict[tuple[int, int], int] = {}
+
+    def past(i) -> float:
+        return float(normal @ verts[i]) - d
+
+    def crossing(i: int, j: int) -> int:
+        key = (i, j) if i < j else (j, i)
+        if key not in cuts:
+            p, q = np.asarray(verts[key[0]]), np.asarray(verts[key[1]])
+            hp, hq = normal @ p - d, normal @ q - d
+            point = p + hp / (hp - hq) * (q - p)
+            point -= (normal @ point - d) * normal  # exactly on it, not a rounding away
+            cuts[key] = len(verts)
+            verts.append(point)
+        return cuts[key]
+
+    kept, source = [], []
+    for f, face in enumerate(faces):
+        inside = [past(i) <= 0 for i in face]
+        if all(inside):
+            kept.append(face)
+            source.append(f)
+            continue
+        if not any(inside):
+            continue
+
+        loop: list[int] = []
+        for n, i in enumerate(face):
+            j = face[(n + 1) % len(face)]
+            if inside[n]:
+                loop.append(i)
+            if inside[n] != inside[(n + 1) % len(face)]:
+                loop.append(crossing(i, j))
+
+        # a corner sitting on the plane makes its own crossing a duplicate; drop
+        # those before fanning, or the cut sheds zero-area triangles
+        loop = [
+            v
+            for n, v in enumerate(loop)
+            if np.linalg.norm(np.asarray(verts[v]) - verts[loop[n - 1]]) > PLANE_TOL
+        ]
+        # a triangle cut by a plane is convex, so a fan from any corner is safe
+        kept += [[loop[0], loop[n], loop[n + 1]] for n in range(1, len(loop) - 1)]
+        source += [f] * max(0, len(loop) - 2)
+    return kept, source
+
+
 def _trim_below(verts, faces, base):
     """Cut the surface at the horizontal plane z = `base`, keeping what is above.
 
@@ -1244,64 +1320,12 @@ def _trim_below(verts, faces, base):
     plane. That is correct as offset geometry and wrong as building: cladding
     stops at the ground. `base` is the datum it stops at.
 
-    A cut, not a projection or a clamp. Both of those would move vertices off
-    their offset planes — a clamp flattens the bottom of a sloped panel onto the
-    datum and quietly breaks the exactness the solve just bought. Re-cutting the
-    straddling triangles instead leaves every remaining plane where it was and
-    adds an edge lying exactly on z = `base`.
-
-    Crossings are cached per substrate edge so the two triangles sharing one get
-    the same vertex, not two that agree to within a rounding: the seam between
-    them would otherwise crack open.
-
-    Which side a vertex is on is decided against `base` **exactly**, with no
-    tolerance band. A band is the obvious thing to reach for and is wrong here:
-    `crossing` interpolates to exactly `z == base`, so a vertex inside the band
-    but below the plane would be called "above" while the interpolation, solving
-    for a plane it is already past, runs the parameter negative and puts the cut
-    vertex *outside* the edge it was cutting. A near-horizontal panel a fraction
-    of a micron under the datum came out 333 mm wide that way. The tolerance
-    belongs on the positions instead, where the duplicate drop below applies it.
+    The cut itself is `_cut`, which this expresses as the half-space
+    `-z <= -base`. What is particular to a datum is only that missing it
+    entirely is a mistake worth naming: a `base` above the whole skin leaves
+    nothing at all.
     """
-    cuts: dict[tuple[int, int], int] = {}
-
-    def crossing(i: int, j: int) -> int:
-        key = (i, j) if i < j else (j, i)
-        if key not in cuts:
-            p, q = np.asarray(verts[key[0]]), np.asarray(verts[key[1]])
-            point = p + (base - p[2]) / (q[2] - p[2]) * (q - p)
-            point[2] = base  # exactly on the datum, not a rounding away from it
-            cuts[key] = len(verts)
-            verts.append(point)
-        return cuts[key]
-
-    kept = []
-    for face in faces:
-        above = [verts[i][2] >= base for i in face]
-        if all(above):
-            kept.append(face)
-            continue
-        if not any(above):
-            continue
-
-        loop: list[int] = []
-        for n, i in enumerate(face):
-            j = face[(n + 1) % len(face)]
-            if above[n]:
-                loop.append(i)
-            if above[n] != above[(n + 1) % len(face)]:
-                loop.append(crossing(i, j))
-
-        # a corner sitting on the datum makes its own crossing a duplicate; drop
-        # those before fanning, or the cut sheds zero-area triangles
-        loop = [
-            v
-            for n, v in enumerate(loop)
-            if np.linalg.norm(np.asarray(verts[v]) - verts[loop[n - 1]]) > PLANE_TOL
-        ]
-        # a triangle cut by a plane is convex, so a fan from any corner is safe
-        kept += [[loop[0], loop[n], loop[n + 1]] for n in range(1, len(loop) - 1)]
-
+    kept, _ = _cut(verts, faces, np.array([0.0, 0.0, -1.0]), -base)
     if not kept:
         raise ValueError(
             f"trimming at base={base} leaves nothing: every face of this skin is "
