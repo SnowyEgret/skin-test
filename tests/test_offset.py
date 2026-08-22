@@ -1296,3 +1296,34 @@ def test_only_a_lap_already_near_level_is_snapped_to_level():
     hard = direction([1.0, 0.0, 0.5], [0.0, 0.0, -1.0])
     assert -1 + RAKE < hard[2] < -RAKE, f"{hard} was rounded onto an axis"
     assert abs(hard[0]) > RAKE, "the in-plane component was discarded"
+
+
+def test_a_hole_corner_crossing_a_tiling_diagonal_is_tiled_again():
+    """`planar_offset` moves vertices and keeps the union's triangulation.
+    manifold3d tiles a face with a hole cut in it by fanning across the hole, so
+    a hole corner that starts closer to one of those diagonals than the offset
+    distance crosses it when it moves, and its triangle comes out inside out —
+    covering a sliver of the hole that the offset never placed.
+
+    On the live bake that is the cladding's notch round the scupper cornice:
+    `Cornice-Headhouse-E`'s corner sits 4.7 mm from the diagonal of the parapet
+    facade it is cut in, and the 85 mm offset takes it clean across, filling in
+    the bottom right of the notch. Here it is in miniature: a 4 x 4 wall face
+    with a 0.2 x 0.2 band stuck on it, just off the face's own diagonal.
+    """
+    def box(x0, x1, y0, y1, z0, z1):
+        return trimesh.creation.box(bounds=[[x0, y0, z0], [x1, y1, z1]])
+
+    parts = [box(0, 0.4, 0, 4, 0, 4), box(-0.1, 0, 1.8, 2.0, 2.05, 2.25)]
+    wall = lambda f: (np.abs(f.normals - [-1, 0, 0]).max(axis=1) < 1e-6) & (f.owner == 0)
+    skin = skin_over(parts, D, keep=wall)
+
+    # not one face turned inside out: they all point the way the wall's does
+    assert np.allclose(skin.face_normals, [-1, 0, 0])
+    # the outline and the hole both grew by the offset, and nothing filled it in
+    assert np.isclose(skin.area, (4 + 2 * D) ** 2 - (0.2 + 2 * D) ** 2, atol=1e-6)
+    assert len(trimesh.grouping.group_rows(skin.edges_sorted, require_count=1)) == 8
+    for corner in [(1.7, 1.95), (2.1, 1.95), (2.1, 2.35), (1.7, 2.35)]:
+        assert np.isclose(skin.vertices[:, 1:], corner, atol=1e-6).all(axis=1).any(), (
+            f"the hole lost its corner at {corner}"
+        )

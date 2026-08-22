@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from functools import cached_property
 
+import manifold3d
 import numpy as np
 import trimesh
 
@@ -374,6 +375,116 @@ def _plane_rows(body) -> np.ndarray:
     return np.column_stack(
         [body.face_normals, (body.triangles[:, 0] * body.face_normals).sum(axis=1)]
     )
+
+
+def _basis(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Two axes spanning a plane, with `u x v` along the normal, so that a ring
+    wound counter-clockwise in them is a face pointing that way."""
+    u = np.cross(np.eye(3)[np.argmin(np.abs(normal))], normal)
+    u /= np.linalg.norm(u)
+    return u, np.cross(normal, u)
+
+
+def _flat(points: np.ndarray, origin, u, v) -> np.ndarray:
+    """Points of a plane in the plane's own two axes."""
+    return np.column_stack([(points - origin) @ u, (points - origin) @ v])
+
+
+def _rings(patch: list[list[int]]) -> list[list[int]]:
+    """The boundary loops of a patch of triangles, as vertex index cycles.
+
+    An edge two of the patch's triangles share is interior to it; the rest bound
+    it. A vertex with more than two boundary edges is a pinch, where the loops
+    cannot be walked without guessing which way to turn, and raises rather than
+    guessing.
+    """
+    counted: dict[tuple[int, int], int] = {}
+    for tri in patch:
+        for a, b in zip(tri, tri[1:] + tri[:1]):
+            edge = (min(a, b), max(a, b))
+            counted[edge] = counted.get(edge, 0) + 1
+
+    adjacent: dict[int, list[int]] = {}
+    for (a, b), times in counted.items():
+        if times == 1:
+            adjacent.setdefault(a, []).append(b)
+            adjacent.setdefault(b, []).append(a)
+    pinched = [v for v, at in adjacent.items() if len(at) != 2]
+    if pinched:
+        raise ValueError(
+            f"cannot re-tile a patch whose boundary pinches at vertex "
+            f"{pinched[0]}: {len(adjacent[pinched[0]])} boundary edges meet there"
+        )
+
+    loops, left = [], set(adjacent)
+    while left:
+        start = min(left)
+        loop, previous, current = [start], start, adjacent[start][0]
+        while current != start:
+            loop.append(current)
+            a, b = adjacent[current]
+            previous, current = current, b if a == previous else a
+        loops.append(loop)
+        left -= set(loop)
+    return loops
+
+
+def _shoelace(plan: np.ndarray) -> float:
+    """Signed area of a 2D loop: positive counter-clockwise."""
+    after = np.roll(plan, -1, axis=0)
+    return float((plan[:, 0] * after[:, 1] - after[:, 0] * plan[:, 1]).sum() / 2)
+
+
+def _retiled(patch: list[list[int]], verts: np.ndarray, normal: np.ndarray):
+    """One planar patch of triangles, tiled again from its own boundary loops.
+
+    The loops are the patch's outline and the holes in it, which is what the
+    offset moved correctly; only the tiling between them is wrong. The widest
+    loop is the outline and the rest are holes — a hole lies inside the outline,
+    so it encloses less — and `manifold3d.triangulate` reads that off the
+    winding.
+
+    The tiled area is checked against the area the loops enclose, the same
+    check `substrate`'s ear clipper makes and for the same reason: an outline
+    that crosses itself tiles to well-formed triangles covering the wrong
+    region, and there would be nothing else to notice.
+    """
+    loops = _rings(patch)
+    u, v = _basis(normal)
+    origin = verts[loops[0][0]]
+    plans = [_flat(verts[loop], origin, u, v) for loop in loops]
+    signed = [_shoelace(plan) for plan in plans]
+    outline = int(np.argmax(np.abs(signed)))
+
+    rings = []
+    for i, (loop, plan, area) in enumerate(zip(loops, plans, signed)):
+        if (area > 0) != (i == outline):  # outline counter-clockwise, holes not
+            loop, plan = loop[::-1], plan[::-1]
+        rings.append((loop, plan))
+
+    index = [i for loop, _ in rings for i in loop]
+    tiled = [
+        [index[a], index[b], index[c]]
+        for a, b, c in manifold3d.triangulate([plan for _, plan in rings], allow_convex=False)
+    ]
+    covered = sum(
+        float(np.linalg.norm(np.cross(verts[b] - verts[a], verts[c] - verts[a])) / 2)
+        for a, b, c in tiled
+    )
+    enclosed = abs(signed[outline]) - sum(
+        abs(a) for i, a in enumerate(signed) if i != outline
+    )
+    # compared as a fraction of the patch's own area, not against a length:
+    # this is a sum of triangle areas set against a shoelace, so what noise
+    # there is scales with the patch, while a crossed outline is out by whole
+    # slivers — the one this rule exists for is 200 655 mm2 against 28 m2
+    if abs(covered - enclosed) > 1e-9 * max(enclosed, covered):
+        raise ValueError(
+            f"re-tiling a patch on plane {np.round(normal, 6).tolist()} covered "
+            f"{covered:.9f} m2 where its outline encloses {enclosed:.9f} m2 — "
+            f"the offset outline crosses itself"
+        )
+    return tiled
 
 
 def _plane_ids(body):
@@ -1200,6 +1311,76 @@ def _trim_below(verts, faces, base):
     return kept
 
 
+def _tiling(body, skin, kept) -> list[list[int]]:
+    """The kept faces, with any patch the offset turned inside out tiled again.
+
+    `planar_offset` moves vertices and keeps the union's triangulation, and
+    manifold3d tiles a face with a hole cut in it by fanning across the hole. A
+    vertex that starts closer to one of those diagonals than `distance` crosses
+    it when it moves, and its triangle comes out **inside out** — covering a
+    sliver on the far side of the diagonal, which is surface the offset never
+    placed. On the live bake that sliver fills in the bottom right of the notch
+    the cladding leaves round the scupper cornice: `Cornice-Headhouse-E`'s
+    corner sits 4.7 mm from the diagonal of the parapet facade it is cut in, and
+    the 85 mm offset takes it clean across.
+
+    The outline is offset correctly and so are the holes; only the tiling
+    between them is wrong, and an inversion does not move a boundary edge. So
+    the patch is tiled again from its own loops. Detection is exact and wants no
+    threshold: the body's own normal says which way each face is meant to face.
+
+    Applies to a patch that inverted and nowhere else — every other patch is
+    passed through in its original order, triangle for triangle — so nothing
+    that tiles correctly today changes by a bit.
+    """
+    index = np.flatnonzero(kept)
+    faces = [skin.faces[i].tolist() for i in index]
+    corners = skin.vertices[skin.faces[index]]
+    turned = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])
+    inverted = np.einsum("ij,ij->i", turned, body.face_normals[index]) < 0
+    if not inverted.any():
+        return faces
+
+    # patches are coplanar faces joined edge to edge. Sharing a plane is not
+    # enough: two walls in line share one, and tiling across the gap between
+    # them would invent surface. `_plane_ids` keys on `(n, d)`, so the two sides
+    # of a knife are already separate ids and cannot be joined here
+    ids, _ = _plane_ids(body)
+    parent = list(range(len(faces)))
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    along: dict[tuple[int, int], int] = {}
+    for k, tri in enumerate(faces):
+        for a, b in zip(tri, tri[1:] + tri[:1]):
+            edge = (min(a, b), max(a, b))
+            other = along.get(edge)
+            if other is not None and ids[index[other]] == ids[index[k]]:
+                parent[root(k)] = root(other)
+            along[edge] = k
+
+    members: dict[int, list[int]] = {}
+    for k in range(len(faces)):
+        members.setdefault(root(k), []).append(k)
+
+    tiled = []
+    for k, tri in enumerate(faces):
+        patch = members[root(k)]
+        if not any(inverted[m] for m in patch):
+            tiled.append(tri)
+        elif k == patch[0]:  # the whole patch, at the first of its faces
+            tiled += _retiled(
+                [faces[m] for m in patch],
+                skin.vertices,
+                body.face_normals[index[patch[0]]],
+            )
+    return tiled
+
+
 def skin_over(
     parts: list[trimesh.Trimesh],
     distance: float,
@@ -1258,7 +1439,7 @@ def skin_over(
     skin = planar_offset(body, distance, covered=kept | receivers)
 
     verts = list(skin.vertices)
-    faces = [f.tolist() for f in skin.faces[kept]]
+    faces = _tiling(body, skin, kept)
 
     if receivers.any():
         height = np.abs(body.face_normals[:, 2])

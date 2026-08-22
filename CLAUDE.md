@@ -29,12 +29,16 @@ what `blender/display.py` reads. Build the bake you want *after* the tests, not 
 `reload()` quietly shows you the rig. Caught once, after a reload displayed four `Substrate_N`
 boxes instead of a 36-part bake.
 
-`build.py` prints a per-skin line (residual, clearance, slope deviation, open/closed) and the
-skin-to-skin separation. Those numbers are the regression check: a residual above ~1e-9, or a
-clearance below `distance - slope_deviation`, means something broke — **except where a skin
-deliberately stops short of something standing proud of the wall.** `measure.clearance` samples
-vertices and centroids against every part and cannot tell that from a fold, so the cornices bake
-prints a self-intersection warning that four independent checks say is false. See NOTES.
+`build.py` prints a per-skin line (residual, clearance, slope deviation, open/closed), what
+`clean` removed from that skin, and the skin-to-skin separation. Every number but the clean line
+is measured on the **raw** emission, before cleaning — see **Cleaning a mesh**. Those numbers are
+the regression check: a residual above ~1e-9, or a clearance below `distance - slope_deviation`,
+means something broke — **except where a skin deliberately stops short of something standing
+proud of the wall.** `measure.clearance` samples vertices and centroids against every part and
+cannot tell that from a fold. It is a weaker check still than that implies: its answer depends on
+how the surface happens to be triangulated. It is not, however, a crier of wolf — the warning it
+printed on the cornices bake for weeks was **right**, and named a real defect that four other
+checks all missed because the surface was mis-tiled rather than self-intersecting. See NOTES.
 
 To view the result, in Blender's Python console:
 
@@ -95,6 +99,7 @@ build.py  PART_N vertex/face literals   (transcribed from Blender, snapped to 1 
    → substrate.polyhedron()             list[Trimesh], one per part
      ...or substrate.from_obj()         a baked export, one part per `o` group
    → skin_over()                        union → planar_offset → keep() → lap
+   → clean()                            coplanar overlap dissolved, after the fact
    → write_obj()                        build/*.obj as n-gons + manifest.json
    → blender/display.py                 imports, tags, displays
 ```
@@ -137,6 +142,18 @@ Key invariants, each of which spans several files:
   `metadata["folds"]` and printed by `build.py`, because a constraint the solve deliberately
   dropped must not be silent. Consequence, accepted by Duncan 2026-08-16: a degenerate sliver
   **no skin covers** is now tolerated rather than refused.
+- **A tiling the offset turned inside out is tiled again.** `planar_offset` moves vertices and
+  keeps the union's triangulation, and manifold3d tiles a face with a hole cut in it by fanning
+  across the hole. A hole corner that starts closer to one of those diagonals than `distance`
+  crosses it when it moves, and its triangle comes out **inside out**, covering a sliver of the
+  hole that the offset never placed. The outline and the holes are offset correctly and an
+  inversion moves no boundary edge, so `_tiling` re-tiles the patch from its own loops.
+  Detection is exact and wants no threshold — the body's own normal says which way each face is
+  meant to face — and it applies to a patch that inverted and **nowhere else**, so nothing that
+  tiles correctly changes by a bit. Measured: two faces on one substrate of the three.
+  `_retiled` checks the tiled area against the area its loops enclose and raises if they
+  disagree, the same check the ear clipper makes, because an outline that crossed itself would
+  otherwise tile to well-formed triangles covering the wrong region.
 - **Vertical/horizontal exact, sloped absorbs the error.** A sloped top over a concave plan
   over-determines the offset. `planar_offset` splits the plane equations into hard (|n_z| ≈ 0 or
   ≈ 1) and least-squares (sloped), plus hard equations keeping substrate-horizontal edges
@@ -354,6 +371,94 @@ and would break something else — the climb-or-flange election is per wall, so 
 its parapet has the membrane climb its full height instead of stopping at the parapet the roof
 runs into. It is inert on a bake whose plates already sit inside their parapet objects, and
 idempotent.
+
+## Cleaning a mesh
+
+`skin/clean.py` is `clean(mesh) -> mesh`, and that is its whole interface. The lap rule
+legitimately emits **whole quads**, so where one band lies inside another on the same plane the
+two overlap: the summed triangle area is not the area covered — 0.180% of the membrane on the
+live bake — and the four bowtie quads left in it are what that looks like from outside. A miter
+between two overlapping bands cannot un-overlap them, and two source-level attempts are measured
+and rejected in NOTES, so it is resolved afterwards, plane by plane, with a 2D boolean. (The
+cladding's two bowties had a different cause — a tiling the offset inverted — and are fixed at
+source by `_tiling`, above. Its summed area is now exactly its covered area.)
+
+**Nothing in `skin/offset.py` or `RULES` knows it exists**, and it is named for a mesh rather than
+for a skin because overlapping itself in a plane is a property of a mesh, not of a skin. It is
+testable on a hand-made overlapping pair with no substrate at all, which is most of
+`tests/test_clean.py`.
+
+**It is not part of `skin_over`, deliberately.** The union inserts a vertex wherever two bands'
+boundaries cross, so a cleaned mesh no longer satisfies *"every vertex that survived is exactly
+where the offset put it"* — the `base` trim test's assertion, and the property that makes
+`_trim_below` a cut rather than a clamp. `build()` therefore **measures the raw emission and
+writes the cleaned mesh**: residual, clearance, folds and the separation are properties of the
+offset and stay on what `skin_over` produced, and a printed line says what the clean removed.
+That split is not fussiness. `clearance` samples face centroids, so re-triangulating moves the
+samples: cleaning alone took the cornices cladding from 63.9999 mm to 84.1503 mm without moving
+any surface, purely because the centroid that found the low reading no longer existed. A verdict
+that changes with the triangulation is not a verdict about the geometry — and the low reading was
+real, see the `_tiling` invariant above.
+
+- **shapely (GEOS) unions, `manifold3d.triangulate` re-triangulates.** Nothing to install here —
+  shapely arrives with `trimesh[easy]`, and it joins yaml and jsonschema on the undeclared-
+  dependency list. Both engines were measured against the alternatives. shapely is bit-exact on every point its union preserves
+  and it **keeps collinear vertices**, which `skin/export.py` keeps on purpose so a neighbouring
+  facet cornering there leaves no T-junction; `manifold3d.CrossSection` moves preserved points
+  ~4.7 nm and drops those vertices. `skin/clean.py` is the **only** module that imports shapely
+  and it is deliberately not re-exported from `skin/__init__.py`, so `import skin` does not
+  require it — the same containment `skin/parameters.py` gives yaml and jsonschema.
+- **Planes are grouped either way up** — `min(|rep - row|, |rep + row|)`, and matched against the
+  representatives already found rather than by equality of a rounded key, for the reason
+  `_plane_ids` is. A bowtie's two halves face opposite ways, so a group keyed on `(n, d)` alone
+  puts them in different groups and misses the very overlap the pass exists for.
+- **Each way up is unioned separately, and overlap — not adjacency — decides what is one sheet.**
+  Two coplanar sheets facing opposite ways are an ordinary condition: a knife, where a roof butts
+  a wall on the wall's own plane and both sides of the contact are exposed, or simply two solids
+  meeting along an edge. A bowtie's two halves, by contrast, *overlap*, and their opposed winding
+  is an artefact of the self-crossing quad rather than two surfaces. So `_sheets` connects faces
+  that intersect with positive **area**, gives each component the direction of the greater area in
+  it, and the two directions are then unioned apart. Getting this wrong is silent and severe, and
+  both wrong answers were measured: a plane-wide vote costs the substrate union its volume
+  (84.294 → 104.688 m³), and a vote taken *after* the union — per region — costs two cubes meeting
+  along an edge theirs (2.0 → 4.0), because `unary_union` has by then dissolved the boundary
+  between the two sheets and no later vote can recover it. **Separate the ways up before the
+  union, never orient after it.** Four tests pin it.
+- **Every ring is oriented before triangulating** (`orient(poly, 1.0)`, exteriors CCW, holes CW,
+  `allow_convex=False`). Fed shapely's raw rings, `manifold3d.triangulate` silently returns
+  overlapping triangles and *more* area than it was given.
+- **A whole plane is triangulated in one call** — both ways up together — so two sheets meeting
+  along a line share the vertices they meet at. Re-triangulating region by region and welding
+  afterwards left two non-manifold edges in the membrane. A triangle never spans the two ways up:
+  they are disjoint in area, so each triangle lies inside exactly one of them.
+- **The weld radius is `WELD_TOL = 1e-9`, not `PLANE_TOL`.** The only points needing a weld at all
+  are the ones the union *computed*, where two planes reached one crossing through different 2D
+  bases and differ in the last bits (~1e-14 m); a point the union preserved comes back
+  bit-identical. At `PLANE_TOL` the radius reaches the **1 µm lattice every substrate coordinate
+  is snapped to** — two neighbouring lattice points are 9.9999999925e-07 apart — so a 1 µm strip
+  welds away silently and is reported as overlap that never existed.
+- **Metadata keyed on an index does not survive**, because the indexing does not: `folds` is a
+  list of vertex indices and `plane_ids` one id per face. Both are dropped rather than remapped,
+  so a reader gets nothing instead of the wrong vertex. `build.py` prints folds off the raw skin.
+
+`clean(mesh, dissolve=True)` runs a **second, opted-in operation** on top: it drops every vertex
+that lies straight between its neighbours on every ring holding it **and that no ring turns at**.
+That last clause is the whole of it, and it is asked once over the entire mesh rather than per
+plane — `skin/export.py` keeps collinear vertices precisely because dropping one that a
+neighbouring facet corners on leaves a T-junction, and a vertex can be straight through on one
+facet and a corner on the one beside it. It is a tidy-up, so it is allowed the authored
+`STRAIGHT_TOL` (1e-9 m off the line) where a derivation would not be; it changes no outline, and
+the measurements say so — area equals the covered area to 0.000000 mm² on all three substrates,
+with no vertex more than 2.5 nm off a plane the offset produced. `build()` opts in: on the live
+bake the membrane goes 153 → 115 triangles and 67 → 35 border edges, the cladding 134 → 81 and
+54 → 45, and T-junctions fall (membrane 3 → 0) because a vertex no ring turns at **is** the
+T-junction anchor. Pass `dissolve=False` — the default — to keep every vertex.
+
+What it does **not** do: it says nothing about two *different* planes intersecting, and it cannot
+close a hole — the scupper outlet comes through untouched, because its two triangles span a knife
+plane and are coplanar with nothing. If the outlet is ever to be closed, the gusset belongs here
+as a second, opted-into operation with an authored bound — a cleanup may author a bound where a
+derivation may not — and **not** in the rules. See NOTES for why that is where it goes.
 
 ## Classifying parts
 

@@ -11,50 +11,52 @@ and rejected, and what is still open.
 
 ## Start here (picking up after 2026-08-21)
 
-### The next job is `skin/clean.py`, and it is specified
+### Where to pick up
 
-Decided with Duncan 2026-08-21: **build the coplanar-overlap pass; leave the gusset.** The
-reasoning, the measurements and the rejected alternatives are in *"Is the gusset worth its
-complexity?"* and the two sections above it — read those three before starting, they contain
-everything that was tried and why the obvious routes do not work. The short form:
+**First job: `/code-review high` over the whole branch diff.** It is owed and has not run. The
+fourth-pass review below covered `skin/clean.py` *as it stood before its `_sheets` rewrite*;
+everything since is **unreviewed** — `_sheets`, the `dissolve` operation, and all of
+`offset._tiling` / `_rings` / `_retiled`. A second run was launched and died on an API session
+limit before producing a finding. Given that the fourth pass found four real defects in code of
+exactly this kind, do not treat the unreviewed half as settled.
 
-- **`clean(mesh) -> mesh`**, its own module, mesh in and mesh out. Nothing in `skin/offset.py`
-  or `RULES` learns it exists. Named for a mesh and not for a skin, because Duncan expects to
-  want it on other geometry in the student-house model — though *measured here*, nothing else
-  in this repo needs it (`substrate.union` comes back with 0 mm² of overlap).
-- **Called as an explicit step, not inside `skin_over`.** The union inserts new vertices where
-  two bands' boundaries cross, so a cleaned mesh no longer satisfies *"every vertex that
-  survived is exactly where the offset put it"* — the `base` trim test's assertion, and the
-  property that makes `_trim_below` a cut rather than a clamp.
-- **shapely `unary_union`** for the 2D boolean (bit-exact on preserved points, keeps collinear
-  vertices) and **`manifold3d.triangulate`** to get back to triangles (already a dependency,
-  takes holes). Nothing to install. `manifold3d.CrossSection` also works but moves preserved
-  points ~4.7 nm and drops the collinear vertices `skin/export.py` keeps on purpose.
-- **Group planes either way up** — `min(|rep - row|, |rep + row|)` — or the six bowtie quads,
-  whose halves face opposite ways, land in different groups and their overlap is missed.
-- **Orient every ring before triangulating** (`shapely.geometry.polygon.orient(poly, 1.0)`,
-  exterior CCW, holes CW, and pass `allow_convex=False`). Fed shapely's raw rings,
-  `manifold3d.triangulate` silently returns overlapping triangles and *more* area than it was
-  given — it cost a whole wrong measurement before it was caught.
+### What landed today
 
-What the prototype measured, which is the acceptance target:
+Three things, all on top of `07c3e4d`, all in one commit — the head of the branch, so
+`git show --stat HEAD` is the whole of it:
 
-| | triangles | area | border edges | T-junctions | n-gons written | self-crossing |
-|---|---|---|---|---|---|---|
-| Membrane | 153 → 151 | 126.169998 → **125.943129** | 67 → 48 | 19 → 4 | 48 → 47 | 2 → 0 |
-| Cladding | 134 → 111 | 129.883734 → **129.481482** | 54 → 55 | 4 → 4 | 26 → 26 | 0 → 0 |
+1. **`skin/clean.py`** — the coplanar-overlap pass, built to the spec that stood here and
+   measured against it in *"The pass as built"*. `clean(mesh) -> mesh`, its own module, the only
+   one that imports shapely and deliberately not re-exported from `skin/__init__.py`. `build()`
+   **measures the raw emission and writes the cleaned mesh** — Duncan's choice of the three
+   offered — so no regression baseline moves and `build/` gets the tidy geometry.
+2. **`clean(mesh, dissolve=True)`** — a second, opted-in operation that drops every vertex no ring
+   turns at. `build()` opts in. See *"Collinear vertices, and the second operation"*.
+3. **`offset._tiling`** — the fix for the defect Duncan read off the cleaned bake: a hole corner
+   crossing a tiling diagonal, which had been eating the cladding's notch at the scupper cornice
+   since the cornices bake first built. See *"The notch is fixed at source"*, which also carries
+   the correction that the cladding's long-standing clearance warning was **never a false alarm**.
 
-One known wart to resolve while building it: the cleaned membrane has **two non-manifold edges**,
-at `(8.072, 5.177, 14.7603)-(8.072, 5.177, 14.737)` and
-`(11.3129, 7.548, 13.3312)-(11.108, 7.548, 13.3239)`. The prototype re-triangulates each polygon
-independently and welds afterwards; that is the likely cause and is worth fixing rather than
-accepting.
+### What is open
+
+- **The membrane's four bowties.** A lap miter running out past the rim of a band that lies wholly
+  inside its neighbour — a different mechanism from the one `_tiling` fixed, and still only
+  dissolved after the fact by `clean`. The cladding has none left.
+- **The gusset**, still deferred and still specified — see *"Is the gusset worth its complexity?"*.
+  `skin/clean.py` is now the module it would go in, as a third opted-in operation.
+- **`clearance` depends on the triangulation**, which is the part of that open item that survives
+  today's correction. Read the correction before acting on the item.
+- **The south-junction sliver**, 205 x 7.3 mm, unchanged.
 
 ### State of the tree
 
-Reviewed and committed 2026-08-21. `/code-review high` found four latent defects, all fixed and
-all byte-identical in output — see *"What `/code-review high` caught (third pass)"*. 79 tests
-green, all three substrates build. Nothing is pending.
+Everything above is **committed** at the head of `skin-the-walls-and-caps-bake`, working tree
+clean, nothing pushed. 100 tests green in ~5.5 s (with `-W error::DeprecationWarning`), all three substrates
+build, and the live bake was built last so `build/` and `display.reload()` show it. What
+`skin_over` **emits** is unchanged from `07c3e4d` everywhere but the cornices bake's cladding
+(134 → 122 triangles) — the rig and walls-and-caps skins are triangle for triangle what they
+were, which is the property `_tiling` was written to keep. What `build/` **writes** differs
+everywhere, because it is now cleaned and thinned.
 
 ### The substrate
 
@@ -75,8 +77,8 @@ python3 build.py unit8-parapets-caps-clt-insulation-headhouse-extended-cornices.
 synthetic rig, manifest included, and `display.reload()` then shows you the rig. See CLAUDE.md.
 
 Work sits on branch `skin-the-walls-and-caps-bake` — the name is now older than what is on it.
-Everything through `c098d15` is committed; items 6 and 7 below are **not** (see above). Seven
-pieces of work, each with its own section; **read 4 to 7 before touching `skin/offset.py`.**
+Everything below is committed. Nine pieces of work, each with its own section; **read 4 to 7
+before touching `_lap`, and 9 before touching the solve.**
 
 1. **The Unit8 bake** (2026-08-19) — the storey below added, the first substrate to elect a
    `flanged` wall. It found a defect: the turn-out matched an unbounded *plane* rather than the
@@ -95,15 +97,27 @@ pieces of work, each with its own section; **read 4 to 7 before touching `skin/o
    the membrane covering the cheeks, the cladding no longer lining the outlet, `_room` cutting a
    lap to the face it lands on, and Duncan's **extended cornice**, which removed the knife at the
    mouth and bought the mouth flange and the cornice-end drips for no code at all.
-6. **The scupper made symmetrical** (2026-08-21, uncommitted) — five defects Duncan read off the
+6. **The scupper made symmetrical** (2026-08-21) — five defects Duncan read off the
    live bake, three causes, all in `_lap`'s neighbourhood: `_room` reading only the first coplanar
    triangle that held its probe, the fold's probe starting `distance` short of a **convex** arris,
    and a run-on priced by `reach` of the direction it runs in rather than by `out`. Four new
    tests, all four red at `c098d15`.
-7. **The mesh audit** (2026-08-21, uncommitted — NOTES only, no code) — the outlet hole diagnosed
+7. **The mesh audit** (2026-08-21 — NOTES only, no code) — the outlet hole diagnosed
    and bounded, the coplanar overlap measured, the engines compared, two source-level fixes tried
    and reverted, and the decision to build the pass and leave the gusset. Everything the next job
    needs is in it.
+8. **`skin/clean.py`** (2026-08-21) — the coplanar-overlap pass built to that spec,
+   wired into `build()` as write-cleaned/measure-raw, `dissolve` as a second opted-in
+   operation, and 20 tests. Reading it back, Duncan found the cladding's notch at the scupper
+   cornice eaten by an inverted triangle — pre-existing, and hidden until the double cover stopped
+   being drawn twice. `offset._tiling` fixes that at source, and takes the cladding's coplanar
+   overlap to zero and its long-standing clearance warning with it.
+9. **`offset._tiling`** (2026-08-21) — a patch the offset turned inside out is tiled again from
+   its own boundary loops. It fixed the cladding's notch at the scupper cornice, took that skin's
+   coplanar overlap to zero, and retired the "known false alarm" this file carried for weeks: the
+   warning was right. See *"The notch is fixed at source"*. **Unreviewed.** Orientation at a knife took
+   two goes to get right and `/code-review high` caught the second one; it also turned `clearance`
+   into a weaker verdict than the open item already said. See *"The pass as built"*.
 
 ### Where it stands, measured
 
@@ -111,12 +125,21 @@ pieces of work, each with its own section; **read 4 to 7 before touching `skin/o
 |---|---|---|---|---|
 | rig | 76.071 | 7.7760 / 84.6091 | 0 / 0 | none |
 | walls-and-caps | 77.000 | 7.8808 / 84.9999 | 0 / 0 | none |
-| extended cornices (live) | 25.654 | 7.8808 / 63.9999 | 0 / 0 | none |
+| extended cornices (live) | 76.230 | 7.8808 / 84.1503 | 0 / 0 | none |
 
-Unchanged by the 2026-08-21 second pass — see that section for what did move. 77 tests, ~4.7 s.
-The cladding's `WARNING: 21.000 mm inside the requested offset` on the cornice
-bakes is the **known false alarm** — see the open item on `clearance`; four independent checks
-say the cladding stops correctly on its mitre against the cornice.
+| | coplanar overlap removed, membrane / cladding | triangles | border edges |
+|---|---|---|---|
+| rig | 53554 / 0 mm² | 33→34 / 29→22 | 25→16 / 23→18 |
+| walls-and-caps | 69945 / 0 mm² | 76→50 / 78→40 | 24→14 / 30→24 |
+| extended cornices (live) | 226868 / 0 mm² | 153→115 / 122→80 | 67→35 / 54→44 |
+
+The first table is measured on the raw emission and is **unchanged** by `clean` — that is the
+point of measuring before the pass and writing after it — the second table moved on 2026-08-21
+when `_tiling` stopped the cladding covering surface it never meant to. 100 tests, ~5.3 s.
+No bake prints a self-intersection warning any more. The cladding's
+`WARNING: 21.000 mm inside the requested offset` on the cornice bakes, carried here for weeks as a
+**known false alarm**, was nothing of the kind: it was the inverted triangle, and it went when the
+tiling was fixed. See *"The notch is fixed at source"*.
 
 ### After the pass, in the order they became live
 
@@ -131,6 +154,10 @@ say the cladding stops correctly on its mitre against the cornice.
 - **`cladding_laps` is still the old election** — `interior`, nothing else — held back while the
   membrane was settled. Widening it to `np.abs(faces.normals[:, 2]) < TOL` is the whole change;
   expect it to need its own conversation about what the cladding does at a cornice.
+- ~~**The offset inverts a triangle where a hole corner is closer to a tiling diagonal than the
+  offset distance**~~ — **fixed 2026-08-21** by `_tiling`, see *"The notch is fixed at source"*.
+  It was the cause of both of the cladding's bowties; the miter mechanism below is the membrane's,
+  and is still open.
 - **The lap cannot clip, and there is now more of it to clip.** The south-junction sliver
   (205 x 7.3 mm) is unchanged, but the collars restored at the two parapet ends roughly double the
   coplanar overlap around the scupper — symmetrically, which is the fix. The pass resolves the
@@ -2009,6 +2036,282 @@ random simple polygons and 2,000 notched rectilinear loops — no false refusals
 / `group_caps` idempotency, `_opening`'s locality on the live bake, the `_room` and `at_arris`
 fixes themselves, and the substrate export names against `Path.stem`.
 
+## The pass as built (2026-08-21)
+
+`skin/clean.py`, `clean(mesh) -> mesh`, ~150 lines with its docstrings against the prototype's 64.
+It hits the acceptance table on the two columns that were the point — **area is exactly the area
+covered**, on both skins, to the µm² — and beats it on the rest:
+
+| membrane, live bake | prototype | as built |
+|---|---|---|
+| triangles | 153 → 151 | 153 → **147** |
+| area | 126.169998 → 125.943129 | **the same** |
+| border edges | 67 → 48 | 67 → **45** |
+| n-gons written | 48 → 47 | 48 → **43** |
+| self-crossing n-gons | 2 → 0 | 4 → **0** |
+| non-manifold edges | 0 → **2** | 0 → **0** |
+
+The cladding lands exactly where the prototype did: 134 → 111 triangles, 129.883734 → 129.481482,
+54 → 55 border edges, 26 n-gons either way, none self-crossing. (The self-crossing counts differ
+before the pass because the two audits count differently — mine flags a loop that merely pinches
+itself at a point. Both agree the answer after is zero. And my first count of them was itself
+wrong, from a projection basis taken off the first three points of a loop whose first three points
+were collinear: use Newell for a loop normal, always.)
+
+**The wart is gone, and its cause was what the spec guessed.** The prototype re-triangulated each
+polygon independently and welded afterwards. Triangulating each **whole plane in one
+`manifold3d.triangulate` call** — every ring of every region of that plane's union, oriented, in
+one list — makes two regions meeting along a line share the vertices they meet at, and the two
+non-manifold edges never form. It is also what took the triangle and border counts below the
+prototype's.
+
+### Two things the prototype had wrong
+
+**1. Orientation cannot be decided after the union at all. That is a knife.** Grouping planes
+either way up is right and necessary — it is the only way a bowtie's two halves land together —
+but *what to do about the two ways up* took two goes to get right, and both wrong answers were
+silent:
+
+| deciding orientation... | what it costs | found by |
+|---|---|---|
+| per **plane**, by majority (the prototype) | `substrate.union(parts)` volume **84.293580 → 104.688220 m³** | building it |
+| per **region** of the union, by the faces covering that region | two cubes meeting along an edge, volume **2.0 → 4.0** | `/code-review high` |
+| per **way up**, unioned separately, `_sheets` deciding which is which | nothing measurable, on any substrate | — |
+
+The middle one is the instructive failure. Two coplanar sheets facing opposite ways are an
+ordinary condition — a roof butting a wall on the wall's own plane exposes both sides of the
+contact at once, which is the 2026-08-16 fold and the very thing `_knives` exists for — and they
+are usually **edge to edge, not apart**. `unary_union` merges two touching polygons into one, so
+by the time there is a region to vote on, the boundary between the two sheets is gone and the
+smaller side is inverted. Voting per emitted triangle instead does not save it either: the merged
+polygon is triangulated across the old boundary, so the answer becomes whatever the triangulator
+happened to do. **The ways up have to be separated before the union runs.**
+
+What separates them is **overlap, not adjacency**. `_sheets` connects two faces of a plane when
+they intersect with positive *area*, and gives each connected component the direction of the
+greater area in it. A bowtie's halves overlap, so they are one sheet and the artefact winding is
+outvoted; a knife's two sides touch along a line and stay two sheets. Then each direction is
+unioned on its own, and both go into one `triangulate` call so they still share the vertices along
+the line they meet at. With that: the substrate union, all 36 parts of the live bake, and two
+cubes meeting along an edge all come back with volume, area, watertightness and winding identical
+to the bit — and both live skins are unchanged, to the µm², from the region-voting version.
+
+**2. The membrane's own orientation is untouched by any of it**, which is worth stating because
+the first check of it said otherwise. Comparing each cleaned face against the nearest original
+face by centroid distance reports one flipped face on the membrane; it is an artefact of the
+check — the "nearest" face is 45 mm away on a *different* plane. On the cleaned face's own plane,
+all 0.22288 m² of original face area faces the same way it does. Compare within the plane, not by
+proximity.
+
+### What it proved about `clearance`, and it is not good news
+
+Cleaning the cornices bake's cladding takes its clearance from **63.9999 mm to 84.1503 mm**, which
+looks like the known false alarm curing itself. It is not. The sample that read 64.0 mm is a face
+**centroid** at `(7.995, 5.1133, 14.361)`, against `Cornice-Headhouse-E` — and that point is still
+on the cleaned surface, 0.0000 mm from it. Nothing moved. Re-triangulating simply removed the
+triangle whose centroid happened to land there, so the metric stopped looking.
+
+That is a sharper version of the standing open item than the one already recorded. `clearance`
+does not only fail to distinguish "stops short of a feature" from "folds through itself" — its
+answer **depends on how the surface happens to be triangulated**, which is not a property of the
+geometry at all. It is why `build()` measures the raw emission: had it measured the cleaned mesh,
+the cornices warning would have gone quiet today and looked like a fix. The Möller-Trumbore
+crossing check remains the one that held up.
+
+### What `/code-review high` caught (fourth pass, on the pass itself)
+
+Four findings, all four real, all four fixed. Two would have been wrong answers on other people's
+geometry rather than on anything here, which is the point: `clean` is documented as a mesh utility
+and NOTES says Duncan expects to use it on the student-house model.
+
+- **The knife again, one case further out** — the region-wide vote above. Reproduced with two unit
+  cubes meeting along an edge: watertight in, volume 2.0 → 4.0 out, `overlap_removed` reporting
+  0.0 so nothing warned. It also falsified this file's own claim that a test pinned the property:
+  the test then standing put a **gap** between its two regions, which is the case `unary_union`
+  cannot merge. Four tests now, including the touching one and the two cubes.
+- **The weld radius was `PLANE_TOL`, which is the substrate's own lattice.** Every coordinate here
+  is snapped to 1 µm, and two neighbouring lattice points at metre scale are 9.9999999925e-07
+  apart — inside the radius. A 1 µm-wide coplanar strip therefore welded away silently, and the
+  loss was *reported as overlap removed*. `WELD_TOL = 1e-9` now: five orders above the ~1e-14
+  noise it actually has to absorb, three below the lattice. The docstring says both bounds.
+- **`metadata["folds"]` rode along onto a re-indexed mesh.** The metadata copy already dropped
+  `plane_ids` as a per-face cache and then carried a list of **vertex** indices onto a mesh whose
+  vertices were rebuilt: on the live bake the raw skin's fold vertex 33 and the cleaned mesh's are
+  2.6 m apart, and an index can point past the end. `build.py` prints folds off the raw skin so
+  nothing misreported, but `tidy` is what goes into the manifest and the OBJ. Dropped, not
+  remapped — nothing beats something wrong.
+- **The clean report was gated on triangle count** while its comment claimed it fired whenever the
+  clean did anything, so a clean that dissolved real overlap without changing the count would have
+  written a different mesh than every printed number was measured on, silently. Gated on both now.
+
+The review also confirmed, independently, that the cleaned area equals the per-plane union area to
+~1e-14 m² on all four substrate/skin combinations, that no face comes out flipped, and that every
+number in the tables above reproduces.
+
+### Collinear vertices, and the second operation (2026-08-21)
+
+Duncan, same reading: *"There are also colinear edges in both skins. Does clean weld colinear
+edges?"* It did not, deliberately — shapely keeps collinear vertices through the union and
+`skin/export.py` keeps them on purpose, because dropping one that a neighbouring facet corners on
+leaves a T-junction. Measured on the cleaned skins: 35 collinear corners in the membrane and 30 in
+the cladding, of which only 6 and 10 were used by no other facet.
+
+**"Used by no other facet" turned out to be the wrong test, and too timid.** The right one is *no
+ring **turns** at this vertex* — a vertex may sit on two rings and be straight through on both, in
+which case dropping it from both changes nothing. Asked that way it is 19 and 20 vertices rather
+than 6 and 10, and it is asked **once over every ring of the mesh**, never per plane. Added on
+Duncan's word as `clean(mesh, dissolve=True)`, a second opted-in operation, with `build()` opting
+in:
+
+| live bake | triangles | vertices | border edges | T-junctions | collinear corners |
+|---|---|---|---|---|---|
+| Membrane, cleaned | 147 | 94 | 45 | 3 | 35 |
+| ...and thinned | **115** | **75** | **35** | **0** | **3** |
+| Cladding, cleaned | 111 | 81 | 55 | 4 | 30 |
+| ...and thinned | **81** | **61** | **45** | **2** | **0** |
+
+T-junctions *fall* rather than rise, which is the point: a vertex no ring turns at is exactly a
+T-junction anchor. The three left in the membrane are vertices some other facet genuinely corners
+at, and are correctly kept. Across all three substrates and both skins the area still equals the
+covered area to **0.000000 mm²**, nothing is non-manifold, no vertex sits more than 2.5 nm off a
+plane the offset produced, clearance is unchanged, and it is idempotent. `STRAIGHT_TOL` is 1e-9 m:
+a union-inserted crossing lies on its line to double precision, five orders below that, while the
+shallowest real corner in a building is millimetres off — there is nothing in between for the
+number to get wrong.
+
+### Where it sits, and what it costs
+
+- **`skin/clean.py` is the only module that imports shapely**, and `clean` is deliberately **not**
+  re-exported from `skin/__init__.py`: `import skin` must not require it. `build.py` imports
+  `skin.clean.clean` directly. Same containment as yaml and jsonschema in `skin/parameters.py`,
+  and the same reason — the student-house seam. shapely does join the undeclared-dependency list.
+- **`build()` measures raw and writes cleaned**, chosen by Duncan from three. Every printed
+  number is a property of the offset and none of them moved on any of the three substrates; a
+  single extra line reports what the clean removed. `build/` and therefore `display.reload()` get
+  the cleaned mesh.
+- **It is idempotent in what it produces**, and it does not mutate its input. A second pass over
+  either live skin finds 0.000 mm² left to remove and returns the same triangle count, the same
+  vertex count, the same vertex *set* and the same area to twelve decimals — but **not** the same
+  index order, because the plane groups are walked in face order and that order has changed. Do
+  not write a test asserting `clean(clean(m))` is `clean(m)` array-for-array; assert on the mesh.
+- **A vertex the union preserved comes back bit-identical** — the 2D point is mapped back to the
+  vertex it was projected from rather than unprojected — and every vertex of a cleaned skin lies
+  within 4.2e-7 m of a plane the original had, which is manifold3d's own float32 floor and not
+  drift introduced here.
+- **It cannot close a hole, still.** The outlet comes through untouched, exactly as measured
+  before it was built.
+
+## What the clean made visible at the scupper cornice (2026-08-21)
+
+Duncan, off the freshly cleaned bake: *"There is a new defect in the cladding. V8 is too low. E10
+and E9 should be one horizontal edge."*
+
+**Not a new defect, and not the clean's.** In that plane the covered area is **bit-identical**
+before and after — `symmetric_difference(raw, cleaned).area == 0.0` on the whole of `x = 7.995`.
+What changed is only what Blender **draws**: the notch's bottom and right edges were being drawn
+on top of a panel that already covered the notch's lower right, and the clean stopped drawing the
+double cover. The wireframe now tells the truth about a surface that has been that shape all along.
+
+| the notch's outline, plane `x = 7.995` | |
+|---|---|
+| drawn before | `(4.6, 14.34)–(5.37, 14.34)` and `(5.37, 14.34)–(5.37, 14.58)` |
+| drawn now | `(4.6, 14.34)–(4.7909, 14.34)`, then a **rake** to `(5.37, 14.434)`, then up to `(5.37, 14.58)` |
+
+**Duncan's expectation is right, and the height is 14.340.** `Cornice-Headhouse-E` is
+y 4.685…5.285, z 14.425…14.495, so the cladding's 85 mm-clear notch around it is exactly
+y 4.60…5.37, z **14.34**…14.58 — symmetric about the outlet's centre line, bottom edge horizontal.
+The 14.4339837 he read off the stray vertex is not a height in the model at all: it is where the
+offending edge crosses `y = 5.37`.
+
+**The cause, which is worth having, because this file had the wrong mechanism for it.** The
+bowties were explained here as a miter running out past the rim of a band that lies wholly inside
+its neighbour. That is the *membrane's* mechanism. The cladding's 200 655 mm² bowtie on
+`Headhouse-E`'s facade — the big one already named above — is a different one:
+
+- The union punches the cornice's contact out of the parapet's facade face, leaving a rectangle
+  with a rectangular hole, and manifold3d tiles it with a fan from `(2.85, 14.025)`. One of those
+  triangles is `(2.85, 14.025) — (5.285, 14.425) — (7.12, 14.718)`.
+- The hole's corner `(5.285, 14.425)` sits **4.7 mm** from the diagonal between the other two.
+- The offset moves that corner 85 mm outward, to `(5.37, 14.34)` — clean across the diagonal. The
+  triangle inverts, and the inverted triangle is precisely the sliver that eats the bottom right
+  of the notch.
+
+So `planar_offset` keeps the union's triangulation while moving its vertices, and **a vertex that
+starts within the offset distance of a diagonal joining two of its neighbours will cross it**. The
+face outline is offset correctly; the tiling of it is not. That is a third member of the family
+with "the lap emits whole quads" and "the lap cannot clip": the raw emission covers area it should
+not, and `clean` dissolves the double count without touching the cause. Fixing it means
+re-triangulating a face whose tiling the offset inverted — detectable exactly, with no threshold:
+a face whose normal ends up opposed to its own plane's. Four such faces in the membrane and two in
+the cladding on the live bake; `skin/clean.py`'s `_sheets` already finds them, but it is the wrong
+place to fix them, because by then the substrate face they came from is gone.
+
+**Do not "fix" this in `clean`.** Its job is what the plane is covered by; it cannot know that a
+particular covered sliver was never wanted. The notch will come back symmetric when the offset
+stops inverting triangles, and not before.
+
+## The notch is fixed at source, and `clearance` was right all along (2026-08-21)
+
+Duncan, on the diagnosis above: *"Fix it."*
+
+`skin/offset.py` gains `_tiling`, run on the kept faces before any lap is placed. A face whose
+offset triangle ends up pointing against the body's own normal has been turned **inside out** by
+the solve; the patch it belongs to — coplanar faces joined edge to edge — is tiled again from its
+own boundary loops, which an inversion does not move. Detection is exact and wants no threshold.
+It applies to a patch that inverted and nowhere else, and the rig and the walls-and-caps bake come
+out **triangle for triangle identical**, which is the property to keep.
+
+- `_rings` walks the patch's boundary into loops and **raises** on a pinch rather than guessing
+  which way to turn.
+- `_retiled` takes the widest loop as the outline and the rest as holes, and checks the tiled area
+  against the area those loops enclose — the same check `substrate`'s ear clipper makes, because
+  an outline that crossed itself would otherwise tile to well-formed triangles covering the wrong
+  region and nothing else would notice. The check is **relative**, not against `PLANE_TOL`: it
+  sets a sum of triangle areas against a shoelace, so what noise there is scales with the patch.
+  Measured on the two real patches the slack is 1.9e-16 and 2.5e-16 against a 1e-9 bound, and the
+  defect it guards against is 7e-3 of the patch — seven orders of headroom either way.
+- No shapely: signed areas are a shoelace and the tiling is `manifold3d.triangulate`, so
+  `skin/offset.py` keeps the dependency it had.
+
+**What it fixes, measured on the live bake.** The notch round the scupper cornice is symmetric
+again — outline `(4.6, 14.58) (4.6, 14.34) (5.37, 14.34) (5.37, 14.58)`, one horizontal edge at
+z = 14.340, exactly as Duncan called it. The stray vertices at `(4.7909, 14.34)` and
+`(5.37, 14.433984)` are gone.
+
+| cladding, live bake | before | after |
+|---|---|---|
+| triangles emitted | 134 | **122** |
+| summed area | 129.883734 | **129.454269** |
+| area actually covered | 129.481482 | **129.454269** — the two are now the same number |
+| coplanar overlap for `clean` to dissolve | 402 253 mm² | **0** |
+| inverted faces | 2 | **0** |
+| clearance | 63.9999 mm + WARNING | **84.1503 mm**, no warning |
+| skin separation | 25.654 mm | **76.230 mm** |
+
+27 213 mm² of surface that was never wanted is gone with it. The membrane is untouched — its four
+bowties come from the lap miter, a different mechanism, and `clean` still dissolves them.
+
+### The correction: the cornices warning was never a false alarm
+
+This file has said for weeks that the cladding's `WARNING: 21.000 mm inside the requested offset`
+on the cornice bakes was **wrong** — that four independent checks (crossings both ways,
+self-crossings, face centres inside parts, skin edges against part surfaces) all came back clean
+and the cladding stopped correctly on its mitre. Every one of those measurements was accurate.
+The conclusion drawn from them was not.
+
+The sample reading 63.9999 mm was the centroid of the **inverted triangle**, at
+`(7.995, 5.1133, 14.361)`, against `Cornice-Headhouse-E`. That triangle was real surface, sitting
+inside the 85 mm zone the cladding is supposed to keep clear round the cornice. `clearance` was
+right; only the word *self-intersecting* in the message was wrong, which is exactly why the four
+checks — every one of them a test for **self-intersection** — came back clean. Four right answers
+to the wrong question outvoted one right answer to the right one.
+
+With the tiling fixed the reading is 84.1503 mm against `Roof_Unit8_InsulationTaper.6`, inside the
+1.683 mm the sloped planes absorbed, and the bake prints no warning at all. So the standing item
+below — *demote `clearance` to a number rather than a verdict* — should **not** be taken on the
+strength of that warning: it caught a defect nothing else in the stack could see. The real
+complaint against it stands and is narrower: its answer moves when the triangulation moves.
+
 ## Open items
 
 - ~~**The scupper mouth and the cornice ends are bare.**~~ Closed 2026-08-21 by the extended
@@ -2019,19 +2322,27 @@ fixes themselves, and the substrate export names against `Path.stem`.
   lap to clip against its neighbour rather than emit whole quads.
 - ~~**Coplanar laps overlap, and it skews the area**~~ — membrane 0.180%, cladding 0.311%, plus
   six bowtie quads. **Decided 2026-08-21: emit then clean.** `skin/clean.py` is specified at the
-  top of this file and is the next job. The two source-level alternatives are measured and ruled
-  out; the *cause* — the lap emitting whole quads that overlap — stays open above.
+  top of this file. **Built 2026-08-21** — see *"The pass as built"*: area is now exactly the
+  area covered, on both skins. The two source-level alternatives are measured and ruled out; the
+  *cause* — the lap emitting whole quads that overlap — stays open above.
 - **The membrane has one hole: the scupper outlet**, 6 border edges, two triangles. Every other
   border component in either skin is a legitimate free edge — the skin's own perimeter. Bounded
   since the cheeks were covered, so it is fillable with the vertices already there; what it needs
   is Duncan's decision on gussets. Fully diagnosed and measured in the section above.
-- **`clearance` cannot tell "stops short of a feature" from "folds through itself".** The cornices
+- **`clearance` cannot tell "stops short of a feature" from "folds through itself".** *(Read the
+  correction in "The notch is fixed at source" first: the cornices warning this item was built on
+  was **right**, and the cladding really did have surface 21 mm inside its offset. What survives
+  is the triangulation-dependence, not the cry of wolf.)* The cornices
   bake makes the cladding read 63.9999 mm against an 85 mm offset and print
   `WARNING: … self-intersecting`, and it is wrong — four independent checks (crossings both ways,
   self-crossings, face centres inside parts, skin edges against part surfaces) all come back
   clean, and the cladding stops exactly on its mitre against the cornice underside. The metric
   samples vertices and centroids against every part, so any skin that deliberately terminates
-  beside something standing proud of the wall reads low. CLAUDE.md still says a clearance below
+  beside something standing proud of the wall reads low. **Worse than that, measured 2026-08-21
+  while building `clean`:** the number depends on how the surface is triangulated. Cleaning the
+  cladding reads 63.9999 → 84.1503 mm with nothing moved — the offending centroid's triangle was
+  merely re-triangulated away, and the point is still on the surface at 64 mm. A verdict that a
+  re-triangulation can change is not a verdict about the geometry. CLAUDE.md still says a clearance below
   `distance − slope_deviation` means something broke; that is now false in the presence of a
   cornice, and a warning that cries wolf every build is worse than none. The Möller-Trumbore pass
   is the check that actually held up, which strengthens the standing "promote it into

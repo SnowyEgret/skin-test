@@ -11,6 +11,7 @@ import numpy as np
 import trimesh
 
 from skin import clearance, parameters, separation, skin_over, substrate, write_obj
+from skin.clean import clean
 from skin.offset import Faces, _owner, _plane_ids, elements_of
 
 BUILD_DIR = Path(__file__).parent / "build"
@@ -952,16 +953,27 @@ def build(
             for i, part in enumerate(parts)
         ]
 
+    def borders(mesh):
+        return len(trimesh.grouping.group_rows(mesh.edges_sorted, require_count=1))
+
     built = {}
     for spec in specs:
         distance = spec["distance"]
         skin = _skin_from(spec, parts)
         built[spec["name"]] = skin
-        named.append((spec["name"], skin, spec["display"], "skin"))
+        # measured on the raw emission and written cleaned and thinned. The lap
+        # rule legitimately covers part of a plane twice, and `clean` dissolves that
+        # — but everything printed below is a property of the *offset*, and
+        # `clearance` in particular samples face centroids, so re-triangulating
+        # moves the samples and would quietly change the verdict without any
+        # surface moving. So the numbers stay on what `skin_over` produced, and
+        # the file gets the mesh with the double cover resolved
+        tidy = clean(skin, dissolve=True)
+        named.append((spec["name"], tidy, spec["display"], "skin"))
 
         gap = clearance(parts, skin)
         slope = skin.metadata["slope_deviation"]
-        border = len(trimesh.grouping.group_rows(skin.edges_sorted, require_count=1))
+        border = borders(skin)
         print(
             f"{spec['name']:<10} offset {distance * 1000:.0f} mm"
             f" | lap {spec['drop'] * 1000:.0f}/{spec['out'] * 1000:.0f} mm"
@@ -969,6 +981,21 @@ def build(
             f" | clearance {gap * 1000:.4f} mm"
             f" | {'closed shell' if skin.is_watertight else f'open, {border} border edges'}"
         )
+        # reported whenever the clean changed what gets written: overlap
+        # dissolved, or a plane re-triangulated in one piece and needing fewer
+        # triangles, which happens with no double cover to dissolve at all. The
+        # floor is float noise in a sum of triangle areas — 1e-12 m2 is a
+        # millionth of a square millimetre, orders below any real overlap
+        if tidy.metadata["overlap_removed"] > 1e-12 or len(tidy.faces) != len(skin.faces):
+            thinned = tidy.metadata["vertices_dissolved"]
+            print(
+                f"           cleaned:"
+                f" {tidy.metadata['overlap_removed'] * 1e6:.0f} mm2 of coplanar"
+                f" overlap removed,"
+                + (f" {thinned} collinear vertices dissolved," if thinned else "")
+                + f" {len(skin.faces)} -> {len(tidy.faces)} triangles,"
+                f" {border} -> {borders(tidy)} border edges"
+            )
         if slope > TOL:
             print(f"           sloped planes absorb up to {slope * 1000:.3f} mm")
         # a fold is geometry the solve stopped constraining because no skin
