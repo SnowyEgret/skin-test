@@ -20,6 +20,11 @@ anything**, because one of its conclusions is that `offset._trim_beside` — bui
 is treating a symptom and probably should not stay. The working tree is left as it was, wrong
 geometry included, deliberately: nothing is reverted so the next session can see it.
 
+Correction 4 was **revised the same evening** — V62 stays, and the skirt turns down each side of
+the scupper to the sill's offset instead. **Start from *"Order to take them in"*** at the end of
+that section: four steps, revised for the turn-down, nothing started, and the one thing wanted
+from Duncan (the `clearance` verdict) named in step 1.
+
 **Second job: `/code-review high` over the whole branch diff.** It is owed and has not run. The
 fourth-pass review below covered `skin/clean.py` *as it stood before its `_sheets` rewrite*;
 everything since is **unreviewed** — `_sheets`, the `dissolve` operation, `clean`'s third
@@ -2561,7 +2566,7 @@ shape, which is how the mapping was confirmed.
 | V5 | `(7.995, 4.87, 14.718)` | V4 `(7.995, 4.87, 14.84009)` | lining's top-west corner |
 | V52 | `(8.500, 4.87, 14.718)` | V49 `(8.585, 4.87, 14.819018)` | lining's top-east corner |
 | E72 | see below | `z 14.580` (V6's height), out to `x = 8.585` | lining's bottom edge |
-| V62 | `(8.585, 4.785, 14.707)` | `y = 4.870` | skirt's outer edge, at the slot |
+| V62 | `(8.585, 4.785, 14.707)` | **stays** — see the revision below | skirt's outer edge, at the slot |
 
 **On E72, one loose end, recorded rather than smoothed over.** Reconstructing Blender's edge
 numbering the documented way — first appearance while walking each face's loop in order, see the
@@ -2615,11 +2620,33 @@ knife, and neither is a tolerance question:
 Both are the knife the scupper has always had. **This, and not the length of the miter, is where
 the `clearance 3.6593 mm` reading came from.**
 
-**3. The skirt ends in a slant** (V62). The drip on `x = 8.585` has its **root** mitered onto the
-cheek's offset plane — V49 is at `y = 4.870`, correctly — but its **outer** edge is not: V62 sits
-at `y = 4.785`, the substrate plane. So the band ends on a diagonal from `(4.785, 14.707)` to
-`(4.870, 14.819)` instead of square, and leaves an 85 mm gap against the lining. `drip_at` mitres
-a lap's root onto every skinned vertical plane at that vertex; nothing does the same for the rim.
+**3. The skirt ends in a slant** (V62) — **withdrawn and replaced, 2026-08-22, and this is the
+live version.** Duncan, having mocked the scupper up in SketchUp and posted two views of it:
+*"I want to revise my corrections. V62 should remain where it is. The skirt should turn downwards
+on each side of the scupper."*
+
+So the rim is right where it is and there is no missing miter. Measured off the built
+`build/Cladding.obj`, the notch the skirt leaves in the exterior plane `x = 8.585` is 400 mm wide
+at the rim (V63/V64, `y 4.785…5.185` at `z = 14.707` — the true slot) and 230 mm at the root
+(V50/V51, `y 4.870…5.100` at `z = 14.819` — inset by the offset), joined by that diagonal. The rim
+width was always right. What is missing is the surface closing the 85 mm between the two: on each
+side of the slot the skirt **turns down** and runs to the **sill's offset**, and it does **not**
+return across the bottom (Duncan, asked both).
+
+**It is not the fold `_lap` already places, and that is the whole difficulty.** A fold turns onto
+the *departing* face — here the cheek, plane `y = 4.870`. This return stays in the skirt's **own**
+plane, `x = 8.585`, and runs down it. None of `carry_on`'s three answers at a free end covers
+that: the same plane carries on, another face meets it at an arris, or nothing.
+
+What is **not** the blocker, so nobody needs to raise it: `out: 0.0`. That gate is on the run-on
+alone and deliberately so — a fold is priced by `reach(into)` and bills `drop` when it turns
+downward, precisely so the cladding is not denied every corner it turns.
+
+The derivation to try first is that **a lap band follows the boundary of the face it laps onto**.
+A drip is the band inside the top edge of the wall it hangs on; where that boundary turns — down
+the side of an opening — the band turns with it. That is one rule covering the run-on, the fold
+and this, rather than a fourth case bolted onto the stop condition. It is a guess at the shape,
+not a measured result; nothing has been built.
 
 ### What this says about `_trim_beside`
 
@@ -2655,9 +2682,36 @@ from a verdict to a number.
 
 ### Order to take them in
 
-1 and 3 are contained. 2 is the knife, which is `_reconcile` and the most delicate thing in the
-module, and it is also the one that decides `_trim_beside`'s fate — so it is the one to think
-about first even though it is the one to change last.
+**Revised 2026-08-22 after the turn-down replaced 3, and nothing here is started.** Duncan is out
+of weekly budget and expects to pick this up Monday night.
+
+1. **Back `_trim_beside` out**, as a revert of `f0d535b`, keeping the cheek line in
+   `cladding_faces` — that commit is on its own for exactly this. The bake goes back to reading
+   `clearance 3.6593 mm` and warning, which is the honest reading of a real defect. Note that the
+   geometry Duncan wants reads 79.97 mm against an 85 mm offset **anyway**, inherently, because
+   the reveal's mouth sits on the headhouse roof — so the warning is arriving either way, and
+   "no bake warns" is over. That forces the standing `clearance` item below: demote it to a
+   printed number and promote the Möller-Trumbore check to the verdict. **Duncan's call**, and
+   worth having answered before the fixes land rather than after.
+2. **Cause 1**, the lining stopping at the parapet. Contained. Do not relax `_opening`'s per-body
+   pairing — its docstring rules per-element out for two other reasons that both still hold. The
+   derivation to try is to *grow* the cheek set: a coplanar vertical region of another body that
+   overlaps a known cheek in plan and faces the same way is also a cheek, which is what "the slot
+   cuts through the cap plate too" means geometrically.
+3. **Cause 2**, the knife. `_reconcile` and the most delicate thing in the module, and the one
+   that decides whether `_trim_beside` ever comes back. Be precise about which vertex is which:
+   only **v67** is `_reconcile`'s doing. **v66** is not a contradiction at all — its planes are
+   not opposed and the parapet's east face does not touch it. It is the "solved over the whole
+   body" invariant working as written, with the roof taper's end plane pulling the vertex 85 mm
+   *inward*. The question v66 poses is whether an uncovered face's plane should still constrain a
+   vertex when it pulls it inside `distance` — the same test `_trim_beside` makes, applied at
+   solve time to a plane instead of after the fact to a triangle. Write it as a candidate and
+   measure it; do not design it further on paper.
+4. **The turn-down.** Last, and now more firmly so: it springs off the mouth arris and its outer
+   edge is `x = 8.585`, which is the coordinate cause 2 gets wrong today. Set it out before the
+   knife is fixed and it inherits the same raked bottom. It is neutral for `_trim_beside` either
+   way — a lap lies on the face beyond the arris it springs from, so the return would never have
+   been cut by it.
 
 ## Open items
 
