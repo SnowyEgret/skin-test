@@ -761,10 +761,12 @@ def cladding_faces(faces, fall):
     # ...and the cheeks of an opening, but not its floor. A rainscreen lines the
     # reveal of an opening cut through a wall and stops at its sill, the same
     # way it stops at a window's. Duncan, 2026-08-22, having weighed it against
-    # the floor's own reasoning above and kept the two apart. It waited on
-    # `_trim_beside`: the cheek panel's miter against the parapet's east face
-    # ran 85 mm past it and into the roof taper butting that very face, taking
-    # the cladding's clearance from 84.1503 mm to 3.6593 mm.
+    # the floor's own reasoning above and kept the two apart. The selection is
+    # right; the geometry it currently produces is not -- see NOTES, "The cheek
+    # lining is wrong, and what it is". `_trim_beside` was built to repair that
+    # and backed out on 2026-08-25: it cut the miter back where the real defect
+    # is two mis-offset vertices at the scupper knife, so the panel reads
+    # `clearance 3.6593 mm` again and that is the honest reading of the fault.
     cheeks, floor = _opening(faces)
     return (
         facades_of(faces, RAINSCREEN, fall)
