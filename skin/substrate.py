@@ -505,8 +505,12 @@ def union(parts: list[trimesh.Trimesh], grid: float = 1e-6) -> trimesh.Trimesh:
     `snapped` puts them on, and is undone on the way out, so callers see the
     substrate where they left it.
     """
+    # a **copy**, even though there is nothing to union. `skin_over` treats what
+    # comes back as a throwaway and writes plane ids into its metadata, and
+    # "`parts` is never mutated and stays the substrate" has to hold for a
+    # one-part substrate too — the synthetic rigs in the tests are exactly that
     if len(parts) == 1:
-        return parts[0]
+        return parts[0].copy()
     lo = np.min([p.bounds[0] for p in parts], axis=0)
     hi = np.max([p.bounds[1] for p in parts], axis=0)
     centre = snapped((lo + hi) / 2.0, grid)

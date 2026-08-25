@@ -14,9 +14,13 @@ def clearance(parts, skin: trimesh.Trimesh) -> float:
     centres, exceeded at corners); a smaller value means the skin has folded
     through itself where the offset outran the substrate's local feature size.
 
-    Parts are concatenated rather than unioned: the skin lies outside the solid,
-    so its distance to any interior face is never less than its distance to the
-    outer surface, and the shared faces cannot produce a false alarm.
+    Queried **per part**, and neither concatenated nor unioned. The skin lies
+    outside the solid, so its distance to any interior face is never less than
+    its distance to the outer surface and the shared faces cannot produce a
+    false alarm — but concatenating leaves coincident duplicate triangles on
+    every one of those shared faces, and `closest_point` trips over the ties.
+    (This said "concatenated" until 2026-08-25, contradicting both the code and
+    the comment three lines below it.)
     """
     if isinstance(parts, trimesh.Trimesh):
         parts = [parts]
@@ -67,19 +71,15 @@ def _span(tri, dist, axis, tol):
 
     The points are the triangle's own corners that lie *on* the plane, plus the
     crossings of the edges that pass strictly through it. Returns the interval's
-    ends, one 3D point to anchor them on the line, and whether there was
-    anything to bound.
+    ends and whether there was anything to bound.
     """
     lo = np.full(len(tri), np.inf)
     hi = np.full(len(tri), -np.inf)
-    anchor = np.zeros((len(tri), 3))
     found = np.zeros(len(tri), dtype=bool)
 
     def take(point, when):
-        nonlocal lo, hi, anchor, found
+        nonlocal lo, hi, found
         at = np.einsum("ij,ij->i", point, axis)
-        first = when & ~found
-        anchor = np.where(first[:, None], point, anchor)
         lo = np.where(when, np.minimum(lo, at), lo)
         hi = np.where(when, np.maximum(hi, at), hi)
         found |= when
@@ -92,7 +92,7 @@ def _span(tri, dist, axis, tol):
         step = np.divide(di, di - dj, out=np.zeros_like(di), where=through)
         take(tri[:, i] + (tri[:, j] - tri[:, i]) * step[:, None], through)
 
-    return lo, hi, anchor, found
+    return lo, hi, found
 
 
 def _off_every_edge(tri, point, tol):
@@ -162,8 +162,27 @@ def _cross(ta, tb, tol):
     apart |= length < 1e-12         # exactly parallel; the divide below needs it
     axis = np.divide(axis, np.where(length > 0, length, 1.0)[:, None])
 
-    lo_a, hi_a, at_a, on_a = _span(ta, db, axis, tol)
-    lo_b, hi_b, _, on_b = _span(tb, da, axis, tol)
+    # a point on the two planes' shared line, solved rather than borrowed from a
+    # triangle corner. `_span`'s anchor is only within `tol` of the *other*
+    # plane, and its distance from the true line grows as `tol / sin θ` — so at
+    # a shallow crossing the midpoint below would be reconstructed from a point
+    # nowhere near the segment. Solving ties the accuracy to the planes instead
+    # of to the angle between them (found on review, 2026-08-25)
+    basis = np.stack([na, nb, axis], axis=1)
+    rhs = np.stack([
+        np.einsum("ij,ij->i", na, ta[:, 0]),
+        np.einsum("ij,ij->i", nb, tb[:, 0]),
+        np.zeros(len(ta)),
+    ], axis=1)
+    usable = ~apart
+    online = np.zeros((len(ta), 3))
+    if usable.any():
+        # rhs as (n, 3, 1): numpy reads a stacked (n, 3) as one matrix, not as n
+        # column vectors
+        online[usable] = np.linalg.solve(basis[usable], rhs[usable][:, :, None])[:, :, 0]
+
+    lo_a, hi_a, on_a = _span(ta, db, axis, tol)
+    lo_b, hi_b, on_b = _span(tb, da, axis, tol)
     start, end = np.maximum(lo_a, lo_b), np.minimum(hi_a, hi_b)
     shared = ~apart & on_a & on_b & (end - start > tol)
 
@@ -185,7 +204,7 @@ def _cross(ta, tb, tol):
     # +-inf `_span` starts from, and arithmetic on those warns for nothing
     ends = np.where(shared[:, None], np.stack([start, end], axis=1), 0.0)
     half = ends.sum(axis=1) / 2.0
-    middle = at_a + axis * (half - np.einsum("ij,ij->i", at_a, axis))[:, None]
+    middle = online + axis * (half - np.einsum("ij,ij->i", online, axis))[:, None]
     return shared & _off_every_edge(ta, middle, tol) & _off_every_edge(tb, middle, tol)
 
 

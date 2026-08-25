@@ -27,6 +27,12 @@ from . import substrate
 
 # normals closer than this are treated as the same plane
 PLANE_TOL = 1e-6
+# two points closer than this are one point. Deliberately **not** `PLANE_TOL`,
+# which is the 1 µm lattice every substrate coordinate is snapped to — welding at
+# that radius merges neighbouring lattice points. Same value and same reasoning
+# as `clean.WELD_TOL`, declared again rather than imported: `skin/clean.py` is
+# the only module that needs shapely and nothing in the core may reach into it
+WELD_TOL = 1e-9
 # keeps the KKT system non-singular where the soft equations underdetermine a vertex
 RIDGE = 1e-9
 # a lap this close to level is level: the direction cosine a cap plate's own fall
@@ -502,9 +508,17 @@ def _plane_ids(body):
     close. So each face is matched against the representatives already found,
     within the same tolerance used everywhere else.
     """
+    # cached against a fingerprint of the geometry, not on the mesh alone. The
+    # cache rides in `metadata`, and `Trimesh.copy()` copies metadata — so a
+    # bare `if "plane_ids" in metadata` hands a moved or edited body the
+    # representatives of where it used to be, and plane identity drives lap
+    # chaining, knives and the tiling. A run that silently fails to chain is a
+    # lap that silently does not happen, which is what this function exists to
+    # stop (found on review, 2026-08-25)
+    stamp = (len(body.faces), len(body.vertices), body.vertices.tobytes())
     held = body.metadata.get("plane_ids")
-    if held is not None:
-        return held
+    if held is not None and held[0] == stamp:
+        return held[1]
     rows = _plane_rows(body)
     reps: list[np.ndarray] = []
     ids = np.empty(len(rows), dtype=int)
@@ -522,8 +536,9 @@ def _plane_ids(body):
             found = len(reps)
             reps.append(row)
         lookup[key] = ids[f] = found
-    body.metadata["plane_ids"] = ids, np.array(reps) if reps else np.zeros((0, 4))
-    return body.metadata["plane_ids"]
+    found_planes = ids, np.array(reps) if reps else np.zeros((0, 4))
+    body.metadata["plane_ids"] = stamp, found_planes
+    return found_planes
 
 
 def _knives(body, ids, reps):
@@ -1033,7 +1048,11 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
         # and the corner between them is genuinely open, which is the whole of
         # the north junction.
         for other in segs:
-            if other is one or not np.allclose(other["t"], one["t"], atol=PLANE_TOL):
+            # `rtol=0.0`: numpy's default 1e-5 would make this ~1.1e-5 on unit
+            # direction vectors, eleven times the tolerance the call names
+            if other is one or not np.allclose(
+                other["t"], one["t"], rtol=0.0, atol=PLANE_TOL
+            ):
                 continue
             if here in (_key(other["pa"]), _key(other["pb"])):
                 return False
@@ -1299,11 +1318,15 @@ def _cut(verts, faces, normal, d):
                 loop.append(crossing(i, j))
 
         # a corner sitting on the plane makes its own crossing a duplicate; drop
-        # those before fanning, or the cut sheds zero-area triangles
+        # those before fanning, or the cut sheds zero-area triangles. The radius
+        # is `WELD_TOL`, not `PLANE_TOL`: the latter *is* the 1 µm lattice every
+        # substrate coordinate is snapped to, so a crossing landing one lattice
+        # cell from a real corner would silently delete that corner from the
+        # loop. Same reasoning `skin/clean.py` spells out for its own weld
         loop = [
             v
             for n, v in enumerate(loop)
-            if np.linalg.norm(np.asarray(verts[v]) - verts[loop[n - 1]]) > PLANE_TOL
+            if np.linalg.norm(np.asarray(verts[v]) - verts[loop[n - 1]]) > WELD_TOL
         ]
         # a triangle cut by a plane is convex, so a fan from any corner is safe
         kept += [[loop[0], loop[n], loop[n + 1]] for n in range(1, len(loop) - 1)]

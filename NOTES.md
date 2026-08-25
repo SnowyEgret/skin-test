@@ -25,16 +25,15 @@ of that section — steps 2, 3 and 4 stand exactly as written.
 
 **The `clearance` verdict is settled**: Duncan took option D on 2026-08-25 — `clearance` is a
 printed number, and `measure.intersects` + `measure.buried` are what the build asserts. See *"The
-clearance verdict"*. It turned up something nobody had measured: **the two skins cross at four
-points** on the cheek lining, which is cause 2 seen from the other side. The old `0 / 0` crossings
-figure predated the cheeks being clad.
+clearance verdict"*. It turned up something nobody had measured: **the two skins cross** on the
+cheek lining, which is cause 2 seen from the other side. The old `0 / 0` crossings figure
+predated the cheeks being clad.
 
-**Second job: `/code-review high` over the whole branch diff.** It is owed and has not run. The
-fourth-pass review below covered `skin/clean.py` *as it stood before its `_sheets` rewrite*;
-everything since is **unreviewed** — `_sheets`, the `dissolve` operation, `clean`'s third
-operation `close`, and all of `offset._tiling` / `_rings` / `_retiled`. A second run was launched
-and died on an API session limit before producing a finding. Given that the fourth pass found four
-real defects in code of exactly this kind, do not treat the unreviewed half as settled.
+**The review debt is paid.** `/code-review high` ran over both landing commits, and
+`/code-review high skin/` over the whole directory on 2026-08-25 — which is what finally reached
+`clean._sheets`, `dissolve`, `close` and `offset._tiling` / `_rings` / `_retiled`, none of which
+had ever appeared in a diff. Eight findings, all verified, all fixed bar one that is Duncan's
+call (the fourth bake, in Open items). See *"What landed on 2026-08-25"*.
 
 ### What landed on 2026-08-25
 
@@ -90,6 +89,32 @@ duplicating a parameter-file number in the one file that derives everything else
 3.6593 raw and 3.6593 cleaned, because `_tiling` fixed the inversion at source and the low-reading
 centroid is on the cheek panel. Dated, with the membrane's 7.8808 → 5.8793 given as the live
 demonstration of the same point.
+
+**`/code-review high skin/` reached the unreviewed half, and found eight things.** All eight
+verified against the code; seven fixed, one referred to Duncan (the fourth bake, in Open items).
+Three were in the day-old `measure` code and four in code that had never been in a diff:
+
+- **`substrate.union` returned the caller's own part** when given one, and `skin_over` then wrote
+  plane ids into its metadata — so *"`parts` is never mutated and stays the substrate"* was false
+  for a one-part substrate. The test asserted `union([only]) is only`, pinning the very
+  optimisation that broke the invariant above it; it now asserts a separate equal mesh, plus the
+  invariant end to end.
+- **`_plane_ids` cached with no invalidation**, and `Trimesh.copy()` copies metadata — so a moved
+  body got the representatives of where it used to be. Plane identity drives lap chaining, knives
+  and the tiling, so that is *"a run that silently does not happen"*, the exact failure the
+  function was rewritten to close. Now fingerprinted on the vertices.
+- **`np.allclose(..., atol=PLANE_TOL)`** in the free-end guard kept numpy's default `rtol=1e-5`,
+  eleven times the tolerance the call names. Same defect as the one fixed in `measure` the day
+  before, in code years older.
+- **`_cut` used `PLANE_TOL` as a weld radius**, which *is* the 1 µm lattice — a crossing landing
+  one lattice cell from a real corner silently deleted that corner. `WELD_TOL` now, declared in
+  `offset.py` rather than imported from `clean.py`, which would breach the shapely containment.
+- **`_cross` reconstructed the shared segment's midpoint from a borrowed anchor**, only within
+  `tol` of the other plane, so its distance from the true line grew as `tol / sin θ`. It solves
+  for a point on the line now. Probed: right answer down to 0.001° either way, but the guard was
+  the wrong shape and the fix is cheaper than the reasoning about when it bites.
+- `clearance`'s docstring said parts are "concatenated" where the code queries per part and its
+  own inline comment gives the opposite reason.
 
 **Not done, and not started:** causes 1, 2 and the turn-down. The tree is clean apart from an
 untracked `audit.py`.
@@ -237,8 +262,8 @@ therefore the row that did not move; the two bakes carry the cheek lining and re
 | | separation | membrane / cladding clearance | skins cross | buried |
 |---|---|---|---|---|
 | rig | 76.071 | 7.7760 / 84.6091 | 0 | none |
-| walls-and-caps | 4.337 | 7.8808 / **3.6594** | **4** | none |
-| extended cornices (live) | 4.337 | 7.8808 / **3.6593** | **4** | none |
+| walls-and-caps | 4.337 | 7.8808 / **3.6594** | **2** | none |
+| extended cornices (live) | 4.337 | 7.8808 / **3.6593** | **2** | none |
 
 | | coplanar overlap removed, membrane / cladding | triangles | border edges |
 |---|---|---|---|
@@ -250,8 +275,8 @@ The bold clearances are the **defect**, not a regression from the revert: they a
 cheek lining has read since it was clad, with `_trim_beside` hiding it in between. Causes 2 and 3
 in *"The cheek lining is wrong, and what it is"*. The **crossings column was blank** when this
 table was re-taken on 2026-08-25 and is now filled in by `measure.intersects`, built the same day
-— see *"The clearance verdict"*. It reads **4 on both bakes**, all of them on the cheek lining
-just above the sill. The suspicion that prompted leaving it blank was right: the old `0 / 0` was
+— see *"The clearance verdict"*. It reads **2 triangle pairs on both bakes**, on the cheek lining just above
+the sill. The suspicion that prompted leaving it blank was right: the old `0 / 0` was
 measured before the cheeks were clad, and carrying it forward would have hidden this. Neither skin
 crosses itself or the substrate on any of the three.
 
@@ -2897,6 +2922,18 @@ of weekly budget and expects to pick this up Monday night.
   cornice, which removed the knife rather than weakening `_reconcile` — see that section. The
   `_reconcile` narrowing described here is **unnecessary rather than untaken** and should stay
   untaken.
+- ~~**A fourth bake is in the tree, superseded, uncovered, and it warns.**~~ **Deleted
+  2026-08-25 on Duncan's instruction.** `unit8-parapets-caps-clt-insulation-headhouse-cornices.obj`
+  was the export he replaced on 2026-08-21 with the *extended* cornice — see *"The extended
+  cornice, and the scupper finished"* — so it still carried the knife at the scupper mouth that
+  the extension removed. Nothing read it: no test named it and it appeared in no table here. The
+  new verdict found it was the only substrate crossing the substrate — membrane **8**, cladding
+  **5**, plus 4 skin-to-skin pairs — and a spot check confirmed those were **geometrically real**,
+  not false positives: a membrane triangle on `x = 8.072` passing through the scupper drip solid
+  spanning `x 7.98…8.08, y 4.785…5.185, z 14.425…14.495`. The old defect preserved in the old
+  substrate. It is in git history if it is ever wanted. Found by `/code-review high skin/`.
+  **"all three substrates" throughout this file means rig, walls-and-caps and extended-cornices**,
+  and now there are only three.
 - **The south-junction sliver**, 205 x 7.3 mm, left by the continuation. See above; it needs the
   lap to clip against its neighbour rather than emit whole quads.
 - ~~**Coplanar laps overlap, and it skews the area**~~ — membrane 0.180%, cladding 0.311%, plus

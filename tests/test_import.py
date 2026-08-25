@@ -249,9 +249,23 @@ def test_the_union_is_computed_about_the_origin():
 
     # the shift is snapped, so the substrate stays on the 1 um lattice
     assert np.allclose(here.vertices, np.round(here.vertices, 6), atol=0)
-    # one part needs no union at all, and is passed straight through
+    # one part needs no union at all — but it comes back as a **copy**, not the
+    # caller's own mesh. This asserted `is only` until 2026-08-25, which pinned
+    # an optimisation that broke the invariant above it: `skin_over` treats the
+    # union as a throwaway and writes plane ids into its metadata, so handing
+    # back the part itself mutated the substrate. Same geometry, separate object
     only = substrate.cube(2.0)
-    assert substrate.union([only]) is only
+    alone = substrate.union([only])
+    assert alone is not only
+    assert np.allclose(alone.vertices, only.vertices)
+    assert np.array_equal(alone.faces, only.faces)
+
+    # ...and the invariant that motivates it, end to end: skinning a one-part
+    # substrate leaves that part exactly as it was found
+    keys = set(only.metadata)
+    skin_over([only], 0.05, keep=lambda faces: faces.normals[:, 2] > 0.9,
+              classify=lambda part, **kw: substrate.WALL)
+    assert set(only.metadata) == keys
 
 
 def test_a_degenerate_sliver_is_refused_rather_than_flung_away(tmp_path):

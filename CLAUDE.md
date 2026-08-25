@@ -700,5 +700,25 @@ matches each face against the representatives already found instead, and `_lap`,
 run chaining all key on its id. A run that silently fails to chain is a lap that silently does not
 happen. That is the accuracy floor for everything downstream: `TOL = 1e-6`
 (`build.py`) and `PLANE_TOL = 1e-6` (`skin/offset.py`) exist for it. Do not tighten them — an
-earlier 1 nm threshold produced a bogus self-intersection warning. `RIDGE = 1e-9` keeps the KKT
-system non-singular where the soft equations leave a vertex free; it is not a tolerance to tune.
+earlier 1 nm threshold produced a bogus self-intersection warning, and a 1e-12 test for *parallel*
+planes produced three more in 2026-08-25's verdict, off a sliver whose normal was 1.4e-11 out.
+`RIDGE = 1e-9` keeps the KKT system non-singular where the soft equations leave a vertex free; it
+is not a tolerance to tune.
+
+**`PLANE_TOL` is a plane-identity tolerance and never a weld radius.** It *is* the 1 µm lattice
+every substrate coordinate is snapped to — two neighbouring lattice points are 9.9999999925e-07
+apart — so welding at that radius merges points the substrate deliberately keeps distinct.
+`skin/clean.py` says this about its own `WELD_TOL = 1e-9`; `offset._cut` was using `PLANE_TOL` to
+drop duplicate loop corners until 2026-08-25 and now declares its own `WELD_TOL` of the same
+value. It is declared rather than imported, because `skin/clean.py` is the only module that needs
+shapely and nothing in the core may reach into it.
+
+**Two tolerance rules that are easy to get wrong, both found by review:**
+
+- **`np.isclose` and `np.allclose` keep `rtol=1e-5` unless you say otherwise.** At this model's
+  ~15 m coordinates that is a 0.15 mm tolerance, not the nanometre the `atol` names. Pass
+  `rtol=0.0` at every call that means an absolute distance. Two calls were wrong this way.
+- **Never decide coplanarity from the angle between two normals.** A sliver's normal is noisy
+  where its vertices are not: `clean` leaves a 0.13 × 275 mm triangle in the membrane whose normal
+  is 1.4e-11 off its plane's. `measure._cross` tests the corners' **distance** to the other plane
+  instead.
