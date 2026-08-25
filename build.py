@@ -10,7 +10,9 @@ from pathlib import Path
 import numpy as np
 import trimesh
 
-from skin import clearance, parameters, separation, skin_over, substrate, write_obj
+from skin import (
+    buried, clearance, intersects, parameters, separation, skin_over, substrate, write_obj,
+)
 from skin.clean import clean
 from skin.offset import Faces, _owner, _plane_ids, elements_of
 
@@ -969,6 +971,11 @@ def build(
     def borders(mesh):
         return len(trimesh.grouping.group_rows(mesh.edges_sorted, require_count=1))
 
+    # the substrate as one surface, for the crossing test below. Concatenated
+    # rather than unioned: a crossing into any part is a crossing, and a union
+    # would drop the very faces where two parts meet
+    surface = trimesh.util.concatenate(parts)
+
     built = {}
     for spec in specs:
         distance = spec["distance"]
@@ -1031,16 +1038,45 @@ def build(
                 f" {', '.join(str(v) for v in folds)} — surfaces facing opposite"
                 f" ways that this skin does not cover"
             )
-        # anything closer than the slope planes were allowed to move is a real fold
-        if gap < distance - slope - TOL:
-            print(
-                f"           WARNING: {(distance - gap) * 1000:.3f} mm inside the"
-                f" requested offset — self-intersecting"
-            )
+        # the verdict. `clearance` is printed above and asserts nothing —
+        # demoted 2026-08-25 on Duncan's decision, because it cannot tell a skin
+        # that deliberately stops short of a feature from one folded through
+        # itself, and because its answer moves when the surface is
+        # re-triangulated. These two cannot: a crossing is a crossing however
+        # the sheets are tiled, and containment is signed where a closest-point
+        # distance is not. See NOTES, "The clearance verdict".
+        # ...and it is taken on **both** meshes. Everything printed above is a
+        # property of the offset and so is measured on the raw emission, but a
+        # verdict is a statement about what ships: `clean` invents a gusset,
+        # which is by its own account "not the offset of any substrate face",
+        # and a gusset spanning a tear across a substrate feature would
+        # otherwise go out unexamined. The two agree on all three bakes today —
+        # this is a gap being closed, not a defect being caught (found on
+        # review, 2026-08-25)
+        for mesh, where in ((skin, "raw"), (tidy, "written")):
+            note = "" if mesh is skin else f" ({where})"
+            crossed = intersects(mesh, mesh)
+            if crossed:
+                print(
+                    f"           WARNING: {crossed} self-crossing(s){note} —"
+                    f" the skin folds through itself"
+                )
+            through = intersects(mesh, surface)
+            if through:
+                print(f"           WARNING: {through} crossing(s) into the substrate{note}")
+            inside = buried(parts, mesh)
+            if inside:
+                print(f"           WARNING: {inside} sample(s) inside a substrate part{note}")
 
     if len(built) == 2:
         a, b = built.values()
         print(f"           skin separation {separation(a, b) * 1000:.3f} mm")
+        # two skins are *designed* to touch — both cap a wall, and they stack
+        # outboard by the difference of the offsets — so what is checked is that
+        # neither passes through the other, not that they stand apart
+        between = intersects(a, b)
+        if between:
+            print(f"           WARNING: the two skins cross, {between} triangle pair(s)")
 
     manifest = []
     BUILD_DIR.mkdir(exist_ok=True)

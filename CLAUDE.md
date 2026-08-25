@@ -31,14 +31,24 @@ boxes instead of a 36-part bake.
 
 `build.py` prints a per-skin line (residual, clearance, slope deviation, open/closed), what
 `clean` removed from that skin, and the skin-to-skin separation. Every number but the clean line
-is measured on the **raw** emission, before cleaning — see **Cleaning a mesh**. Those numbers are
-the regression check: a residual above ~1e-9, or a clearance below `distance - slope_deviation`,
-means something broke — **except where a skin deliberately stops short of something standing
-proud of the wall.** `measure.clearance` samples vertices and centroids against every part and
-cannot tell that from a fold. It is a weaker check still than that implies: its answer depends on
-how the surface happens to be triangulated. It is not, however, a crier of wolf — the warning it
-printed on the cornices bake for weeks was **right**, and named a real defect that four other
-checks all missed because the surface was mis-tiled rather than self-intersecting. See NOTES.
+is measured on the **raw** emission, before cleaning — see **Cleaning a mesh**.
+
+**The verdict is `measure.intersects` and `measure.buried`, not `clearance`** (Duncan,
+2026-08-25). A residual above ~1e-9 still means something broke. Beyond that the build warns when
+a skin crosses itself, crosses the substrate, has a sample inside a part, or when the two skins
+cross each other. Those are properties of the geometry: a crossing is a crossing however the
+sheets are tiled, and containment is signed where a closest-point distance is not.
+
+`clearance` is now **printed and asserts nothing**. It could not tell a skin that deliberately
+stops short of something standing proud of the wall from one folded through itself — it samples
+vertices and centroids against every part — and worse, its answer depends on how the surface
+happens to be triangulated: cleaning the cladding once moved it 63.9999 → 84.1503 mm with no
+surface moved. What forced the change is that it would have warned **forever**: the cheek lining
+Duncan asked for reads 79.97 mm against an 85 mm offset inherently, because the reveal's mouth
+sits on the headhouse roof. It was never a crier of wolf — the warning it printed on the cornices
+bake for weeks was **right**, and named a real defect four other checks missed — but a verdict
+that fires on correct geometry stops being read. It stays printed because a low reading is still
+worth seeing. See NOTES, *"The clearance verdict"*.
 
 To view the result, in Blender's Python console:
 
@@ -411,6 +421,12 @@ centroid finding the low reading is now on the defective cheek panel rather than
 face. The **membrane** is where the split still shows: 7.8808 mm raw against 5.8793 mm cleaned,
 the gusset being a chord across a fold. Re-measure before quoting either.
 
+The split survives `clearance` being demoted, with one deliberate exception. Everything *printed*
+stays a property of the offset and so is measured raw. The **verdict** is taken on both meshes:
+it is a statement about what ships, and `clean` invents a gusset — surface that is, by this
+module's own words, not the offset of anything — which would otherwise go out unexamined. They
+agree on all three bakes today.
+
 - **shapely (GEOS) unions, `manifold3d.triangulate` re-triangulates.** Nothing to install here —
   shapely arrives with `trimesh[easy]`, and it joins yaml and jsonschema on the undeclared-
   dependency list. Both engines were measured against the alternatives. shapely is bit-exact on every point its union preserves
@@ -509,9 +525,12 @@ artefact rather than a tear.
 
 `clearance` is untouched by any of this, and that is the point of where the gusset lives. A gusset
 is a chord across a fold, so it does read 7.8808 → 5.8793 mm **on the written mesh** — but
-`build()` measures the raw emission and writes the cleaned one, so the verdict stays a property of
-the offset. Putting the gusset inside `skin_over` instead, as was costed on 2026-08-21, is what
-would have made `build.py`'s verdict change with it.
+`build()` measures the raw emission and writes the cleaned one, so what is reported stays a
+property of the offset. Putting the gusset inside `skin_over` instead, as was costed on
+2026-08-21, is what would have made `build.py`'s numbers change with it. The argument survived
+`clearance` being demoted on 2026-08-25: what is *printed* is still measured on the raw emission.
+The verdict is deliberately taken on **both**, because a gusset is surface the module invented and
+a verdict is about what ships — see **Cleaning a mesh**.
 
 ## Classifying parts
 

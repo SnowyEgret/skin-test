@@ -23,12 +23,11 @@ is written down. Then cause 2 (the knife), then the turn-down last. All of it is
 lining is wrong, and what it is"* below, and **start from *"Order to take them in"*** at the end
 of that section — steps 2, 3 and 4 stand exactly as written.
 
-**One thing is wanted from Duncan before much else, and it is now overdue rather than
-optional:** the `clearance` verdict. Every bake with a cornice warns again, and it will keep
-warning even once the lining is *correct*, because the geometry Duncan asked for reads 79.97 mm
-against an 85 mm offset inherently — the reveal's mouth sits on the headhouse roof. So the
-question is no longer "should we demote `clearance`" but "what should the build assert instead",
-with the Möller-Trumbore pass the candidate. Named in step 1, unanswered.
+**The `clearance` verdict is settled**: Duncan took option D on 2026-08-25 — `clearance` is a
+printed number, and `measure.intersects` + `measure.buried` are what the build asserts. See *"The
+clearance verdict"*. It turned up something nobody had measured: **the two skins cross at four
+points** on the cheek lining, which is cause 2 seen from the other side. The old `0 / 0` crossings
+figure predated the cheeks being clad.
 
 **Second job: `/code-review high` over the whole branch diff.** It is owed and has not run. The
 fourth-pass review below covered `skin/clean.py` *as it stood before its `_sheets` rewrite*;
@@ -235,11 +234,11 @@ before touching `_lap`, and 9 before touching the solve.**
 Re-measured 2026-08-25, after the `_trim_beside` revert. The **rig has no scupper** and is
 therefore the row that did not move; the two bakes carry the cheek lining and read its defect.
 
-| | separation | membrane / cladding clearance | crossings | buried |
+| | separation | membrane / cladding clearance | skins cross | buried |
 |---|---|---|---|---|
-| rig | 76.071 | 7.7760 / 84.6091 | 0 / 0 | none |
-| walls-and-caps | 4.337 | 7.8808 / **3.6594** | not re-measured | none |
-| extended cornices (live) | 4.337 | 7.8808 / **3.6593** | not re-measured | none |
+| rig | 76.071 | 7.7760 / 84.6091 | 0 | none |
+| walls-and-caps | 4.337 | 7.8808 / **3.6594** | **4** | none |
+| extended cornices (live) | 4.337 | 7.8808 / **3.6593** | **4** | none |
 
 | | coplanar overlap removed, membrane / cladding | triangles | border edges |
 |---|---|---|---|
@@ -249,12 +248,12 @@ therefore the row that did not move; the two bakes carry the cheek lining and re
 
 The bold clearances are the **defect**, not a regression from the revert: they are what the
 cheek lining has read since it was clad, with `_trim_beside` hiding it in between. Causes 2 and 3
-in *"The cheek lining is wrong, and what it is"*. **`crossings` is honestly blank** — it was
-measured by a throwaway Möller-Trumbore script that is not in the repo (the standing item is to
-promote it into `skin/measure.py` as `intersects(a, b)`), and it has not been re-run since the
-cladding moved. Do not read the old `0 / 0` forward: with the two skins now 4.337 mm apart
-instead of 76, it is the number most likely to have changed, and it is the one that would say
-whether the lining actually touches the membrane.
+in *"The cheek lining is wrong, and what it is"*. The **crossings column was blank** when this
+table was re-taken on 2026-08-25 and is now filled in by `measure.intersects`, built the same day
+— see *"The clearance verdict"*. It reads **4 on both bakes**, all of them on the cheek lining
+just above the sill. The suspicion that prompted leaving it blank was right: the old `0 / 0` was
+measured before the cheeks were clad, and carrying it forward would have hidden this. Neither skin
+crosses itself or the substrate on any of the three.
 
 The first table is measured on the raw emission and is **unchanged** by `clean` — that is the
 point of measuring before the pass and writing after it — the second table moved on 2026-08-21
@@ -2621,6 +2620,107 @@ refactor. `_tiling` returns a plane id per triangle and `_lap` returns `sprung`;
 single-caller functions, so neither signature change reaches beyond `skin_over`. Five new tests,
 four of them synthetic. 114 tests, ~8.9 s.
 
+## The clearance verdict (2026-08-25)
+
+Duncan, asked the standing question and given four options: **"Take D."** So `clearance` is
+demoted to a printed number, and what `build.py` asserts is now `measure.intersects` (does a
+surface pass through another) plus `measure.buried` (is a sample inside a part).
+
+### Why it had to be answered now rather than later
+
+The `_trim_beside` revert brought the warning back at 3.6593 mm. That reading is **right** — it
+names cause 2. But it would not have gone away when cause 2 was fixed: Duncan's own target quad
+samples at **79.97 mm against an 85 mm offset**, inherently, because the reveal's mouth sits
+directly on the headhouse roof and no correct panel can stand 85 mm off everything there. A
+verdict that fires on the geometry you asked for is one nobody reads, which is how the cornices
+warning sat in this file as a "known false alarm" for weeks while being **correct**.
+
+### What the two checks are
+
+`intersects(a, b)` counts the **triangle pairs that pass through each other**, by Möller's method:
+two non-parallel planes meet in a line, each triangle meets that line in an interval, and the
+pairs cross when those intervals overlap in **positive length**. `buried(parts, skin)` counts the
+samples — vertices and face centroids, the same ones `clearance` takes — that lie inside a part,
+which is the signed half `intersects` cannot give.
+
+**It was written twice, and the first version was wrong in two ways that a review caught.** Both
+are worth keeping because both are about the same thing: deciding a crossing from *edge-piercing
+tests* forces a choice at the triangle's boundary, and there is no right choice.
+
+- Excluding the boundary misses every crossing that passes through a shared edge of the other
+  mesh. Two boxes overlapping in a quadrant read **zero** — and axis-aligned geometry on a 1 µm
+  lattice produces exactly that shape, so this was not a corner case here.
+- Including it reads a **graze** as a crossing: a surface resting along another's boundary edge
+  read 6 on a hand-made pair.
+
+The interval overlap has no such choice to make, and that is why it replaced the edge test rather
+than being tuned. Two further things it still has to get right, both measured:
+
+- **Sharing a segment is not passing through one.** Two triangles meeting along a common edge
+  share its whole length and penetrate nowhere — a box resting on a box, a lap landing flush on
+  the face it laps onto. So the shared segment's midpoint must be clear of all six edges: interior
+  to **both** triangles, not either. `either` reads the graze above as a crossing again.
+- **Coplanar is decided by distance, never by the angle between the normals.** A sliver's normal
+  is noisy where its vertices are not: the clean pass leaves a 0.13 × 275 mm triangle in the
+  membrane whose normal is **1.4e-11** off its plane's, and any angle threshold tight enough to
+  mean anything reads that as two planes meeting in a line — then two coplanar overlapping
+  triangles come back as a crossing. Three bogus self-crossings on the live bake, which is
+  CLAUDE.md's *"do not tighten them"* arriving for the second time. The test is `|d| <= tol` on
+  the corners against the other's plane.
+
+**What it gives up, stated plainly.** Requiring the interior of both misses a crossing whose
+intersection curve runs along mesh edges *the whole way* — two boxes of identical cross-section
+slid along one axis read zero, measured. That needs the curve to follow edges of **both** meshes
+at once, where the edge test failed on the far commoner case of one. `buried` covers the substrate
+side of it regardless, being signed and exact.
+
+The self-test skips only pairs sharing an **edge**. Skipping every pair with a corner in common
+made it blind to 553 of the live membrane's 1157 candidate pairs — and a lap folding back through
+the panel it springs from shares exactly the arris vertex with it. A pair merely touching at that
+corner overlaps in zero length, so nothing needs special-casing.
+
+### What it measured, and the thing nobody had checked
+
+| | membrane self / vs substrate / buried | cladding, same | membrane × cladding |
+|---|---|---|---|
+| rig | 0 / 0 / 0 | 0 / 0 / 0 | 0 |
+| walls-and-caps | 0 / 0 / 0 | 0 / 0 / 0 | **2** |
+| extended cornices (live) | 0 / 0 / 0 | 0 / 0 / 0 | **2** |
+
+Triangle **pairs**, so the count depends on the tiling where the fact of a crossing does not. Only
+zero-or-not is the verdict.
+
+**The two skins cross, and until now nobody had measured it.** The `crossings` column in the table
+above carried `0 / 0` forward from before the cheeks were clad; the revert commit left it honestly
+blank for exactly this reason, and the blank turns out to have been the right call. The crossings sit on the cheek lining's two planes — `y = 4.87` and `y = 5.1`, the offsets of
+the two cheeks — at `z = 14.50796`, just above the sill:
+
+```
+(8.575337, 4.87, 14.50796)   (8.585, 4.87, 14.50796)
+(8.575337, 5.10, 14.50796)   (8.585, 5.10, 14.50796)
+```
+
+That is **cause 2** again, seen from the other side: the raked bottom edge cuts down through the
+membrane lining the scupper. Which is the argument for the new verdict made for it — it fires on
+the real defect, names where, and will go to **0** when the knife is fixed, where `clearance`
+would have gone on warning at 79.97 mm forever. `test_import.py` pins it for now.
+
+The verdict is taken on the **written** mesh as well as the raw one, which is the one place this
+departs from measure-raw/write-cleaned. Everything printed above a verdict is a property of the
+offset and stays on the raw emission; a verdict is a statement about what ships, and `clean`
+invents a gusset — surface that is, by the module's own words, *"not the offset of any substrate
+face"*. A gusset spanning a tear across a substrate feature would otherwise go out unexamined.
+The two agree on all three bakes today.
+
+### What it does not do
+
+It gives up detecting a surface that is merely **too close** — nearer the substrate than
+`distance` without crossing anything. That is a real loss and it was Duncan's to accept: option C
+(keep the verdict against a per-skin authored floor) was the alternative, and it was rejected
+because the floor would be a judgement about intent rather than a fact about the geometry, and
+would need re-authoring on every substrate change. `clearance` still prints, so the number is
+still in front of you; it just no longer decides.
+
 ## The cheek lining is wrong, and what it is (2026-08-22)
 
 Duncan, reading `build/Cladding.obj` back in Blender on the live bake, on the **north** cheek:
@@ -2808,28 +2908,13 @@ of weekly budget and expects to pick this up Monday night.
   `clean(mesh, close=m)`, on Duncan's decision. See *"The gusset as built"*. Every other border
   component in either skin is a legitimate free edge — the skin's own perimeter — and three
   conditions keep them that way.
-- **`clearance` cannot tell "stops short of a feature" from "folds through itself".** *(Read the
-  correction in "The notch is fixed at source" first: the cornices warning this item was built on
-  was **right**, and the cladding really did have surface 21 mm inside its offset. What survives
-  is the triangulation-dependence, not the cry of wolf.)* The cornices
-  bake makes the cladding read 63.9999 mm against an 85 mm offset and print
-  `WARNING: … self-intersecting`, and it is wrong — four independent checks (crossings both ways,
-  self-crossings, face centres inside parts, skin edges against part surfaces) all come back
-  clean, and the cladding stops exactly on its mitre against the cornice underside. The metric
-  samples vertices and centroids against every part, so any skin that deliberately terminates
-  beside something standing proud of the wall reads low. **Worse than that, measured 2026-08-21
-  while building `clean`:** the number depends on how the surface is triangulated. Cleaning the
-  cladding reads 63.9999 → 84.1503 mm with nothing moved — the offending centroid's triangle was
-  merely re-triangulated away, and the point is still on the surface at 64 mm. A verdict that a
-  re-triangulation can change is not a verdict about the geometry. CLAUDE.md still says a clearance below
-  `distance − slope_deviation` means something broke; that is now false in the presence of a
-  cornice, and a warning that cries wolf every build is worse than none. The Möller-Trumbore pass
-  is the check that actually held up, which strengthens the standing "promote it into
-  `skin/measure.py` as `intersects(a, b)`" item below — it should probably become the check
-  `build.py` prints, with `clearance` demoted to a number rather than a verdict. Not fixed:
-  changing what the build asserts is Duncan's call.
-
-
+- ~~**`clearance` cannot tell "stops short of a feature" from "folds through itself".**~~
+  **Closed 2026-08-25 — Duncan took option D:** demote `clearance` to a printed number, and make
+  the verdict `measure.intersects` plus `measure.buried`. See *"The clearance verdict"* for what
+  was weighed and what the new checks measured. The reasoning that stood here for weeks is
+  unchanged and was never the blocker; what forced the decision was that the warning would fire
+  **forever**, because the cheek lining Duncan asked for reads 79.97 mm against an 85 mm offset
+  inherently. `clearance` is still printed, and a low reading is still worth looking at.
 - ~~**The membrane leaks at V11: an in-line butt has no wrap.**~~ Closed 2026-08-20 by the lap
   rule — see above. The drip runs on past the butt to x = 8.277 and the upstand folds round the
   corner onto `Headhouse-N`'s north face, spanning z 13.1189…13.3239, which is the panel Duncan

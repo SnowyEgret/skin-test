@@ -324,7 +324,7 @@ def test_the_baked_headhouse_reads_and_skins():
         FACADE, RAINSCREEN, classifier, group_caps, rise, skins, _skin_from,
     )
     from skin import parameters, substrate
-    from skin.measure import clearance, separation
+    from skin.measure import buried, clearance, intersects, separation
     from skin.offset import Faces, _owner, elements_of
 
     parts = substrate.from_obj(BAKE, metadata={FACADE: RAINSCREEN})
@@ -410,10 +410,24 @@ def test_the_baked_headhouse_reads_and_skins():
     on = np.abs(cladding.triangles[:, :, 2] - (sill + 0.085)).max(axis=1) < 1e-6
     assert not on.any(), "the cladding is lining the inside of the scupper"
 
-    # neither skin is buried in the substrate -- clearance() cannot see that,
-    # because closest_point returns an unsigned distance
+    # the verdict, since 2026-08-25: neither skin passes through the substrate
+    # and neither folds through itself. `clearance` cannot see either -- it is
+    # unsigned, and it moves when the surface is re-triangulated -- which is why
+    # it is now a printed number and these are what `build.py` asserts
+    surface = trimesh.util.concatenate(parts)
     for skin in built.values():
-        assert not any(part.contains(skin.vertices).any() for part in parts)
+        assert buried(parts, skin) == 0
+        assert intersects(skin, surface) == 0
+        assert intersects(skin, skin) == 0
+
+    # ...but the two skins **do** cross, on the cheek lining's two planes
+    # (y = 4.87 and y = 5.1) just above the sill, where the raked bottom edge of
+    # cause 2 cuts through the membrane lining the scupper. Same defect the
+    # clearance above pins, caught by the verdict that replaced it, and expected
+    # to go to 0 when the knife is fixed. Triangle pairs, so the count depends
+    # on the tiling where the fact of a crossing does not — which is why it is
+    # `> 0` that matters here
+    assert intersects(membrane, cladding) == 2
 
 
 def test_the_scupper_comes_out_symmetrical_on_the_live_bake():
