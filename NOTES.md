@@ -22,14 +22,19 @@ lining's head now sits exactly where Duncan said it should, on both cheeks.
 substrate**: zero crossings, nothing buried, nothing self-crossing. Cause 2 landed the same day as
 cause 1 — see *"Cause 2 fixed: a knife has a side"*.
 
-**First job: the turn-down**, step 4 and the last of the four. Duncan, 2026-08-22: *"The skirt
-should turn downwards on each side of the scupper."* It stays in the skirt's **own** plane,
-`x = 8.585`, and runs down it — which none of `carry_on`'s three answers at a free end covers. It
-was held until last because it springs off the mouth arris and its outer edge is `x = 8.585`, the
-coordinate cause 2 got wrong; that coordinate is now right, so the blocker is gone. The derivation
-to try first is *a lap band follows the boundary of the face it laps onto* — one rule covering the
-run-on, the fold and this, rather than a fourth case bolted onto the stop condition. **It is a
-guess at the shape, not a measured result; nothing has been built.**
+**First job: the turn-down**, step 4 and the last of the four. **Attempted on 2026-08-25 and
+backed out** — read *"The turn-down: what is actually in the way"* before anything else, because
+it replaces the guess this section used to carry. In short: it is not missing code, it is
+`out: 0.0` gating it in `_lap`'s seam loop; Duncan chose to fix that by making a band that
+**turns** keep its own pricing rather than by authoring the cladding an `out`; the construction
+for that is solved and written down; and what defeated the attempt is the *gate* — two versions of
+"is this the same band turning" both fired at building corners instead of at the scupper, putting
+spurious bands 30 mm off the substrate. That section says where to start and names two things to
+check first that the attempt skipped.
+
+Also settled there, from Duncan reading the bake back: the square 230 mm notch cause 1 produced is
+**right**, and his 2026-08-22 *"V62 should remain where it is"* is superseded. Do not restore the
+400 mm rim.
 
 **The `clearance` verdict is settled**: Duncan took option D on 2026-08-25 — `clearance` is a
 printed number, and `measure.intersects` + `measure.buried` are what the build asserts. See *"The
@@ -124,8 +129,8 @@ Three were in the day-old `measure` code and four in code that had never been in
 - `clearance`'s docstring said parts are "concatenated" where the code queries per part and its
   own inline comment gives the opposite reason.
 
-**Not done, and not started:** cause 2 and the turn-down. The tree is clean apart from an
-untracked `audit.py`.
+**Not done:** the turn-down — attempted 2026-08-25 and backed out, see its own section. The tree
+is clean apart from an untracked `audit.py`.
 
 **A fourth `/code-review high` ran over the whole branch after cause 1 landed**, and found six
 things. The one that mattered is recorded above: the cheek growth was bounded by a shared plane
@@ -2665,6 +2670,98 @@ refactor. `_tiling` returns a plane id per triangle and `_lap` returns `sprung`;
 single-caller functions, so neither signature change reaches beyond `skin_over`. Five new tests,
 four of them synthetic. 114 tests, ~8.9 s.
 
+## The turn-down: what is actually in the way (2026-08-25)
+
+**Attempted, reverted, nothing committed.** What follows is what the attempt established, so the
+next session starts from here rather than from the guess this file used to carry.
+
+Duncan, having read the built bake back: *"Apart from the missing skirt turn-down the geometry is
+accurate as is."* So the square 230 mm notch that cause 1 produced is **right**, and his
+2026-08-22 *"V62 should remain where it is"* — which put the rim at `y = 4.785` — is superseded.
+Do not restore the 400 mm rim or the diagonal.
+
+### It is not missing code. It is switched off.
+
+The arris the turn-down springs from **already qualifies** in `_lap`'s seam loop: the slot's cheek
+is `covered`, the parapet's inner face is `lappable` and uncovered. But `_across` returns a
+**horizontal** direction there, so `reach` prices the band at `out` — and the cladding declares
+`out: 0.0`.
+
+This file said the opposite, in *"The cheek lining is wrong"*: *"What is **not** the blocker, so
+nobody needs to raise it: `out: 0.0`. That gate is on the run-on alone."* **That is wrong.** There
+are two `reach` gates; the one in the seam loop is the live one, and it is the whole of why the
+skirt stops at the slot.
+
+Verified as a what-if — a full copy of the parameter file, per the documented discipline — with
+`out: 0.115`. The turn-down **appears**, at `y 4.755…4.870` and `y 5.100…5.215`. Two things came
+with it, which is why authoring `out` is not the answer: the band stops at `z = 14.603`, 23 mm
+above the sill's offset at `14.580`; and the drip's rim reverts from square at `4.870` to a miter
+running out to `4.755` — the geometry Duncan had just approved. (`check_seeds` also refuses
+`0.2`, as 25× the membrane's `0.008`.)
+
+### Duncan's decision, 2026-08-25: option B
+
+Put to him as A (author the cladding an `out`) or B (**a band that turns keeps its own pricing
+instead of being re-priced by its direction**), he chose **B**. It leaves `out: 0.0` alone and does
+not disturb the rim. It does revise his own dichotomy — *"down is a drip, up or sideways is an
+upstand"* — by saying that dichotomy prices a lap that **starts**, and is the wrong question about
+one that merely turns a corner.
+
+### The construction is solved. Record it.
+
+A band's quad is `seg(V[a], V[b], root(a) + step, root(b) + step, …)` — from the **skin's own
+edge** to the outer line. That is why the skirt reads 112 mm deep on a 30 mm `drop`: `85 + 30`,
+less the coping's slope. Three things follow, all confirmed by measurement:
+
+- **Price the turned band by the band it continues** — `drop`, not `out`.
+- **Root it on the substrate**, with `drip_at`, as a drip is. The datum is a property of the band,
+  not of the direction it happens to run in.
+- **`drip_at` must exclude the plane the band steps away from.** Offsetting out along a plane's
+  normal and then stepping back along it are the same displacement counted twice. For a drip this
+  excludes nothing — the step is vertical and no skinned wall is horizontal, so no drip moves by a
+  bit — but the turn-down steps horizontally and its arris lies on a skinned vertical plane facing
+  exactly that way. Mitered onto it, the band is set out from a line 85 mm *inside* the opening
+  instead of from the opening's own edge. Without this it comes out 30 mm wide; with it, `115 mm`
+  (`y 4.755…4.870`), which is what the what-if independently produced.
+
+### What defeated it: the gate, not the geometry
+
+The test for *"this arris is the same band turning"*. Two versions, both **over-firing at building
+corners rather than at the scupper**:
+
+1. *Shares a vertex with a placed band on the same receiving plane.* Fires at every corner where a
+   drip's arris ends. Cladding `clearance 79.9703 → 30.0000 mm`, separation `71.973 → 22.000`.
+2. *…and no band exists at that vertex on another plane.* Intended to say "the band already
+   carries on out of the plane, so it must not also turn within it". **Made no difference** —
+   still 30 mm. The assumption that a corner's two drips share a union vertex index was not
+   checked before it was coded, and is the likely reason.
+
+Both leave spurious sideways bands 30 mm off the substrate at `(8.05, 2.935, 13.07)` and
+`(10.595, 7.57, 13.07)` — the Unit8 and Headhouse wall ends, nowhere near the scupper. Also two
+failing tests, `..._complementary_walls_and_never_meet` and `..._cut_at_its_datum...`.
+
+### The reading to start from
+
+At a building corner the drip's arris ends and a perpendicular arris meets it there **exactly as
+at the scupper** — the two are indistinguishable by anything local to the vertex. What differs is
+that at the corner the band is *already continuing*, onto the next wall's plane, because
+`drip_at` solves their shared arris on both planes at once; at the scupper it has nowhere to go,
+the only neighbour being a covered cheek.
+
+So the rule wants to be **"a band turns within its own plane only where it does not carry on out
+of it"** — the priority `carry_on` already applies, with turning read as a *fourth* answer after
+run-on and fold. That places it **in `carry_on`, not in the seam loop**, because only `carry_on`
+knows a run has failed to continue. This file has warned against "a fourth case bolted onto the
+stop condition" — that warning was written before any of this was measured, and the measurements
+now argue for exactly that shape.
+
+Two things to check before writing any of it, both of which the failed attempt skipped:
+
+- whether a building corner's two drip bands actually share a union vertex index, or only a
+  position;
+- what `_room` reports along the turned direction at the corner, since a band that has no room is
+  refused anyway and may need no gate at all.
+
 ## Cause 2 fixed: a knife has a side (2026-08-25)
 
 **All four of Duncan's corrections now hold.** The cheek lining is his target quad exactly, on
@@ -3016,14 +3113,20 @@ width was always right. What is missing is the surface closing the 85 mm between
 side of the slot the skirt **turns down** and runs to the **sill's offset**, and it does **not**
 return across the bottom (Duncan, asked both).
 
+*(Superseded 2026-08-25 — see "The turn-down: what is actually in the way". The reading below is
+what was believed before it was measured, and it is wrong about the blocker.)*
+
 **It is not the fold `_lap` already places, and that is the whole difficulty.** A fold turns onto
 the *departing* face — here the cheek, plane `y = 4.870`. This return stays in the skirt's **own**
 plane, `x = 8.585`, and runs down it. None of `carry_on`'s three answers at a free end covers
 that: the same plane carries on, another face meets it at an arris, or nothing.
 
-What is **not** the blocker, so nobody needs to raise it: `out: 0.0`. That gate is on the run-on
+~~What is **not** the blocker, so nobody needs to raise it: `out: 0.0`. That gate is on the run-on
 alone and deliberately so — a fold is priced by `reach(into)` and bills `drop` when it turns
-downward, precisely so the cladding is not denied every corner it turns.
+downward, precisely so the cladding is not denied every corner it turns.~~ **Wrong, and measured
+wrong on 2026-08-25.** There are two `reach` gates. The one in `_lap`'s **seam loop** prices every
+arris before any of `carry_on` runs, and `out: 0.0` there is exactly what stops the turn-down —
+the band leaves that arris horizontally. Setting `out` in a what-if makes the turn-down appear.
 
 The derivation to try first is that **a lap band follows the boundary of the face it laps onto**.
 A drip is the band inside the top edge of the wall it hangs on; where that boundary turns — down
@@ -3097,11 +3200,10 @@ of weekly budget and expects to pick this up Monday night.
    vertex when it pulls it inside `distance` — the same test `_trim_beside` makes, applied at
    solve time to a plane instead of after the fact to a triangle. Write it as a candidate and
    measure it; do not design it further on paper.
-4. **The turn-down.** Last, and now more firmly so: it springs off the mouth arris and its outer
-   edge is `x = 8.585`, which is the coordinate cause 2 gets wrong today. Set it out before the
-   knife is fixed and it inherits the same raked bottom. It is neutral for `_trim_beside` either
-   way — a lap lies on the face beyond the arris it springs from, so the return would never have
-   been cut by it.
+4. **The turn-down.** The last of the four, and the only one still open. **Attempted and backed
+   out on 2026-08-25** — the construction is solved, the *gate* is not. See *"The turn-down: what
+   is actually in the way"* below before touching it; the framing in this list, and in the
+   paragraph on correction 3 above, is superseded by it.
 
 ## Open items
 
