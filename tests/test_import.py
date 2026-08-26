@@ -373,38 +373,36 @@ def test_the_baked_headhouse_reads_and_skins():
         skin = _skin_from(spec, parts)
         built[spec["name"]] = skin
         assert skin.metadata["offset_residual"] < 1e-14
-        # three folds, all of them x = 8.5 self-contacts: the knife corner where
-        # the E and N walls meet, and the two jambs of the scupper slot
-        assert len(skin.metadata["folds"]) == 3
+        # every fold is an x = 8.5 self-contact: the knife corner where the E and
+        # N walls meet, and the two jambs of the scupper slot. The membrane sees
+        # all three; the **cladding sees one**, because `_knife_side` resolves the
+        # two at the scupper before the contradiction reaches `_reconcile` — it
+        # dresses no part of the roof taper, so the taper's end plane is read from
+        # the parapet's side. That is cause 2, fixed 2026-08-25
+        assert len(skin.metadata["folds"]) == (1 if spec["name"] == "Cladding" else 3)
         assert (np.abs(body.vertices[skin.metadata["folds"]][:, 0] - 8.5) < 1e-6).all()
         # every skin stands at its own offset -- kept generic, and kept in the
         # loop, so a skin added to `RULES` and the parameter file is checked by
-        # arriving rather than by anyone remembering to name it here. The one
-        # exemption is by name and is the defect below, not a licence
+        # arriving rather than by anyone remembering to name it here. The
+        # cladding is exempt on this bake and the reason is **geometry, not a
+        # defect**: the scupper reveal's mouth sits directly on the headhouse
+        # roof, so no correct panel can stand 85 mm off everything there. It
+        # reads 79.9703, pinned below. This is the documented `clearance`
+        # exception -- "a skin that deliberately stops short of something
+        # standing proud" -- and it is why `clearance` was demoted from the
+        # build's verdict to a printed number on 2026-08-25
         if spec["name"] != "Cladding":
             gap = clearance(parts, skin)
             assert gap > spec["distance"] - skin.metadata["slope_deviation"] - 1e-6
 
     membrane, cladding = built["Membrane"], built["Cladding"]
 
-    # The cladding does **not** stand at its offset, and this pins the defect
-    # rather than the property. `_trim_beside` was backed out 2026-08-25 (a
-    # revert of f0d535b) because it cut the miter back where the real fault is
-    # two mis-offset vertices at the scupper knife -- v66, pulled 85 mm inward
-    # by the roof taper's end plane, and fold vertex v67, where `_reconcile`
-    # drops one of two opposed planes and leaves z where it started. See NOTES,
-    # *"The cheek lining is wrong, and what it is"*, causes 2 and 3.
-    #
-    # So these two numbers are a known-bad reading held under measurement, and
-    # they are expected to **fail** when the knife is fixed -- at which point
-    # drop the exemption in the loop above and delete these two. Note that even
-    # the geometry
-    # Duncan wants reads 79.97 mm against an 85 mm offset, inherently, because
-    # the reveal's mouth sits on the headhouse roof: `clearance` cannot tell
-    # that from a fold, which is the standing item about demoting it from a
-    # verdict to a printed number.
-    assert clearance(parts, cladding) == pytest.approx(0.0036594, abs=1e-6)
-    assert separation(membrane, cladding) == pytest.approx(0.0043372, abs=1e-6)
+    # 79.9703 and 71.973. Both read wrong until 2026-08-25 -- 3.6593 mm and
+    # 4.337 mm -- for one reason, the scupper knife, and both came right when
+    # `_knife_side` landed. 79.9703 is the figure NOTES derived for the geometry
+    # Duncan asked for, from his own target quad, before any of it was built.
+    assert clearance(parts, cladding) == pytest.approx(0.0799703, abs=1e-6)
+    assert separation(membrane, cladding) == pytest.approx(0.0719734, abs=1e-6)
 
     # both skins cap the coping, as they did when the plates lived inside their
     # parapets. The cladding wraps over the plate; the membrane goes under it
@@ -434,14 +432,12 @@ def test_the_baked_headhouse_reads_and_skins():
         assert intersects(skin, surface) == 0
         assert intersects(skin, skin) == 0
 
-    # ...but the two skins **do** cross, on the cheek lining's two planes
-    # (y = 4.87 and y = 5.1) just above the sill, where the raked bottom edge of
-    # cause 2 cuts through the membrane lining the scupper. Same defect the
-    # clearance above pins, caught by the verdict that replaced it, and expected
-    # to go to 0 when the knife is fixed. Triangle pairs, so the count depends
-    # on the tiling where the fact of a crossing does not — which is why it is
-    # `> 0` that matters here
-    assert intersects(membrane, cladding) == 2
+    # ...and the two skins do not cross. They did, at 2 triangle pairs on the
+    # cheek lining just above the sill, where cause 2's raked bottom edge cut
+    # down through the membrane lining the scupper. This assertion was pinned at
+    # 2 on 2026-08-25 with a comment saying it was expected to **fail** when the
+    # knife was fixed; it did, the same day, and this is the other side of it
+    assert intersects(membrane, cladding) == 0
 
 
 def test_the_scupper_comes_out_symmetrical_on_the_live_bake():
@@ -582,10 +578,11 @@ def test_the_cheek_lining_reaches_the_coping_on_the_live_bake():
     Both cheeks, because the scupper is mirrored and the last defect here read
     correctly on one side and not the other.
 
-    What this does **not** pin is the lining's **bottom** edge, which is still
-    wrong: it kinks at `x = 8.415` and dives to `z = 14.5036` instead of running
-    flat at `14.580` out to `8.585`. That is cause 2, the two mis-offset
-    vertices at the scupper knife, and it is deliberately left visible here.
+    All four of Duncan's corrections are pinned here now. The bottom edge — his
+    third and fourth — came right on 2026-08-25 with `_knife_side`, which reads
+    the roof taper's end plane from the parapet's side because the cladding
+    dresses no part of the taper. Until then it kinked at `x = 8.415` and dived
+    to `z = 14.5036` over the last 170 mm.
     """
     from build import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins, _skin_from
     from skin import parameters, substrate
@@ -609,6 +606,17 @@ def test_the_cheek_lining_reaches_the_coping_on_the_live_bake():
             return np.isclose(corners, [x, z], atol=1e-6).all(axis=1).any()
 
         assert has(7.995, 14.84009), f"y={cheek}: the lining's head misses V4"
+        # corrections 3 and 4 -- the bottom edge, fixed 2026-08-25 by
+        # `_knife_side`. It runs **flat** at the sill's offset from the facade's
+        # offset out to the parapet's, where it used to kink at x = 8.415 and
+        # dive to z = 14.5036 over the last 170 mm
+        assert has(7.995, 14.580), f"y={cheek}: the lining's bottom-west corner"
+        assert has(8.585, 14.580), f"y={cheek}: the lining's bottom-east corner"
+        flat = corners[np.abs(corners[:, 1] - 14.580) < 1e-6]
+        assert len(flat) == 2, f"y={cheek}: the bottom edge is not one straight run"
+        assert corners[:, 1].min() == pytest.approx(14.580, abs=1e-6), (
+            f"y={cheek}: something still hangs below the sill's offset"
+        )
         assert has(8.585, 14.819018), f"y={cheek}: the lining's head misses V49"
         # ...and it reaches the full depth of the reveal, not the parapet's 8.5
         assert corners[:, 0].max() == pytest.approx(8.585, abs=1e-6)

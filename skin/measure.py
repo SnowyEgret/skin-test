@@ -44,20 +44,41 @@ def separation(a: trimesh.Trimesh, b: trimesh.Trimesh) -> float:
     return min(one_way(a, b), one_way(b, a))
 
 
+# rows of the box test evaluated at once. The comparison is n*m*3 booleans if
+# taken whole, so it is taken in slices: this bounds the intermediate at roughly
+# CHUNK * m * 3 bytes regardless of how big `a` is, and changes no answer. The
+# live bake needs none of this; the student-house's ~80 parts do — a self-test on
+# a 20 000-triangle skin would otherwise allocate ~2.4 GB per intermediate.
+CHUNK = 512
+
+
 def _candidate_pairs(a: trimesh.Trimesh, b: trimesh.Trimesh, tol: float):
     """Triangle index pairs whose AABBs overlap, inflated by `tol`.
 
-    A brute-force pass is n*m, which the live bake could afford and is still
-    wasteful; this is the whole of the optimisation and it changes no answer.
+    A brute-force pass compares every pair; this rejects most of them on their
+    boxes first. It is still O(n*m) comparisons — the saving is that the pairs
+    surviving to the exact test are few, not that fewer boxes are examined — so
+    it is a constant-factor filter and not a spatial index. It is evaluated in
+    row slices of `CHUNK` so the intermediate stays bounded; a real index is the
+    thing to reach for if this ever dominates.
+
     The inflation is on the box test only, so a pair that survives it is still
-    decided exactly below.
+    decided exactly by `_cross`.
     """
     lo_a, hi_a = a.triangles.min(axis=1) - tol, a.triangles.max(axis=1) + tol
     lo_b, hi_b = b.triangles.min(axis=1), b.triangles.max(axis=1)
-    overlap = (
-        (lo_a[:, None, :] <= hi_b[None, :, :]) & (hi_a[:, None, :] >= lo_b[None, :, :])
-    ).all(axis=2)
-    return np.argwhere(overlap)
+    found = []
+    for start in range(0, len(lo_a), CHUNK):
+        stop = start + CHUNK
+        overlap = (
+            (lo_a[start:stop, None, :] <= hi_b[None, :, :])
+            & (hi_a[start:stop, None, :] >= lo_b[None, :, :])
+        ).all(axis=2)
+        hit = np.argwhere(overlap)
+        if len(hit):
+            hit[:, 0] += start
+            found.append(hit)
+    return np.vstack(found) if found else np.zeros((0, 2), dtype=int)
 
 
 def _unit_normals(tri):

@@ -814,11 +814,13 @@ def cladding_faces(faces, fall):
     # reveal of an opening cut through a wall and stops at its sill, the same
     # way it stops at a window's. Duncan, 2026-08-22, having weighed it against
     # the floor's own reasoning above and kept the two apart. The selection is
-    # right; the geometry it currently produces is not -- see NOTES, "The cheek
-    # lining is wrong, and what it is". `_trim_beside` was built to repair that
-    # and backed out on 2026-08-25: it cut the miter back where the real defect
-    # is two mis-offset vertices at the scupper knife, so the panel reads
-    # `clearance 3.6593 mm` again and that is the honest reading of the fault.
+    # right, and so is the geometry, as of 2026-08-25. It took three goes: the
+    # selection (2026-08-22), then `_opening` growing the cheek set along the
+    # surface so the lining reaches the coping, then `offset._knife_side` so its
+    # bottom edge runs flat at the sill's offset instead of diving into the
+    # scupper knife. `_trim_beside`, which cut the miter back and was the second
+    # of those attempts, is backed out and is not wanted back -- it treated the
+    # symptom. See NOTES, "Cause 1 fixed" and "Cause 2 fixed".
     cheeks, floor = _opening(faces)
     return (
         facades_of(faces, RAINSCREEN, fall)

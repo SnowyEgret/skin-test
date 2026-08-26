@@ -140,6 +140,19 @@ Key invariants, each of which spans several files:
   *are* satisfied), so nothing else notices. `metadata["max_displacement"]` reports the worst.
   It is now a backstop rather than the front line — a fold is caught first, structurally, by the
   rule below.
+- **At a knife, a vertex takes the covered side's plane.** Where two bodies meet exactly on one
+  plane with both sides exposed, the substrate has no thickness and the two offset surfaces part
+  by twice the distance. A skin is on one side of that, so `_knife_side` reads the far face's
+  plane from its mate: the vertex still **lies on** that plane, and only the direction it offsets
+  is wrong. Substituting, not dropping — dropping leaves the vertex under-constrained, and it
+  misses the vertices where only the far face is incident, which is exactly where the defect was.
+  Which side is decided per **body**: a skin is on the far side only if it dresses nothing of the
+  body that face belongs to. Per face says the wrong thing whenever one skin covers both sides,
+  which is ordinary — the membrane runs over the roof taper *and* laps down the parapet's inner
+  face, and a per-face reading pushed it 8 mm into the parapet (`clearance 7.8808 → 0.2732 mm`,
+  10 crossings). This runs before the fold test, so a knife it resolves never reaches
+  `_reconcile`: the cladding's folds went 4 → 2 on the live bake and the membrane's are unmoved.
+  Built 2026-08-25 as Duncan's *"cause 2"*.
 - **A fold is reconciled against what the skin covers, or refused.** Where the surface turns back
   on itself a vertex lies on two planes facing opposite ways, and no offset exists for it: it
   would have to move `distance` both ways at once. `_reconcile` re-reads that vertex's planes

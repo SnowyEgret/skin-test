@@ -18,13 +18,18 @@ growing the cheek set up the stack — see *"What landed on 2026-08-25"* and *"C
 cheek set grows up the stack"*. The cheek selection in `cladding_faces` stayed throughout, and the
 lining's head now sits exactly where Duncan said it should, on both cheeks.
 
-**First job: cause 2, the scupper knife.** It is now the **only** thing still wrong with the cheek
-lining and the only reason the build warns. Two vertices, both diagnosed with coordinates below:
-**v66**, pulled 85 mm inward by the roof taper's end plane — not a contradiction at all, but the
-"solved over the whole body" invariant working as written — and **v67**, the fold where
-`_reconcile` drops one of two opposed planes and leaves `z` where it started. Then the turn-down
-last. **Start from *"Order to take them in"*** at the end of *"The cheek lining is wrong, and what
-it is"* — steps 3 and 4 stand exactly as written.
+**All four of Duncan's cheek corrections now hold**, and the build prints **no warning on any
+substrate**: zero crossings, nothing buried, nothing self-crossing. Cause 2 landed the same day as
+cause 1 — see *"Cause 2 fixed: a knife has a side"*.
+
+**First job: the turn-down**, step 4 and the last of the four. Duncan, 2026-08-22: *"The skirt
+should turn downwards on each side of the scupper."* It stays in the skirt's **own** plane,
+`x = 8.585`, and runs down it — which none of `carry_on`'s three answers at a free end covers. It
+was held until last because it springs off the mouth arris and its outer edge is `x = 8.585`, the
+coordinate cause 2 got wrong; that coordinate is now right, so the blocker is gone. The derivation
+to try first is *a lap band follows the boundary of the face it laps onto* — one rule covering the
+run-on, the fold and this, rather than a fourth case bolted onto the stop condition. **It is a
+guess at the shape, not a measured result; nothing has been built.**
 
 **The `clearance` verdict is settled**: Duncan took option D on 2026-08-25 — `clearance` is a
 printed number, and `measure.intersects` + `measure.buried` are what the build asserts. See *"The
@@ -276,18 +281,19 @@ therefore the row that did not move; the two bakes carry the cheek lining and re
 | | separation | membrane / cladding clearance | skins cross | buried |
 |---|---|---|---|---|
 | rig | 76.071 | 7.7760 / 84.6091 | 0 | none |
-| walls-and-caps | 4.337 | 7.8808 / **3.6594** | **2** | none |
-| extended cornices (live) | 4.337 | 7.8808 / **3.6593** | **2** | none |
+| walls-and-caps | 71.973 | 7.8808 / 79.9703 | 0 | none |
+| extended cornices (live) | 71.973 | 7.8808 / 79.9703 | 0 | none |
 
 | | coplanar overlap removed, membrane / cladding | triangles | border edges |
 |---|---|---|---|
 | rig | 53554 / 0 mm² | 33→34 / 29→22 | 25→16 / 23→18 |
-| walls-and-caps | 13530 / 0 mm² | 68→52 / 88→46 | 16→8 / 32→26 |
-| extended cornices (live) | 173172 / 0 mm² | 145→115 / 132→86 | 59→29 / 56→46 |
+| walls-and-caps | 13530 / 0 mm² | 68→52 / 88→44 | 16→8 / 32→24 |
+| extended cornices (live) | 173172 / 0 mm² | 145→115 / 132→84 | 59→29 / 56→44 |
 
-The bold clearances are the **defect**, not a regression from the revert: they are what the
-cheek lining has read since it was clad, with `_trim_beside` hiding it in between. Causes 2 and 3
-in *"The cheek lining is wrong, and what it is"*. The **crossings column was blank** when this
+Re-measured again on 2026-08-25 after cause 2 landed. The cladding's 3.6593 mm and the 4.337 mm
+separation are gone — both were the scupper knife, and both came right together. **79.9703 rather
+than 85 is correct and inherent**, because the reveal's mouth sits on the headhouse roof; see
+*"Cause 2 fixed: a knife has a side"*. The **crossings column was blank** when this
 table was re-taken on 2026-08-25 and is now filled in by `measure.intersects`, built the same day
 — see *"The clearance verdict"*. It reads **2 triangle pairs on both bakes**, on the cheek lining just above
 the sill. The suspicion that prompted leaving it blank was right: the old `0 / 0` was
@@ -2659,6 +2665,101 @@ refactor. `_tiling` returns a plane id per triangle and `_lap` returns `sprung`;
 single-caller functions, so neither signature change reaches beyond `skin_over`. Five new tests,
 four of them synthetic. 114 tests, ~8.9 s.
 
+## Cause 2 fixed: a knife has a side (2026-08-25)
+
+**All four of Duncan's corrections now hold.** The cheek lining is his target quad exactly, on
+both cheeks:
+
+```
+(7.995, 4.87, 14.84009) ── (8.585, 4.87, 14.819018)      the coping, sloped
+(7.995, 4.87, 14.580)   ── (8.585, 4.87, 14.580)         the sill's offset, flat
+```
+
+...plus `(8.585, 14.707)`, the skirt's outer edge, which he said stays.
+
+### The question this step posed, and the answer
+
+*"Whether an uncovered face's plane should still constrain a vertex when it pulls it inside
+`distance` — the same test `_trim_beside` makes, applied at solve time to a plane instead of after
+the fact to a triangle."* Written as a candidate and measured, as this file said to. The answer is
+**yes — but the test is not "inside `distance`", it is "the far side of a knife", and the side is
+read per body.**
+
+Three versions were built and measured, and the two that failed are why the third is shaped as it
+is:
+
+1. **Drop the plane of any knifed face, everywhere.** Broke 18 tests: a knifed face is an ordinary
+   face along the rest of its length, and stripping its plane leaves vertices nowhere near the
+   contact under-constrained.
+2. **Drop it only at the vertices the knifed face shares with its covered mate.** Narrow enough to
+   pass, and it fixed v67 — `z 14.5036 → 14.585034` — but **not v66**, which is where the defect
+   actually was. v66 carries the taper's end face and *not* the parapet's inner face, so it shares
+   no vertex with the mate and the knife's own "touching" test never reaches it. The bottom edge
+   still kinked at `x = 8.415`.
+3. **Substitute the mate's normal instead of dropping the plane.** The vertex still *lies on* that
+   plane — what is wrong is only which way it offsets. Substituting keeps every vertex exactly as
+   determined as it was, needs no arbitration, and reaches the vertices where only the far face is
+   incident. That is v66, and it moves to `x = 8.585`.
+
+### Per body, and this is the load-bearing part
+
+Version 3 fixed the cladding and **broke the membrane**: `clearance 7.8808 → 0.2732 mm`, 10
+crossings into the substrate, 2 samples inside a part. Reading which side a skin is on **per
+face** says the wrong thing whenever one skin covers both sides of the knife — and that is the
+ordinary case here, because the membrane runs over the roof taper *and* laps down the parapet's
+inner face. Face-wise it looks like the parapet's side, and it got pushed 8 mm into the parapet.
+
+Per **body** separates them with nothing authored: a skin is on the far side of a knife only if it
+dresses **nothing** of the body that face belongs to. The cladding covers no face of
+`Roof_Headhouse_InsulationTaper.1`, so the taper's end plane is read from the parapet's side. The
+membrane covers its top, so the rule does not fire for the membrane at all — its numbers are
+character for character what they were.
+
+### Measured
+
+| | before | after |
+|---|---|---|
+| cladding clearance | 3.6593 mm | **79.9703 mm** |
+| skin separation | 4.337 mm | **71.9734 mm** |
+| membrane × cladding crossings | 2 | **0** |
+| cladding folds (live) | 4 | **2** |
+| membrane, everything | — | unchanged |
+
+Zero crossings, nothing buried, no self-crossings, on all three substrates. The build prints no
+warning anywhere.
+
+**79.9703 mm is not 85, and that is correct.** It is the figure this file derived from Duncan's own
+target quad before any of it was built — the reveal's mouth sits directly on the headhouse roof,
+so no correct panel can stand 85 mm off everything there. `clearance` cannot tell that from a
+fold, which is exactly why it was demoted to a printed number three days ago. Had it still been
+the verdict, fixing cause 2 would have *started* a warning rather than ending one. The generic
+per-skin clearance assertion in `test_import.py` therefore exempts the cladding on this bake, and
+says that this is geometry rather than a defect.
+
+`_trim_beside`, backed out on 2026-08-25 as treating a symptom, is **not** wanted back: the miter
+it cut is now correct where it stands.
+
+### What review caught in it
+
+`/code-review high` found seven things, all verified and fixed. The one worth recording is a
+**comment describing the mechanism that was rejected**: the block in `planar_offset` still said
+*"supplies no plane at all"* and *"narrow to the vertices the knife actually touches"*, which is
+version 2 above — and a maintainer who implemented what it prescribed would have restored the
+3.6593 mm clearance. That is the documentation-asserts-what-the-code-does-not failure CLAUDE.md
+names as invisible to a test by construction, written **while** the measurements that disproved it
+were still on screen. The comment now states the substitution, that it reaches every vertex of the
+far face, and the consequence of that reach.
+
+The other six: `_knifed` credited with reading the knife's side, which `_knife_side` does;
+`planar_offset`'s new `owner` argument undocumented, where omitting it silently reverts the
+geometry; a stale comment in `cladding_faces` still asserting the cheek geometry is wrong;
+`_opposed` dividing a zero-length normal to NaN, which compares False and so *misses* the
+contradiction it exists to catch; `_cut`'s unit-normal precondition unstated while its docstring
+invites new callers; and `measure._candidate_pairs` allocating the whole n×m×3 box comparison,
+which the live bake never notices and the student-house's ~80 parts would — a 20 000-triangle
+self-test would want ~2.4 GB per intermediate. It is evaluated in row slices now, which changes no
+answer.
+
 ## Cause 1 fixed: the cheek set grows up the stack (2026-08-25)
 
 Duncan's corrections 1 and 2 — *"V5 should be at V4, V52 should be at V49"* — are satisfied
@@ -2983,7 +3084,11 @@ of weekly budget and expects to pick this up Monday night.
    same plane, facing the same way as a cheek already found and overlapping it in plan, is that
    cheek continuing. `_opening`'s per-body pairing is untouched. See *"Cause 1 fixed: the cheek
    set grows up the stack"*.
-3. **Cause 2**, the knife. `_reconcile` and the most delicate thing in the module, and the one
+3. ~~**Cause 2**, the knife.~~ **Done 2026-08-25** — see *"Cause 2 fixed: a knife has a side"*.
+   The candidate this step asked for was written and measured, and the answer to its question is
+   **yes, but per body**. Original text follows.
+
+   **Cause 2**, the knife. `_reconcile` and the most delicate thing in the module, and the one
    that decides whether `_trim_beside` ever comes back. Be precise about which vertex is which:
    only **v67** is `_reconcile`'s doing. **v66** is not a contradiction at all — its planes are
    not opposed and the parapet's east face does not touch it. It is the "solved over the whole

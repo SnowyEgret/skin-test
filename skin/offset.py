@@ -41,7 +41,7 @@ RIDGE = 1e-9
 RAKE = 0.05
 
 
-def _vertex_normals(mesh: trimesh.Trimesh, vertex: int, tol: float, only=None) -> np.ndarray:
+def _vertex_normals(mesh, vertex: int, tol: float, only=None, instead=None) -> np.ndarray:
     """Distinct outward face-plane normals meeting at `vertex`.
 
     Normals within `tol` of an axis are snapped onto it: the union that feeds
@@ -50,6 +50,9 @@ def _vertex_normals(mesh: trimesh.Trimesh, vertex: int, tol: float, only=None) -
 
     `only` is a face mask restricting which incident faces are read. It is used
     solely to re-read a contradictory vertex — see `_reconcile`.
+
+    `instead` is `{face: normal}`, substituting a face's normal for another. It
+    carries the far half of a knife the skin covers — see `_knife_side`.
     """
     faces = mesh.vertex_faces[vertex]
     faces = faces[faces >= 0]
@@ -58,6 +61,12 @@ def _vertex_normals(mesh: trimesh.Trimesh, vertex: int, tol: float, only=None) -
     if not len(faces):
         return np.zeros((0, 3))
     normals = mesh.face_normals[faces]
+    if instead:
+        normals = normals.copy()
+        for row, face in enumerate(faces):
+            swap = instead.get(int(face))
+            if swap is not None:
+                normals[row] = swap
     axis = np.abs(normals).argmax(axis=1)
     aligned = np.abs(normals).max(axis=1) > 1 - tol
     normals = normals.copy()
@@ -83,6 +92,14 @@ def _opposed(normals: np.ndarray):
     # difference, which is the failure `_reconcile` exists to make structural.
     # Axis-aligned normals are snapped to exact units upstream and were fine,
     # which is why every fold found so far happened to be axis-aligned.
+    # ...and a degenerate face contributes a zero-length normal, which divides to
+    # NaN and compares False against the threshold below — an *undetected*
+    # contradiction, which is the very failure this comment is about. Dropped
+    # instead: a face with no area states no plane.
+    length = np.linalg.norm(normals, axis=1)
+    normals = normals[length > PLANE_TOL]
+    if len(normals) < 2:
+        return None
     unit = normals / np.linalg.norm(normals, axis=1)[:, None]
     for i in range(len(normals)):
         for j in range(i + 1, len(normals)):
@@ -143,13 +160,61 @@ def _reconcile(mesh, vertex, tol, normals, covered):
     )
 
 
+def _knife_side(mesh, covered, owner=None):
+    """Faces whose plane must be read from the **other** side: the far half of a
+    knife the skin covers.
+
+    A knife is two faces on one plane facing opposite ways and touching, so the
+    substrate has no thickness there and the two offset surfaces part by twice
+    the distance. The skin is on one side of it, and which side is read below off
+    what the skin covers, not off any judgement about intent. (`_knifed` answers
+    a different question — which faces a *lap* may not land on — and the two
+    share only `_knives`.)
+
+    The vertex still **lies on that plane** — what is wrong is only which way it
+    is offset. So the far face's normal is *replaced* by its mate's rather than
+    dropped. Dropping was tried first and is wrong twice over: it leaves the
+    vertex under-constrained, which broke eighteen tests when applied to a whole
+    face, and it still misses the vertices where only the far face is incident,
+    which is exactly where the defect lived. Substituting keeps every vertex as
+    determined as it was and needs no arbitration — the mate's plane is the same
+    plane.
+
+    The far half is identified per **body**, not per face, and that is what makes
+    it safe: a skin is on the far side of a knife only if it dresses nothing of
+    the body that face belongs to. Reading it per face instead says the wrong
+    thing whenever a skin covers *both* sides, which is the ordinary case at the
+    scupper — the membrane runs over the roof taper and also laps down the
+    parapet's inner face, so face-wise it looks like the parapet's side and gets
+    pushed 8 mm into the parapet. Measured: 10 crossings into the substrate,
+    `clearance 7.8808 → 0.2732 mm`. Per body it does not fire for the membrane at
+    all, and the cladding — which dresses no part of the roof — keeps it.
+
+    Returns `{face: normal}` for the far halves only, so a mesh with no knife
+    the skin covers returns `{}` and every vertex is read exactly as before.
+    """
+    if covered is None or owner is None:
+        return {}
+    ids, reps = _plane_ids(mesh)
+    dressed = set(np.asarray(owner)[covered].tolist())
+    side = {}
+    for face, mates in _knives(mesh, ids, reps).items():
+        if covered[face] or int(owner[face]) in dressed:
+            continue                    # the skin is on this side of the knife
+        facing = [g for g in mates if covered[g]]
+        if facing:
+            side[int(face)] = mesh.face_normals[facing[0]]
+    return side
+
+
 def _stack(rows: list, width: int) -> tuple[np.ndarray, np.ndarray]:
     if not rows:
         return np.zeros((0, width)), np.zeros(0)
     return np.array([r for r, _ in rows]), np.array([v for _, v in rows])
 
 
-def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6, covered=None):
+def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6, covered=None,
+                   owner=None):
     """Offset every face of `mesh` outward by `distance`.
 
     Solves for all vertex displacements at once. A vertex lies on all of its
@@ -163,14 +228,52 @@ def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6, cov
     other because the surface folds back on itself. See `_reconcile`. Omitting
     it makes every plane required, which is the right default for a plain
     closed-shell offset — there is no selection, so nothing is uncovered.
+
+    `owner` maps each face to the body it came from. It and `covered` are read
+    **together** by `_knife_side`, to decide which side of a knife this skin is
+    on. Supply both or neither: with either missing that correction does not
+    run and a knifed vertex is offset the way it was before the rule existed.
+    Omitting both is the right default for the same reason as above — an offset
+    of a whole solid is on no far side of anything — but it is a real difference
+    in the geometry, so it is said here rather than left to be found. The tests
+    that offset a bare solid pass neither.
     """
     width = 3 * len(mesh.vertices)
     hard: list = []
     soft: list = []
     folds: list = []
 
+    # At a knife, a vertex takes the **covered side's** plane. Where two bodies
+    # meet exactly on one plane with both sides exposed the substrate has no
+    # thickness, the two offset surfaces part by twice the distance, and a skin
+    # is on one side of it. `_knife_side` reads which side off what the skin
+    # dresses; the far face's normal is then *substituted* by its mate's.
+    #
+    # Substituted, not dropped, and at **every vertex of the far face** rather
+    # than only where the two faces touch. Both of those are deliberate and both
+    # were arrived at by measuring the alternatives:
+    #
+    #   * dropping the plane leaves the vertex under-constrained -- 18 tests
+    #     broke -- where substituting keeps it exactly as determined as it was,
+    #     because it is the same plane and only the direction is in question;
+    #   * restricting to the vertices the knifed face shares with its covered
+    #     mate is narrow enough to pass, and it fixes nothing that mattered. The
+    #     scupper's knife runs down an 8.6 mm sliver: v67 carries both faces and
+    #     was already reconciled, while **v66** one edge below carries only the
+    #     roof taper's end, shares no vertex with the mate, and is the vertex
+    #     that dragged the cladding 85 mm inboard. That is Duncan's "cause 2".
+    #
+    # The consequence of the wider reach, stated rather than discovered later: a
+    # far-half triangle has its plane read from the covered side at all three of
+    # its corners, including corners well away from the contact and corners that
+    # carry covered faces of their own. That is intended -- the plane belongs to
+    # a body this skin dresses no part of, so wherever it constrains a vertex it
+    # should be read from the side the skin is on -- but it is a wider rule than
+    # "at the knife", and `_knife_side`'s per-body gate is what keeps it safe.
+    side = _knife_side(mesh, covered, owner)
+
     for vertex in range(len(mesh.vertices)):
-        normals = _vertex_normals(mesh, vertex, tol)
+        normals = _vertex_normals(mesh, vertex, tol, instead=side)
         if _opposed(normals) is not None:
             normals = _reconcile(mesh, vertex, tol, normals, covered)
             folds.append(vertex)
@@ -1293,6 +1396,10 @@ def _cut(verts, faces, normal, d):
     before moving to the next.
 
     Which side a vertex is on is decided **exactly**, with no tolerance band. A
+    `normal` must be a **unit** vector; the plane is `normal . x == d`. Nothing
+    else about it is particular — it need not be level or axis-aligned — but the
+    projection and the side test both assume unit length.
+
     band is the obvious thing to reach for and is wrong here: the crossing
     interpolates to exactly the plane, so a vertex inside the band but past it
     would be called "inside" while the interpolation, solving for a plane it is
@@ -1317,6 +1424,9 @@ def _cut(verts, faces, normal, d):
             p, q = np.asarray(verts[key[0]]), np.asarray(verts[key[1]])
             hp, hq = normal @ p - d, normal @ q - d
             point = p + hp / (hp - hq) * (q - p)
+            # `normal` is a **unit** vector -- see the docstring. This is a
+            # projection onto the plane only then; scaled, it over- or
+            # undershoots and `past`'s threshold is scaled with it
             point -= (normal @ point - d) * normal  # exactly on it, not a rounding away
             cuts[key] = len(verts)
             verts.append(point)
@@ -1506,7 +1616,7 @@ def skin_over(
     receivers = _receivers(body, kept, allowed)
 
     # everything this skin puts a surface on. Only a fold consults it
-    skin = planar_offset(body, distance, covered=kept | receivers)
+    skin = planar_offset(body, distance, covered=kept | receivers, owner=surface.owner)
 
     verts = list(skin.vertices)
     faces = _tiling(body, skin, kept)
