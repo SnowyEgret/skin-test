@@ -603,11 +603,20 @@ listed — there are no plane coordinates and no part indices in them:
   lining it, and "every wall top" otherwise claimed the scupper sill and flared the coping's mitre
   out through the mouth. The membrane still lines it, as an upward face of a climbed wall. The
   **cheeks** are a separate decision and go the other way (Duncan, 2026-08-22): the cladding lines
-  the reveal and stops at the sill, the way a rainscreen returns into a window opening. That
-  selection is right; the **geometry it currently produces is not**, and neither is the reveal's
-  full height — `_opening` reads cheeks per body, and this cap is two bodies split by the slot, so
-  the plate's own reveal never becomes a cheek and the lining stops at the parapet. See NOTES,
-  *"The cheek lining is wrong, and what it is"*.
+  the reveal and stops at the sill, the way a rainscreen returns into a window opening.
+  The cheek set is then **grown along the surface**: a vertical face reached from a cheek by
+  walking adjacency **without leaving its plane** is that cheek continuing. A slot cuts through
+  the cap plates too, and a plate split by the slot has one reveal rather than a pair, so per-body
+  pairing alone left the lining 34 mm below the coping. Growth fixes that without relaxing the
+  pairing, which must **stay** per body for the two independent reasons in `_opening`'s docstring.
+  **Contiguity is the bound, and it has to be.** Growing on the shared plane alone — even with a
+  plan overlap to narrow it — is the `_meets_region` mistake this module made once and retired: a
+  building shares a plane right up a stack, and a coincidence a storey away is not this opening.
+  It runs **after** the floor because a grown cheek reaches above the coping the slot cuts
+  through, and the floor test asks whether a cheek stands over an upward face: grow first and the
+  wall's own coping becomes the floor of an opening, which `cladding_faces` then subtracts. The
+  lining's remaining defect is its **bottom** edge, which is the scupper knife — see NOTES, *"The
+  cheek lining is wrong, and what it is"*, cause 2.
 - **both skins cap a wall, deliberately.** A top the membrane carries over is also claimed by
   `cladding_faces`' "every wall top", so a parapet coping belongs to two skins at once — a
   membrane upstand with a metal coping over it, which is what a parapet is built as. Decided

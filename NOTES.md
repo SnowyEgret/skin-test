@@ -13,15 +13,18 @@ and rejected, and what is still open.
 
 ### Where to pick up
 
-**Step 1 of the four is done: `_trim_beside` is backed out.** See *"What landed on 2026-08-25"*
-below. The cheek selection in `cladding_faces` stayed, so the cladding still covers the cheeks
-and the bake now reads the honest number for the real fault — `clearance 3.6593 mm`, with the
-warning back.
+**Steps 1 and 2 of the four are done.** `_trim_beside` is backed out, and cause 1 is fixed by
+growing the cheek set up the stack — see *"What landed on 2026-08-25"* and *"Cause 1 fixed: the
+cheek set grows up the stack"*. The cheek selection in `cladding_faces` stayed throughout, and the
+lining's head now sits exactly where Duncan said it should, on both cheeks.
 
-**First job: cause 1, the lining stopping at the parapet.** Contained, and the derivation to try
-is written down. Then cause 2 (the knife), then the turn-down last. All of it is in *"The cheek
-lining is wrong, and what it is"* below, and **start from *"Order to take them in"*** at the end
-of that section — steps 2, 3 and 4 stand exactly as written.
+**First job: cause 2, the scupper knife.** It is now the **only** thing still wrong with the cheek
+lining and the only reason the build warns. Two vertices, both diagnosed with coordinates below:
+**v66**, pulled 85 mm inward by the roof taper's end plane — not a contradiction at all, but the
+"solved over the whole body" invariant working as written — and **v67**, the fold where
+`_reconcile` drops one of two opposed planes and leaves `z` where it started. Then the turn-down
+last. **Start from *"Order to take them in"*** at the end of *"The cheek lining is wrong, and what
+it is"* — steps 3 and 4 stand exactly as written.
 
 **The `clearance` verdict is settled**: Duncan took option D on 2026-08-25 — `clearance` is a
 printed number, and `measure.intersects` + `measure.buried` are what the build asserts. See *"The
@@ -116,8 +119,19 @@ Three were in the day-old `measure` code and four in code that had never been in
 - `clearance`'s docstring said parts are "concatenated" where the code queries per part and its
   own inline comment gives the opposite reason.
 
-**Not done, and not started:** causes 1, 2 and the turn-down. The tree is clean apart from an
+**Not done, and not started:** cause 2 and the turn-down. The tree is clean apart from an
 untracked `audit.py`.
+
+**A fourth `/code-review high` ran over the whole branch after cause 1 landed**, and found six
+things. The one that mattered is recorded above: the cheek growth was bounded by a shared plane
+rather than by contiguity. The other five are small and all fixed — `_across` indexing `[0]` into
+a list a degenerate union triangle leaves empty (now a named refusal); `corner()` dividing by zero
+on a seam the solve collapsed, whose NaN went through `NaN < PLANE_TOL` into `lstsq` and would
+have written a NaN vertex without raising; `_plane_ids`' new cache stamp not fingerprinting
+**winding**, so a `fix_normals()` would leave it looking valid with every id wrong; and two parts
+sharing an `o` group name writing one substrate OBJ twice, so one part vanishes from
+`reload(substrate=True)` — the very check that path exists for. All five were unreachable on
+current paths; four of the five are one line.
 
 ### What landed on 2026-08-22
 
@@ -268,8 +282,8 @@ therefore the row that did not move; the two bakes carry the cheek lining and re
 | | coplanar overlap removed, membrane / cladding | triangles | border edges |
 |---|---|---|---|
 | rig | 53554 / 0 mm² | 33→34 / 29→22 | 25→16 / 23→18 |
-| walls-and-caps | 69945 / 0 mm² | 76→52 / 84→48 | 24→8 / 36→32 |
-| extended cornices (live) | 226868 / 0 mm² | 153→117 / 128→88 | 67→29 / 60→52 |
+| walls-and-caps | 13530 / 0 mm² | 68→52 / 88→46 | 16→8 / 32→26 |
+| extended cornices (live) | 173172 / 0 mm² | 145→115 / 132→86 | 59→29 / 56→46 |
 
 The bold clearances are the **defect**, not a regression from the revert: they are what the
 cheek lining has read since it was clad, with `_trim_beside` hiding it in between. Causes 2 and 3
@@ -2645,6 +2659,74 @@ refactor. `_tiling` returns a plane id per triangle and `_lap` returns `sprung`;
 single-caller functions, so neither signature change reaches beyond `skin_over`. Five new tests,
 four of them synthetic. 114 tests, ~8.9 s.
 
+## Cause 1 fixed: the cheek set grows up the stack (2026-08-25)
+
+Duncan's corrections 1 and 2 — *"V5 should be at V4, V52 should be at V49"* — are satisfied
+exactly, on both cheeks:
+
+| | wanted | built |
+|---|---|---|
+| head, west | `(7.995, 14.84009)` | `7.995, 14.84009` |
+| head, east | `(8.585, 14.819018)` | `8.585, 14.819018` |
+
+### What it was, and what was not done about it
+
+The slot cuts through the cap plates as well as the parapet, and this cap is **two bodies** split
+by the slot — `CapPlate-Headhouse-E` and `E2`. `_opening` pairs cheeks per body and each plate has
+exactly one reveal, so neither reveal ever became a cheek and the lining stopped at `z = 14.718`,
+34 mm below the coping. Union faces 198/199 and 200/201 read `cheek False`.
+
+**The per-body pairing is untouched**, which was the whole difficulty: its docstring rules
+per-element out for two independent reasons that both still hold — group by element and the two
+plates' reveals face each other so the coping reads as a cheek pair, *and* the cornice's two ends
+become an away-facing pair on the sill's own region so the sill reads as a thickness. So the fix
+is not to the pairing but **after** it: a vertical face reached from a cheek by walking adjacency
+**without leaving its plane** is that cheek continuing. It runs to a fixed point, so a stack
+deeper than one lift follows. Nothing authored.
+
+**Contiguity is the bound, and the first version got that wrong.** It grew on the shared plane
+plus a plan overlap, with nothing requiring the two regions to touch — which `/code-review high`
+correctly named as the `_meets_region` mistake reintroduced: *"a building shares a plane right up
+a stack… matching on the plane once turned the membrane's parapet skirt out into thin air"*. It
+was inert on all three bakes, because those four faces are the only ones in the whole union
+sharing a cheek plane — and an inert-today wrong rule is exactly what this file exists to catch.
+The walk crosses the parapet/plate boundary because the two genuinely are one surface there —
+union face 198 is adjacent to cheek 255, 199 to 198, 201 to cheek 258, 200 to 201 — and stops at
+the edge of it because there is nothing coplanar to step onto. The plan-overlap arithmetic went
+with it, and a second finding about comparing projections taken along two regions' own normals
+went with that.
+
+### The ordering that matters, and it was measured
+
+The growth runs **after the floor is computed**, and that is not incidental. A grown cheek reaches
+*above* the coping the slot cuts through, and the floor test asks whether a cheek stands over an
+upward face. Grow first and the wall's own coping becomes the floor of an opening — which
+`cladding_faces` subtracts, so the coping would silently leave the cladding. Checked before the
+line was written.
+
+### What it caught, exactly
+
+Four faces on the live bake and nothing else: 198/199 on `CapPlate-Headhouse-E` (plane 39, +y) and
+200/201 on `E2` (plane 40, −y), both spanning `x 8.080…8.500`, `z 14.718…14.752`, directly above
+the parapet's own cheeks on the same planes. Those four are the *only* faces in the whole union
+sharing a cheek plane, so there was nothing else for it to sweep. Floor unchanged at three faces.
+
+### What moved, and what did not
+
+Both skins take the cheeks, so the membrane grew them too and now **covers** those reveals where
+it used to lap onto them: its coplanar overlap falls 69945 → 13530 mm² on walls-and-caps and
+226868 → 173172 mm² on the live bake, raw triangles 76 → 68 and 153 → 145. The rig has no opening
+and does not move by a bit. The verdict is unchanged on all three: nothing buried, no
+self-crossings, no crossings into the substrate, and the same **2** skin-to-skin pairs — which are
+cause 2 and were never this.
+
+### What is still wrong, and it is now isolated
+
+The lining's **bottom** edge. It should run flat at `z = 14.580` from `x = 7.995` out to `8.585`;
+it kinks at `8.415` and dives to `14.503618`. Those are exactly v66 and v67 — **cause 2**, the
+scupper knife — with nothing else left on top of them. `clearance` still reads 3.6593 mm and the
+two skins still cross at 2 pairs, both for that one reason.
+
 ## The clearance verdict (2026-08-25)
 
 Duncan, asked the standing question and given four options: **"Take D."** So `clearance` is
@@ -2896,11 +2978,11 @@ of weekly budget and expects to pick this up Monday night.
    "no bake warns" is over. That forces the standing `clearance` item below: demote it to a
    printed number and promote the Möller-Trumbore check to the verdict. **Duncan's call**, and
    worth having answered before the fixes land rather than after.
-2. **Cause 1**, the lining stopping at the parapet. Contained. Do not relax `_opening`'s per-body
-   pairing — its docstring rules per-element out for two other reasons that both still hold. The
-   derivation to try is to *grow* the cheek set: a coplanar vertical region of another body that
-   overlaps a known cheek in plan and faces the same way is also a cheek, which is what "the slot
-   cuts through the cap plate too" means geometrically.
+2. ~~**Cause 1**, the lining stopping at the parapet.~~ **Done 2026-08-25**, and the derivation
+   proposed here is the one that landed unchanged: *grow* the cheek set — a vertical region on the
+   same plane, facing the same way as a cheek already found and overlapping it in plan, is that
+   cheek continuing. `_opening`'s per-body pairing is untouched. See *"Cause 1 fixed: the cheek
+   set grows up the stack"*.
 3. **Cause 2**, the knife. `_reconcile` and the most delicate thing in the module, and the one
    that decides whether `_trim_beside` ever comes back. Be precise about which vertex is which:
    only **v67** is `_reconcile`'s doing. **v66** is not a contradiction at all — its planes are

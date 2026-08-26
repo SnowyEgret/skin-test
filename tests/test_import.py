@@ -566,3 +566,56 @@ def test_the_bake_s_separately_authored_cap_plates_are_capped_by_both_skins():
     lone = substrate.from_obj(BAKE)
     plate = next(p for p in lone if p.metadata["name"] == "CapPlate-Headhouse-N")
     assert classifier(params)(plate) == substrate.ROOF
+
+
+def test_the_cheek_lining_reaches_the_coping_on_the_live_bake():
+    """Duncan's corrections 1 and 2, 2026-08-22: *"V5 should be at V4, V52 should
+    be at V49."*
+
+    The lining stopped 34 mm below the coping, at the top of the parapet. Cause:
+    the slot cuts through the cap plate as well as the parapet, `_opening` pairs
+    cheeks **per body**, and this cap is two bodies split by the slot — so
+    neither plate holds a pair and neither reveal ever became a cheek. Fixed
+    2026-08-25 by *growing* the cheek set up the stack rather than by relaxing
+    the pairing, which has to stay per body for two other reasons.
+
+    Both cheeks, because the scupper is mirrored and the last defect here read
+    correctly on one side and not the other.
+
+    What this does **not** pin is the lining's **bottom** edge, which is still
+    wrong: it kinks at `x = 8.415` and dives to `z = 14.5036` instead of running
+    flat at `14.580` out to `8.585`. That is cause 2, the two mis-offset
+    vertices at the scupper knife, and it is deliberately left visible here.
+    """
+    from build import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins, _skin_from
+    from skin import parameters, substrate
+
+    parts = substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN})
+    params = parameters.load_validated()
+    group_cornices(parts)
+    group_caps(parts, classifier(params))
+    spec = next(s for s in skins(params) if s["name"] == "Cladding")
+    cladding = _skin_from(spec, parts)
+
+    # the coping is laid to fall, so the reveal's head is sloped: west corner
+    # high, east corner 21 mm lower. Both are the offset of the cap plate's own
+    # top, and both are what Duncan named
+    for cheek in (4.87, 5.10):
+        on = np.abs(cladding.vertices[:, 1] - cheek) < 1e-6
+        assert on.any(), f"nothing on the cheek plane y = {cheek}"
+        corners = np.unique(np.round(cladding.vertices[on][:, [0, 2]], 6), axis=0)
+
+        def has(x, z):
+            return np.isclose(corners, [x, z], atol=1e-6).all(axis=1).any()
+
+        assert has(7.995, 14.84009), f"y={cheek}: the lining's head misses V4"
+        assert has(8.585, 14.819018), f"y={cheek}: the lining's head misses V49"
+        # ...and it reaches the full depth of the reveal, not the parapet's 8.5
+        assert corners[:, 0].max() == pytest.approx(8.585, abs=1e-6)
+        # ...and the old defect is gone: the lining used to *end* at 14.718, the
+        # top of the parapet. That level is still a vertex on the west edge --
+        # it is where the parapet's cheek meets the plate's reveal, collinear
+        # along the edge and dissolved out of the written mesh -- so what
+        # separates the two states is where the plane stops, not whether the
+        # point exists
+        assert corners[:, 1].max() == pytest.approx(14.84009, abs=1e-6)

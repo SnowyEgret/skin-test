@@ -515,7 +515,11 @@ def _plane_ids(body):
     # chaining, knives and the tiling. A run that silently fails to chain is a
     # lap that silently does not happen, which is what this function exists to
     # stop (found on review, 2026-08-25)
-    stamp = (len(body.faces), len(body.vertices), body.vertices.tobytes())
+    # the faces are in the stamp, not just their count: plane ids derive from
+    # `face_normals`, which depend on winding, so an operation that flips or
+    # reorders faces without touching the vertex array would otherwise leave the
+    # cache looking valid with every id wrong
+    stamp = (body.vertices.tobytes(), body.faces.tobytes())
     held = body.metadata.get("plane_ids")
     if held is not None and held[0] == stamp:
         return held[1]
@@ -700,7 +704,18 @@ def _across(body, a, b, far) -> np.ndarray:
     """
     e = body.vertices[b] - body.vertices[a]
     e = e / np.linalg.norm(e)
-    third = [v for v in body.faces[far] if v not in (a, b)][0]
+    # a degenerate triangle in the union -- manifold3d's float32 output can leave
+    # one with a repeated corner -- has no vertex outside the arris, and there is
+    # then no direction to read. Refused by name rather than by `IndexError`
+    # thrown from inside `_lap`, which is how every other refusal here reads
+    beyond = [v for v in body.faces[far] if v not in (a, b)]
+    if not beyond:
+        raise ValueError(
+            f"face {far} is degenerate — its corners are {body.faces[far].tolist()}, "
+            f"which leaves no vertex off the arris ({a}, {b}) to read a lap "
+            f"direction from. The substrate has a repeated vertex in it"
+        )
+    third = beyond[0]
     t = body.vertices[third] - body.vertices[a]
     t -= (t @ e) * e
     t = t / np.linalg.norm(t)
@@ -1225,6 +1240,14 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
         p1, p2 = outer(segs[k1], where), outer(segs[k2], where)
         u1 = segs[k1]["pb"] - segs[k1]["pa"]
         u2 = segs[k2]["pb"] - segs[k2]["pa"]
+        # a seam the solve collapsed to a point has no direction to miter along.
+        # Left to the normalisations below it divides by zero, and the NaN goes
+        # through `NaN < PLANE_TOL` (False) into `lstsq`, which returns a NaN rim
+        # vertex that is written to the mesh without anything raising. A
+        # reconciled fold is exactly where vertices are least constrained, so
+        # this is reachable in principle; take the tip and place no miter
+        if min(np.linalg.norm(u1), np.linalg.norm(u2)) < WELD_TOL:
+            return p1
         # on unit vectors: the cross product of two raw seam directions scales
         # with their lengths, so a pair of 3 mm seams read parallel below 6 deg
         # and a pair of 1 mm ones at any angle at all, and the miter was skipped

@@ -600,6 +600,16 @@ def _opening(faces):
     thickness. Per body, each plate has its own thickness and the sill's only
     flanks are the cheeks.
 
+    The price of that is paid at the end instead: a slot cuts through the plates
+    over the wall too, and a plate split by the slot has one reveal rather than a
+    pair, so the pairing cannot see it and the lining stopped 34 mm below the
+    coping. The cheek set is therefore **grown along the surface** once the
+    pairing and the floor are settled — a vertical face reached from a cheek by
+    walking adjacency without leaving its plane is that cheek continuing. That is
+    what "the slot cuts through the plate too" means geometrically, and it keeps
+    the pairing per body where it belongs. **Contiguity, not the plane**: see the
+    comment on the walk itself for why that distinction is the whole of it.
+
     Also read per coplanar **region** rather than per triangle, since the union
     triangulates a sill and one triangle of it may touch only one cheek.
     """
@@ -645,6 +655,46 @@ def _opening(faces):
             for v in flanks[i + 1:]:
                 if abs(faces.normals[u] @ faces.normals[v] + 1) < TOL:
                     floor[regions[key]] = True
+
+    # ...and only now is the cheek set **grown up the stack**, deliberately
+    # after the floor is settled. A slot cut through a wall cuts through the cap
+    # plates over it too, and this cap is two bodies split by the slot, so
+    # neither plate contains a pair and the per-body pairing above cannot see
+    # either reveal: the cladding's lining stopped at the parapet, 34 mm below
+    # the coping (Duncan, 2026-08-22, correction 1). Do **not** fix that by
+    # pairing per element -- `_opening`'s docstring rules that out for two other
+    # reasons that both still hold.
+    #
+    # A reveal is instead recognised by being **the same surface continuing**:
+    # a face on a cheek's plane, reached from that cheek by walking adjacency
+    # without leaving the plane. Contiguity is the whole bound, and it has to be
+    # -- growing on the shared plane alone is the `_meets_region` mistake this
+    # module already made once and retired, because a building shares a plane
+    # right up a stack and a coincidence a storey away is not this opening. The
+    # walk crosses the parapet/plate boundary because the two are genuinely one
+    # surface there, and stops at the edge of it because there is nothing
+    # coplanar to step onto.
+    #
+    # After the floor, because a grown cheek reaches *above* the coping the slot
+    # cuts through, and the floor test asks whether a cheek stands over an
+    # upward face. Growing first would make the wall's own coping the floor of
+    # an opening, and `cladding_faces` subtracts the floor -- so the coping
+    # would silently leave the cladding. Measured before this was written.
+    beyond: dict[int, list] = {}
+    for u, v in body.face_adjacency:
+        u, v = int(u), int(v)
+        if ids[u] == ids[v]:
+            beyond.setdefault(u, []).append(v)
+            beyond.setdefault(v, []).append(u)
+
+    edge = [int(f) for f in np.flatnonzero(cheeks)]
+    while edge:
+        f = edge.pop()
+        for n in beyond.get(f, ()):
+            if not cheeks[n] and vertical[n]:
+                cheeks[n] = True
+                edge.append(n)
+
     return cheeks, floor
 
 
@@ -958,15 +1008,23 @@ def build(
         # a bake names its own parts, and eighteen anonymous boxes in the
         # outliner are no use for checking a transcription. The prefix stays
         # either way, because the stale-copy sweep below globs on it
-        named += [
-            (
-                f"Substrate_{part.metadata.get('name', i + 1)}",
-                part,
-                "solid",
-                "substrate",
-            )
-            for i, part in enumerate(parts)
-        ]
+        # ...and a name has to be unique, because it is the filename. `from_obj`
+        # only disambiguates when *one* `o` group yields several solids, so two
+        # groups sharing a name would write one file twice and put two manifest
+        # entries on it -- one part silently absent from `reload(substrate=True)`,
+        # which is the very check this path exists for. Fall back to the index,
+        # which is what the names replaced and is unique by construction
+        seen: dict[str, int] = {}
+        for i, part in enumerate(parts):
+            name = str(part.metadata.get("name", i + 1))
+            seen[name] = seen.get(name, 0) + 1
+            if seen[name] > 1:
+                print(
+                    f"  substrate  two parts are called {name!r}; part {i + 1} is"
+                    f" written as Substrate_{i + 1} so neither is lost"
+                )
+                name = str(i + 1)
+            named.append((f"Substrate_{name}", part, "solid", "substrate"))
 
     def borders(mesh):
         return len(trimesh.grouping.group_rows(mesh.edges_sorted, require_count=1))
