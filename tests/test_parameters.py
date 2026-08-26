@@ -17,7 +17,7 @@ def test_the_committed_file_is_valid_and_non_degenerate():
     """The regression check on the file itself, not on a fixture."""
     params = _params()
     assert {"classify", "fall", "skins"} == set(params)
-    assert [s["name"] for s in params["skins"]] == ["Membrane", "Cladding"]
+    assert [s["name"] for s in params["skins"]] == ["Membrane", "Cladding", "Masonry"]
 
 
 def test_a_missing_knob_is_refused_by_name():

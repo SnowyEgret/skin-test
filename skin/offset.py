@@ -41,8 +41,8 @@ RIDGE = 1e-9
 RAKE = 0.05
 
 
-def _vertex_normals(mesh, vertex: int, tol: float, only=None, instead=None) -> np.ndarray:
-    """Distinct outward face-plane normals meeting at `vertex`.
+def _vertex_planes(mesh, vertex: int, tol: float, offsets=None, only=None, instead=None):
+    """`(normals, offsets)` — the distinct planes meeting at `vertex`.
 
     Normals within `tol` of an axis are snapped onto it: the union that feeds
     this carries float32 vertices, and an axis-aligned face whose normal is off
@@ -53,13 +53,21 @@ def _vertex_normals(mesh, vertex: int, tol: float, only=None, instead=None) -> n
 
     `instead` is `{face: normal}`, substituting a face's normal for another. It
     carries the far half of a knife the skin covers — see `_knife_side`.
+
+    `offsets` is how far each **face**'s plane moves, and is `None` for the
+    ordinary case where the whole body moves by one distance. It is per face
+    rather than per skin because a skin ending against a neighbour dressed by a
+    *different* system mitres onto that system's plane, not onto its own — see
+    `planar_offset`. Two incident faces are one plane here, so a group that
+    disagrees is two systems claiming one plane at one point, and it raises
+    rather than picking: no offset of this vertex satisfies both.
     """
     faces = mesh.vertex_faces[vertex]
     faces = faces[faces >= 0]
     if only is not None:
         faces = faces[only[faces]]
     if not len(faces):
-        return np.zeros((0, 3))
+        return np.zeros((0, 3)), np.zeros(0)
     normals = mesh.face_normals[faces]
     if instead:
         normals = normals.copy()
@@ -71,7 +79,34 @@ def _vertex_normals(mesh, vertex: int, tol: float, only=None, instead=None) -> n
     aligned = np.abs(normals).max(axis=1) > 1 - tol
     normals = normals.copy()
     normals[aligned] = np.sign(normals[aligned, axis[aligned]])[:, None] * np.eye(3)[axis[aligned]]
-    return np.unique(np.round(normals / PLANE_TOL), axis=0) * PLANE_TOL
+
+    key = np.round(normals / PLANE_TOL)
+    distinct, inverse = np.unique(key, axis=0, return_inverse=True)
+    distinct = distinct * PLANE_TOL
+    if offsets is None:
+        return distinct, np.zeros(0)
+
+    inverse = np.asarray(inverse).reshape(-1)
+    per_face = np.asarray(offsets)[faces]
+    out = np.empty(len(distinct))
+    for group in range(len(distinct)):
+        want = per_face[inverse == group]
+        if want.max() - want.min() > 0.0:
+            raise ValueError(
+                f"two offsets on one plane at vertex {vertex} "
+                f"{np.round(mesh.vertices[vertex], 6).tolist()}: normal "
+                f"{np.round(distinct[group], 6).tolist()} is asked for "
+                f"{sorted(set(want.tolist()))} m at once. Two cladding systems "
+                f"claim the same plane there, and no offset of this vertex "
+                f"satisfies both"
+            )
+        out[group] = want[0]
+    return distinct, out
+
+
+def _vertex_normals(mesh, vertex: int, tol: float, only=None, instead=None) -> np.ndarray:
+    """The distinct outward face-plane normals meeting at `vertex`."""
+    return _vertex_planes(mesh, vertex, tol, only=only, instead=instead)[0]
 
 
 def _opposed(normals: np.ndarray):
@@ -108,7 +143,7 @@ def _opposed(normals: np.ndarray):
     return None
 
 
-def _reconcile(mesh, vertex, tol, normals, covered):
+def _reconcile(mesh, vertex, tol, normals, moves, covered, offsets=None):
     """Drop the planes of uncovered faces at a contradictory vertex, or raise.
 
     A surface that folds back on itself has no offset at the fold: the vertex
@@ -136,14 +171,14 @@ def _reconcile(mesh, vertex, tol, normals, covered):
         reduced = normals
         why = "no face selection was given, so every plane is required"
     else:
-        reduced = _vertex_normals(mesh, vertex, tol, only=covered)
+        reduced, moves = _vertex_planes(mesh, vertex, tol, offsets, only=covered)
         incident = mesh.vertex_faces[vertex]
         skinned = int(covered[incident[incident >= 0]].sum())
         why = f"{skinned} of its faces are covered by a skin"
 
     pair = _opposed(reduced)
     if pair is None:
-        return reduced
+        return reduced, moves
 
     a, b = pair
     raise ValueError(
@@ -214,7 +249,7 @@ def _stack(rows: list, width: int) -> tuple[np.ndarray, np.ndarray]:
 
 
 def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6, covered=None,
-                   owner=None):
+                   owner=None, offsets=None):
     """Offset every face of `mesh` outward by `distance`.
 
     Solves for all vertex displacements at once. A vertex lies on all of its
@@ -237,6 +272,17 @@ def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6, cov
     of a whole solid is on no far side of anything — but it is a real difference
     in the geometry, so it is said here rather than left to be found. The tests
     that offset a bare solid pass neither.
+
+    `offsets` is a per-face distance overriding `distance`, and is `None` for
+    every ordinary offset. It exists for one condition: a skin ending against a
+    facade the **neighbouring cladding system** dresses. The invariant above
+    says a vertex on the edge of a selection sits on the miter it would have had
+    if its neighbours were skinned too — and where a neighbour genuinely is
+    skinned, at a different allowance, the honest miter is onto *that* plane
+    rather than onto a copy of this skin's own. It is not an authored knob and
+    it is not per-face freedom in a cladding mesh: every face a skin *covers*
+    still moves by one `distance`, and `metadata["offset_distance"]` still
+    reports it. See `build.facade_offsets` for the rule that fills it in.
     """
     width = 3 * len(mesh.vertices)
     hard: list = []
@@ -273,18 +319,22 @@ def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6, cov
     side = _knife_side(mesh, covered, owner)
 
     for vertex in range(len(mesh.vertices)):
-        normals = _vertex_normals(mesh, vertex, tol, instead=side)
+        normals, moves = _vertex_planes(mesh, vertex, tol, offsets, instead=side)
         if _opposed(normals) is not None:
-            normals = _reconcile(mesh, vertex, tol, normals, covered)
+            normals, moves = _reconcile(
+                mesh, vertex, tol, normals, moves, covered, offsets
+            )
             folds.append(vertex)
-        for normal in normals:
+        if offsets is None:
+            moves = np.full(len(normals), distance)
+        for normal, move in zip(normals, moves):
             row = np.zeros(width)
             row[3 * vertex : 3 * vertex + 3] = normal
             # vertical and horizontal planes are held exactly; only sloped
             # planes absorb error. Testing for axis-alignment instead would
             # demote a vertical wall running at any other plan angle to soft.
             level = abs(normal[2]) < tol or abs(normal[2]) > 1 - tol
-            (hard if level else soft).append((row, distance))
+            (hard if level else soft).append((row, move))
 
     sharp = mesh.face_adjacency_angles > tol  # ignore diagonals inside a facet
     for a, b in mesh.face_adjacency_edges[sharp]:
@@ -1766,6 +1816,7 @@ def skin_over(
     out: float = 0.0,
     base: float | None = None,
     classify=None,
+    offsets=None,
 ) -> trimesh.Trimesh:
     """Offset an assembly of parts as a single body.
 
@@ -1795,6 +1846,13 @@ def skin_over(
     off. It is applied last, after the laps, so it means "no part of this skin
     goes below `base`" rather than "the offset stops there".
 
+    `offsets(Faces) -> float[nfaces]` is the per-face distance the solve uses in
+    place of `distance`, and `None` — the ordinary case — means the whole body
+    moves by `distance`. It is a predicate rather than an array for the same
+    reason `keep` is: the union is built here, so only something evaluated over
+    these `Faces` is indexed the same way. Its one caller says why a skin ever
+    wants two: see `build.facade_offsets`.
+
     `classify(part) -> role` is handed to `Faces` for the predicates to read. It
     is the caller's, thresholds already bound, because those thresholds are
     authored parameters — see `Faces.roles`. Only predicates that ask about roles
@@ -1812,7 +1870,13 @@ def skin_over(
     receivers = _receivers(body, kept, allowed)
 
     # everything this skin puts a surface on. Only a fold consults it
-    skin = planar_offset(body, distance, covered=kept | receivers, owner=surface.owner)
+    skin = planar_offset(
+        body,
+        distance,
+        covered=kept | receivers,
+        owner=surface.owner,
+        offsets=None if offsets is None else offsets(surface),
+    )
 
     verts = list(skin.vertices)
     faces = _tiling(body, skin, kept)

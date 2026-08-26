@@ -3433,6 +3433,301 @@ whether the seam loop should defer *every* candidate that turns out to continue 
 the gate this section spent two sessions failing to write, and it should not be reopened without a
 substrate that needs it.
 
+## The masonry skin: a cornice at the top says the wall is clad on its own account (2026-08-26)
+
+Duncan, re-opening the separate east-facade cladding:
+
+> A vertical exterior wall with a cornice at the top (excludes scupper cornices) is clad with a
+> separate skin at a seeded offset. Look up the seed from the student-house parameters file
+> (allowance is the term we used). E48,31 in the current bake will no longer be angled and instead
+> drop straight down. The cornice is also full width, if that is more convenient than cornice at
+> the top.
+
+This **replaces** the plan recorded above of naming the east facade by its `-X` normal and its
+proximity to `x = 0`. That plan was always in tension with *"cladding system is authored, not
+derived"*; this one is not in tension with it at all, because the cornice does not say what the
+wall is clad **in**. It says the wall is clad **on its own account**, at its own allowance. Which
+masonry — brick on the street front, block on the firewall — stays a material on the part.
+
+### The seed, and a cross-check nobody set up
+
+`cladding.allowance.street-front: 0.15` — "brick veneer + cavity"
+(`student-house-parameters.yaml:309`); east is Street Front
+(`student-house-topology.yaml:17`). It is **copied** into `skin-parameters.yaml`, not read:
+nothing here imports anything from that repo, which was Duncan's condition.
+
+The substrate agrees from the other direction, and this was not planned. `Cornice-Unit8-E` is
+modelled 170 mm deep. The same file authors `cornice.projection.street-front: 0.020`. So
+150 + 20 = 170: the cornice was drawn to oversail a 150 mm cladding face by exactly 20 mm, and the
+built masonry face lands where the drawing already expected it. A test asserts the 20 mm against
+the substrate's own bounds rather than against the parameter.
+
+### Height, not width
+
+Both discriminators Duncan offered work, and they are not close:
+
+| | cornice top | host top | cornice run | host run |
+|---|---|---|---|---|
+| `Cornice-Unit8-E` | 13.0766 | **13.0766** | y 2.430…11.300 | **y 2.430…11.300** |
+| `Cornice-Headhouse-E` | 14.495 | 14.718 | y 4.685…5.285 | y 2.850…7.120 |
+
+Height is the test, because it carries the reason: a band flush with the wall's top makes the
+whole face below one cladding zone, where one partway up the face is the scupper's outflow drip
+and *interrupts* a zone rather than ending one. Width would work today and says nothing about why.
+
+It is one bounds comparison inside `group_cornices`, which already knows the host: the cornice
+gets `CORNICE` as before and the host now gets `TOP_CORNICE`.
+
+### What it cost, and what it did not
+
+`masonry_faces` is `exterior & tagged(TOP_CORNICE, True)`; `cladding_faces` subtracts the same
+mask; `RULES` gains `{"keep": masonry_faces, "lap": None}`. No new mechanism — the stamp is
+`group_caps`'s move and the predicate composes `wall_faces` like every other rule.
+
+Three seams had to give, all of them found by running it rather than by reading:
+
+- **`check_seeds` refused 0.15**, exactly 5x `Cladding.drop` at 0.030. The allowance is the
+  authored number of the two, so the drop moved: **0.030 → 0.033**. 0.028 and 0.035 also clear;
+  0.040 collides with `Membrane.distance`. The 3 mm is visible in two pinned figures — the live
+  bake's cladding clearance 75.0194 → 74.8903 mm and the membrane/cladding separation
+  0.0670180 → 0.0668889 — and in the scupper turn-down's band, which the test now derives from
+  `spec["drop"]` instead of writing out, because a seed moves and a figure derived from one should
+  move with it.
+- **An empty skin is not a buildable skin.** The rig and `headhouse-walls-parapets-caps-...obj`
+  carry no cornice at all, so the masonry selects nothing there and must still not break the
+  build. Measured, on the rig: with `base` set, `_trim_below` raises first and blames the datum,
+  which is fine; with `base: null` it builds a 0-face mesh and then `clean`, `clearance`,
+  `buried`, `separation` and `write_obj` **all** raise on a shape of `(0,)`. So `build()` asks
+  `covered(spec, faces)` first and prints what it skipped. Loud, and cheap — the `Faces` it needs
+  is the one `check_facades` was already handed.
+- **`check_facades` could not see this at all.** It asks the authored *tag*, and the masonry set
+  is derived out of the tagged rainscreen set, so it passes whatever the carve-out does —
+  including passing while a facade is skinned twice or not at all. `check_cladding` is the
+  skin-level half: no facade in both, none in neither. Kept as a second function rather than
+  folded in, because the two-facade fixture in the tests poses a facade tagged for a system **no
+  skin builds** — legitimate at the tag, a failure at the skins — and that fixture is now what
+  pins both readings.
+
+The one exterior thing no cladding skin claims is a **cornice's own faces**, which is the
+2026-08-19 decision rather than an omission. Measured across both bakes: exactly 8 such faces, both
+cornices, and nothing else.
+
+### The bake
+
+```
+Cladding   offset 85 mm  | lap 33/0 mm | residual 9.71e-16 | clearance  74.8903 mm | 56 border edges
+Masonry    offset 150 mm | lap 0/0 mm  | residual 1.08e-15 | clearance 150.0002 mm |  4 border edges
+           Membrane/Cladding separation  66.889 mm
+           Membrane/Masonry  separation 194.031 mm
+           Cladding/Masonry  separation 150.000 mm
+```
+
+No warnings on any of the three. The masonry is one n-gon / 2 triangles, area 5.935664 m2 against
+5.935664 m2 covered, no overlap for `clean` to remove and no T-junctions. It stands at
+`x = -0.150` and stops at `z = 12.8566` = 13.0066 − 0.150, tucked under the cornice's underside.
+
+**E31 and E48 do drop straight down**, and they do it at `x = 0`. The old profile at each end of
+the east run was (−0.255, 13.0766) → (0, 13.0766) → (−0.085, 12.9216) → (−0.085, 12.265), the
+middle leg being the 45° step in under the cornice. It is now (−0.255, 13.0766) → (0, 13.0766) →
+(0, 12.265) — the rainscreen carrying round onto the wall's end and dying on the wall's own face.
+This paragraph read `x = 0.400` for one revision, which was the first cut giving the masonry the
+wall's ends; see *"The corner, demonstrated rather than described"* below for what replaced it.
+
+Worth being exact about *why* the old edge was angled, because it is not what it looks like. The
+vertex at (0, y, 13.0766) is **interior** to the merged coplanar face in the `y` plane — both the
+parapet's top and the cornice's top are buried under the cap plate, so the only plane incident
+there is the `y` plane itself and the vertex moves in `y` alone. Its neighbour at the cornice's
+underside arris (0, y, 13.0066) is a genuine three-plane corner and moves the full offset in `x`.
+A vertical substrate edge therefore came out raked. What removed it is that the vertex is no
+longer a corner of the rainscreen's outline: with the `x = 0` plane held at offset **zero**, both
+it and the arris vertex below stay at `x = 0` and the edge between them is vertical. The masonry
+has no returns to inherit it.
+
+### What `/code-review high` caught, and all four were real
+
+- **A skipped skin left last run's OBJ in `build/`.** The stale sweep globbed `Substrate_*.obj`
+  only, which was right while every authored skin always built. `covered` makes absence routine,
+  and `build/Masonry.obj` was found sitting there after a walls-and-caps build, holding 150 mm
+  geometry offset from a different substrate. `display.reload()` reads the manifest and so was
+  never fooled, but the OBJ is the artefact a person opens. The sweep now also covers `RULES`
+  names — and only those, so nothing else in `build/` is touched.
+- **`group_cornices` gated its stamps on the regrouping.** `if owner is None: continue` skipped
+  `CORNICE` and `TOP_CORNICE` as well as the join, and `substrate.polyhedron` stamps no
+  `"object"` at all — so on every transcribed substrate and every synthetic fixture a cornice was
+  not stamped a cornice, and `cladding_faces` would have wrapped it instead of stopping below it.
+  Inert on the three substrates today (the rig poses no cornice pair at all, checked), which is
+  exactly why nothing noticed. The stamps now come first and unconditionally.
+- **`masonry_faces` never reads `FACADE`**, so its own docstring's *"which masonry stays authored
+  on the part"* named a join that did not exist. It cannot be made, and that is the honest
+  answer rather than an oversight: every part of every substrate carries one system, so
+  intersecting with the tag would **empty** this skin rather than select within it. What was
+  wrong was leaving the hole unnamed. `check_cladding` now raises where the corniced walls of one
+  substrate do not all carry the same system — the exact moment the cornice stops being enough,
+  and the condition the student-house's two corniced walls will pose.
+- **`separation_check` returned `inf`** where `separation(*built)` used to throw, so a caller
+  asserting `gap > threshold` would pass vacuously on a substrate that built one skin or none. It
+  raises now, naming the count.
+
+Two things the review raised and did not count, both already named in the code: the turn gate at
+`skin/offset.py:1400` is inert for a band measured from the skin's own edge, and `_gussets` would
+raise `KeyError` rather than refuse by name on a self-intersecting border piece. No substrate
+poses either. `audit.py` is untracked and outside `git diff` — its `live_skins()` does not apply
+the `covered` gate, which is harmless only while its `BAKE` is hard-coded to the bake that has
+cornices.
+
+### The corner, demonstrated rather than described (2026-08-26)
+
+The first cut gave the masonry the whole of `Parapet-Unit8-E`'s exterior set — its face **and**
+the ends a corner grows in — and stopped the rainscreen at `x = 0.400`, the body join. Duncan:
+
+> Almost there, but not quite. I have modified the -Y end of the masonry cladding to demonstrate
+> the expected result. The part of the masonry cladding which turns the corner is deleted. E0 has
+> been moved in the Y direction to align with the plane of the metal cladding. In the metal
+> cladding, E90 is moved -x to align with the exterior plane of the wall.
+
+Read off his edit, that is five coordinates, and **one rule reproduces all five**:
+
+> A skin mitres onto a neighbouring **facade** at that facade's own cladding offset — unless the
+> neighbour stands further out than this skin, where it stops at the substrate face instead.
+
+| | planes at the vertex | lands at | Duncan |
+|---|---|---|---|
+| masonry end | `x=0 @ 0.150`, `y=2.43 @ 0.085` | (−0.150, 2.345) | v0, v1 |
+| masonry top | + `z=13.0066 @ 0.150` | z 12.8566 | v0 |
+| masonry foot | + `z=12.35 @ 0.150` | z 12.2000 | v1 |
+| metal end | `y=2.43 @ 0.085`, `x=0 @ **0**` | (0, 2.345) | v26, v27 |
+| metal foot | + `z=12.35 @ 0.085` | z 12.2650 | v27 |
+
+The asymmetry is the whole content of it and it is physical: the brick is 65 mm proud of the
+metal, so the brick runs through the corner and its end is exposed flush with the metal's face,
+while the metal dies on the wall behind it — at `x = 0`, the back of the cavity. *"The outer
+system owns the corner"*, in arithmetic. Duncan's own reason: *"Its thickness will need to be
+drawn at some point… the ends of the bricks will be exposed on both ends and not covered by metal
+cladding."*
+
+`masonry_faces` is correspondingly narrowed to the face the cornice **overhangs** — `TOP_CORNICE`
+now holds the direction the band stands proud in, and the test is the half-space `n · outward > 0`
+so a wall at a plan angle still reads. The wall's ends go back to the rainscreen, which is what
+carries it round the corner to the wall face.
+
+### What that cost in `skin/offset.py`
+
+`planar_offset` gains `offsets`, a per-face distance, `None` for every ordinary offset.
+`_vertex_planes` is `_vertex_normals` with the plane's own move alongside its normal; the old name
+is a one-line wrapper and every existing caller is untouched.
+
+**This is not the per-face offset deleted on 2026-08-15.** That was per-face freedom *within* a
+cladding mesh, and its reason — *"a different allowance is a different skin"* — is exactly what is
+being honoured here: every face a skin **covers** still moves by one `distance`. What is new is
+that a face it merely **mitres against** may move by someone else's, which is the existing
+invariant *"vertices on the edge of a selection sit on the miter they would have had if the
+neighbours were skinned too"* finally meeting a neighbour that really is skinned.
+
+Two things the rule had to get right, both found by running it, not by reading:
+
+- **A skin that clads no facade takes no facade miter.** The first version applied to the membrane
+  too, and it raised at once: the `y = 2.43` plane wanted 0.008 and 0.0 at one vertex. Derived
+  rather than listed — the test is whether the skin covers any of the exterior set at all, and the
+  membrane covers none of it.
+- **The decision is per plane, not per face.** At the corner the `y = 2.43` plane carries the
+  parapet's end and the wall beside it (rainscreen) *and* `Cornice-Unit8-E`'s own end (clad by
+  nobody). Per face, the cornice's end kept the masonry's 0.150 while the parapet's end took
+  0.085 — one plane, two distances, one vertex, and `_vertex_planes` raised. It should raise:
+  a plane is one surface and one system finishes it. So a plane any other cladding skin dresses
+  moves at that skin's distance over the whole of it, and the raise stays for the case it is
+  really about — two systems claiming one plane.
+
+`_vertex_planes` also carries a new refusal of its own, which is that raise: *two offsets on one
+plane at vertex N*. It is the loud form of the failure this whole mechanism could otherwise
+produce silently.
+
+### The corner as built
+
+```
+Masonry    offset 150 mm | residual 1.08e-15 | clearance 150.0002 mm | 4 border edges
+           Cladding/Masonry separation 150.000 mm
+```
+
+One quad: `x = −0.150`, `y 2.345…11.385`, `z 12.200…12.8566` — Duncan's `-Y` edit exactly, and the
+`+Y` end mirrored to it. The rainscreen's ends drop straight down at `x = 0` on both elevations.
+The 150 mm between them is the brick and its cavity, left open.
+
+Two small things, both measured and both left:
+
+- The rainscreen keeps a redundant collinear vertex at `z = 12.9216` on each of those vertical
+  ends — the cornice's underside arris. `clean`'s dissolve declines it because the three points
+  are 1.5e-7 m off collinear, not the 1e-9 `STRAIGHT_TOL`. That is manifold3d's float32 in the
+  union: **an offset of zero holds a vertex where the union put it**, so nothing re-projects it,
+  and 1.9e-7 m is well inside the ~5e-7 m accuracy floor everything here already sits on. It
+  leaves no T-junction and no area.
+- `clearance` on the masonry reads 150.0002 mm, 0.2 µm over its own offset, for the same reason.
+
+### The second review round, and one finding that was not a deferral
+
+Five findings, all real; the first changed what gets built.
+
+- **`masonry_faces` selected per body, and a corniced wall built in lifts hard-failed.** The
+  cornice touches only the topmost lift, so the panel below it stayed rainscreen on the *same*
+  facade plane — and that plane was then asked for 0.085 and 0.150 at one vertex.
+  `_vertex_planes` refused, which is the right answer to the wrong input. I had recorded the
+  stack as *deferred until an export poses it* on the strength of it merely under-claiming; it
+  does not under-claim, it stops the build, and a synthetic panel + parapet + cornice poses it in
+  fifteen lines. **So it is built**: the face the cornice overhangs is grown along the surface,
+  contiguously, the same move `_opening` makes for a cheek. Inert on all three substrates — the
+  live bake's wall is one lift and its cap plate is coplanar with the cornice rather than with the
+  wall, which is why it escaped.
+- **`_skin_from`'s `distance` override had gone half-dead.** With `offsets` on every spec,
+  `planar_offset` reads that in preference for every plane row, so an override moved the laps and
+  `metadata["offset_distance"]` while leaving the surface where the spec put it. No caller passed
+  it — every what-if here is already `dict(spec, ...)` — so the parameter is gone rather than
+  mended.
+- **`facade_offsets`' docstring overclaimed.** It applies the neighbour's offset per plane
+  *intersected with what this skin does not cover*, and a plane carrying both still splits and
+  still raises. That is not papered over: a face a skin covers moves by that skin's distance by
+  definition, so the readings are irreconcilable and two systems finishing one surface wants a
+  decision. Said plainly now, with the growth above as the reason the case does not arise here.
+- **`cladding_laps` said widening it was "the whole of the change". It is not, any more.**
+  `_lap` reads a receiving face's offset plane as `plane + distance`, the skin's own scalar, which
+  was true of every receiver until `facade_offsets` began moving a neighbour's facade by somebody
+  else's allowance or by zero. Widen the predicate to every vertical face and the cladding may lap
+  onto a facade the masonry dresses, where that assumption is 85 mm out — measured by doing it,
+  `clearance` 74.89 → 8.62 mm. Unreachable today, because `interior` faces are never in the
+  exterior set `facade_offsets` moves. Recorded at `cladding_laps`, where the conversation will
+  start, rather than fixed on a substrate that cannot test it.
+- **A wall corniced on both faces kept whichever cornice came last.** A plain assignment in a
+  loop, silently leaving the other elevation rainscreen. It raises now: two masonry elevations on
+  one wall is two skins, not one direction.
+
+One thing the review did not catch and running it did: the new fixture helper was called `_lift`,
+which `tests/test_offset.py` already uses for something else, and three unrelated tests went red.
+
+### What is deliberately left
+
+**The masonry stays a surface.** Duncan, 2026-08-26: *"Leave the masonry cladding as a surface for
+now. We will discuss the best strategy to thicken it once we have the planar geometry correct."*
+So the 150 mm at each corner is an open joint by design, not a defect to close, and the question
+of how the brick is extruded back over its cavity is not answered here.
+
+~~**The stack is untested.**~~ **Built 2026-08-26**, on review — see above. It was recorded here
+as deferred on the reading that a host-part stamp merely under-clads a wall in lifts. It does not:
+the panel below shares the parapet's facade plane, and one plane cannot take two offsets, so the
+build stops. `_grow_coplanar` along the contiguous plane is what it always wanted, and the
+synthetic fixture that poses it is fifteen lines. The bound left standing is contiguity itself:
+two systems contiguous **and** coplanar would be over-claimed, and `check_cladding`'s
+two-materials raise is what would catch it.
+
+**The second masonry is not built.** The student-house has two corniced walls: the brick street
+front at `0.150` and the mitoyen firewall at `0.140 + 0.020` cavity. Two allowances are two skins,
+and which a wall takes is the `FACADE` material tag — the mechanism is already there and nothing
+in the bake carries the second stamp. This narrows the old *"the brick skin is not built"* open
+item rather than closing it: what is still missing is a substrate that poses **two** systems on
+**two** corniced walls at once.
+
+**The deck export has not been run.** Duncan, 2026-08-26: it should run on one. Nothing here
+assumes it will — the deck-9 opening carries a **mouth** cornice (`cornice.projection.court-facing`),
+which is the scupper kind and should be refused by the flushness test, but that is a prediction
+until an export is read.
+
 ## Open items
 
 - ~~**The scupper mouth and the cornice ends are bare.**~~ Closed 2026-08-21 by the extended
@@ -3479,18 +3774,22 @@ substrate that needs it.
   from the cap plate's reveal, and sideways off the parapet's inner face. The 2026-08-16 note
   predicting the turn-up would make the two `x = 8.508` edges vertical is superseded: the fold
   vertices there are all displaced 8–14 mm, which is a corner miter and not a defect.
-- **The brick skin is not built.** Everything it needs exists — `BRICK`,
-  `facades_of(faces, BRICK, fall)`, `CLADDING_SYSTEMS` — but no part in the sample is
-  stamped brick, so adding the `skins:` entry and its rule set would emit an empty mesh
-  and test nothing. It needs a
-  substrate that poses the condition: two walls whose tops fall +X, one at the front
-  plane and one set well back, only the front one brick. The two-facade fixture in
-  `tests/test_offset.py` is that condition in miniature.
-- **Which skin caps a brick wall?** `cladding_faces` takes *every* wall top regardless of
-  facade system, so a brick wall would get a rainscreen coping. Plausible — brick with a
-  metal cap is normal — but it is an assumption, not a rule Duncan gave. The 2026-08-16
-  "both cap it" decision settles who caps a wall and not which *system* does, so this
-  survives it unchanged; it only becomes testable once the brick skin exists.
+- ~~**The brick skin is not built.**~~ **Narrowed 2026-08-26** by the masonry skin — see that
+  section. A separate cladding skin at its own allowance now builds on the live bake, keyed on a
+  cornice that finishes its wall rather than on the `BRICK` tag. What is left of the item is the
+  **second** system: the student-house has two corniced walls, brick at 0.150 and the mitoyen
+  firewall at 0.140 + 0.020 cavity, and two allowances are two skins. The mechanism for choosing
+  between them is the `FACADE` material tag, which already exists and which nothing in any bake
+  stamps. It still needs a substrate that poses two systems on two corniced walls at once; the
+  two-facade fixture in `tests/test_offset.py` is half of that condition in miniature, and is now
+  also what pins `check_cladding`'s "claimed by neither" reading.
+- **Which skin caps a masonry wall?** `cladding_faces` takes *every* wall top regardless of
+  facade system, so a masonry wall gets a rainscreen coping. Plausible — brick with a metal cap
+  is normal, and the live bake now builds exactly that over `Parapet-Unit8-E` — but it is an
+  assumption, not a rule Duncan gave. The 2026-08-16 "both cap it" decision settles who caps a
+  wall and not which *system* does, so this survives it unchanged. It became **visible** on
+  2026-08-26 where it was previously hypothetical: the coping over the masonry facade is
+  rainscreen, at 85 mm, over a facade at 150 mm.
 - ~~**A flat-topped wall panel cannot name its own facade.**~~ Built 2026-08-19 as `rise` +
   `_next_lift`; see above. What is left of it: the walk needs the lift above to be **in
   contact**, so two lifts of one wall with a floor slab between them do not resolve. It raises

@@ -335,7 +335,7 @@ def test_the_baked_headhouse_reads_and_skins():
     does, and a test that has to be re-blessed on every export stops being read.
     """
     from build import (
-        FACADE, RAINSCREEN, classifier, group_caps, rise, skins, _skin_from,
+        FACADE, RAINSCREEN, classifier, covered, group_caps, rise, skins, _skin_from,
     )
     from skin import parameters, substrate
     from skin.measure import buried, clearance, intersects, separation
@@ -370,6 +370,13 @@ def test_the_baked_headhouse_reads_and_skins():
 
     built = {}
     for spec in skins(params):
+        # this bake carries no cornice, so it poses no masonry facade and that
+        # skin is skipped here exactly as `build()` skips it -- see
+        # `build.covered`. Asserted rather than silently filtered: a bake that
+        # started posing one would be worth noticing
+        if not covered(spec, faces):
+            assert spec["name"] == "Masonry"
+            continue
         skin = _skin_from(spec, parts)
         built[spec["name"]] = skin
         assert skin.metadata["offset_residual"] < 1e-14
@@ -402,13 +409,19 @@ def test_the_baked_headhouse_reads_and_skins():
     # landed, at 79.9703 and 71.973. They moved once more on 2026-08-26, when
     # the skirt's turn-down ran down to the sill's offset at Duncan's *"E84, 86
     # should be 5 mm lower"*: the sample taking the low reading is now the
-    # turn-down's own bottom-outer corner at `(8.585, 4.755, 14.580)`, which
-    # stands 75.0194 mm over the headhouse roof taper where the lining's corner
-    # 115 mm inboard stands 79.9703. Both figures are the same geometry read at
-    # two points, and neither is a defect -- this is the documented `clearance`
-    # exception, which is why it is printed and asserts nothing in `build.py`.
-    assert clearance(parts, cladding) == pytest.approx(0.0750194, abs=1e-6)
-    assert separation(membrane, cladding) == pytest.approx(0.0670180, abs=1e-6)
+    # turn-down's own bottom-outer corner, which stands over the headhouse roof
+    # taper where the lining's corner 115 mm inboard stands 79.9703. Both
+    # figures are the same geometry read at two points, and neither is a defect
+    # -- this is the documented `clearance` exception, which is why it is
+    # printed and asserts nothing in `build.py`. The corner is at
+    # `(8.585, 4.752, 14.580)` and reads 74.8902 mm; it was at 4.755 reading
+    # 75.0194 until `Cladding.drop` went 0.030 -> 0.033 on 2026-08-26, when the
+    # masonry allowance arrived at 0.150 and `check_seeds` refused an exact 5x.
+    # The 3 mm is the seed moving, not the geometry changing shape
+    assert clearance(parts, cladding) == pytest.approx(0.0748902, abs=1e-6)
+    # 0.0670180 until the same 3 mm seed change; the closest approach is at the
+    # scupper, where the cladding's turn-down runs past the membrane's
+    assert separation(membrane, cladding) == pytest.approx(0.0668889, abs=1e-6)
 
     # both skins cap the coping, as they did when the plates lived inside their
     # parapets. The cladding wraps over the plate; the membrane goes under it
@@ -635,6 +648,179 @@ def test_the_cheek_lining_reaches_the_coping_on_the_live_bake():
         assert corners[:, 1].max() == pytest.approx(14.84009, abs=1e-6)
 
 
+def test_a_wall_a_cornice_finishes_is_clad_in_masonry_at_its_own_allowance():
+    """Duncan, 2026-08-26: *"A vertical exterior wall with a cornice at the top
+    (excludes scupper cornices) is clad with a separate skin at a seeded
+    offset."*
+
+    The live bake carries both kinds of cornice, which is what makes it the
+    substrate that can pose this: `Cornice-Unit8-E` finishes `Parapet-Unit8-E`
+    and `Cornice-Headhouse-E` is the scupper's outflow drip, partway up
+    `Parapet-Headhouse-E`'s face. Only the first makes a masonry facade.
+
+    The offset is checked against the substrate rather than against the
+    parameter file alone, and the substrate agrees: the cornice was modelled
+    170 mm deep, and the student-house authors a 150 mm street-front allowance
+    with a 20 mm cornice projection over it. So the band standing exactly 20 mm
+    proud of the masonry face is the drawing and the seed agreeing about the
+    same detail from two directions.
+    """
+    from build import (
+        CORNICE, FACADE, RAINSCREEN, TOP_CORNICE, classifier, cladding_faces,
+        covered, group_caps, group_cornices, masonry_faces, skins, _skin_from,
+    )
+    from skin import parameters, substrate
+    from skin.measure import separation
+    from skin.offset import Faces, _owner
+
+    parts = substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN})
+    params = parameters.load_validated()
+    group_cornices(parts)
+    group_caps(parts, classifier(params))
+    named = {part.metadata["name"]: part for part in parts}
+
+    # both bodies are cornices; only one finishes the wall it hangs on
+    assert named["Cornice-Unit8-E"].metadata[CORNICE] is True
+    assert named["Cornice-Headhouse-E"].metadata[CORNICE] is True
+    stamped = {n for n, part in named.items() if part.metadata.get(TOP_CORNICE)}
+    assert stamped == {"Parapet-Unit8-E"}, (
+        "the scupper's drip sits 223 mm below its parapet's top and must not "
+        "make that parapet a masonry facade"
+    )
+    # ...and the stamp is the direction it stands proud in
+    assert named["Parapet-Unit8-E"].metadata[TOP_CORNICE] == (-1.0, 0.0, 0.0)
+
+    body = substrate.union(parts)
+    faces = Faces(body, parts, _owner(body, parts), classifier(params))
+    masonry = masonry_faces(faces, params["fall"])
+
+    # the masonry is the face the cornice overhangs and nothing else -- not the
+    # wall's ends, which are the north and south elevations and stay rainscreen.
+    # That is Duncan's demonstration, 2026-08-26: the piece that turned the
+    # corner is deleted
+    assert masonry.any()
+    assert {parts[o].metadata["name"] for o in faces.owner[masonry]} == {
+        "Parapet-Unit8-E"
+    }
+    assert (faces.normals[masonry][:, 0] < -0.999).all(), "masonry turned a corner"
+    assert not (masonry & cladding_faces(faces, params["fall"])).any()
+
+    spec = next(s for s in skins(params) if s["name"] == "Masonry")
+    assert covered(spec, faces)
+    skin = _skin_from(spec, parts)
+    assert skin.metadata["offset_residual"] < 1e-14
+
+    # one panel, the whole east facade: at the authored allowance off the wall's
+    # face at x = 0, stopping under the cornice's underside rather than wrapping
+    # it, and mitred at each end onto the **rainscreen's** plane rather than its
+    # own -- 2.430 - 0.085 and 11.300 + 0.085. See `build.facade_offsets`
+    assert np.abs(skin.vertices[:, 0] + spec["distance"]).max() < 1e-6
+    corners = {
+        (round(v[1], 4), round(v[2], 4)) for v in skin.vertices
+    }
+    assert corners == {
+        (2.345, 12.2), (2.345, 12.8566), (11.385, 12.2), (11.385, 12.8566)
+    }
+    z = skin.triangles[:, :, 2]
+    assert z.max() == pytest.approx(13.0066 - spec["distance"], abs=1e-6)
+    # ...and the cornice, modelled 170 mm deep, oversails it by the 20 mm the
+    # student-house authors as `cornice.projection.street-front`
+    cornice = named["Cornice-Unit8-E"].bounds
+    assert -0.15 - cornice[0][0] == pytest.approx(0.020, abs=1e-6)
+
+    # the rainscreen carries on round the corner onto the wall's ends and dies
+    # on the wall's own face -- the back of the masonry cavity -- rather than
+    # mitring onto a plane 85 mm out that nothing is clad to. Duncan, 2026-08-26:
+    # *"E90 is moved -x to align with the exterior plane of the wall."* So its
+    # end drops straight down at x = 0, and no panel stands at x = -0.085
+    rainscreen = next(s for s in skins(params) if s["name"] == "Cladding")
+    cladding = _skin_from(rainscreen, parts)
+    assert not (np.abs(cladding.vertices[:, 0] + 0.085) < 1e-6).any()
+    for end in (2.345, 11.385):
+        here = cladding.vertices[np.abs(cladding.vertices[:, 1] - end) < 1e-6]
+        # `TOL` rather than an exact zero: an offset of zero holds a vertex
+        # where the union put it, and manifold3d's float32 leaves that up to
+        # ~5e-7 m off the true plane -- the accuracy floor everything here sits
+        # on, not a miss
+        drop = here[np.abs(here[:, 0]) < 1e-6][:, 2]
+        assert drop.min() == pytest.approx(12.265, abs=1e-6)
+        assert drop.max() == pytest.approx(13.0766, abs=1e-6)
+
+    # ...which leaves the two exactly the masonry's allowance apart at the
+    # corner: the rainscreen at the wall face and the brick 150 mm off it. That
+    # gap is the brick and its cavity, and it is left open until the masonry is
+    # thickened -- Duncan, 2026-08-26, *"the ends of the bricks will be exposed
+    # on both ends and not covered by metal cladding"*
+    assert separation(cladding, skin) == pytest.approx(spec["distance"], abs=1e-6)
+
+
+def test_a_skin_mitres_onto_the_plane_of_the_system_that_dresses_it():
+    """The corner rule, read off the offsets themselves rather than the mesh.
+
+    Duncan, 2026-08-26, having moved two edges in Blender to show the answer:
+    the masonry's end aligns with *"the plane of the metal cladding"* and the
+    metal's end with *"the exterior plane of the wall"*. Both are one rule — a
+    skin mitres onto a neighbouring facade at that facade's own cladding offset,
+    unless the neighbour stands further out, where it stops at the substrate.
+    """
+    from build import (
+        FACADE, RAINSCREEN, TOP_CORNICE, classifier, group_caps, group_cornices,
+        masonry_faces, skins, wall_faces, _owner,
+    )
+    from skin import parameters, substrate
+    from skin.offset import Faces
+
+    parts = substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN})
+    params = parameters.load_validated()
+    group_cornices(parts)
+    group_caps(parts, classifier(params))
+    body = substrate.union(parts)
+    faces = Faces(body, parts, _owner(body, parts), classifier(params))
+    exterior, _ = wall_faces(faces, params["fall"])
+    masonry = masonry_faces(faces, params["fall"])
+    spec = {s["name"]: s for s in skins(params)}
+
+    # the membrane clads no facade, so it has no corner with a cladding system
+    # and every plane it touches moves by its own 8 mm
+    membrane = spec["Membrane"]["offsets"](faces)
+    assert not (exterior & spec["Membrane"]["keep"](faces)).any()
+    assert (membrane == spec["Membrane"]["distance"]).all()
+
+    # the rainscreen meets masonry standing 65 mm proud of it, so it does not
+    # mitre onto that face at all: it dies on the wall behind it, offset zero
+    cladding = spec["Cladding"]["offsets"](faces)
+    assert (cladding[masonry] == 0.0).all()
+    assert (cladding[~masonry] == spec["Cladding"]["distance"]).all()
+
+    # ...and the masonry, being the outer system, runs through the corner and
+    # lands in the rainscreen's own plane
+    stone = spec["Masonry"]["offsets"](faces)
+    assert (stone[masonry] == spec["Masonry"]["distance"]).all()
+    neighbour = exterior & spec["Cladding"]["keep"](faces)
+    assert neighbour.any()
+    assert (stone[neighbour] == spec["Cladding"]["distance"]).all()
+
+    def owned_by(name):
+        return np.array(
+            [p.metadata.get("name") == name for p in parts]
+        )[faces.owner]
+
+    # the decision is per **plane**, not per face: `Cornice-Unit8-E`'s own end
+    # face is clad by nobody, yet shares the `y = 2.43` plane with the parapet
+    # end beside it, and one plane cannot move two distances at one vertex --
+    # `_vertex_planes` raises on exactly that, and did before this was per plane
+    finishing = exterior & owned_by("Cornice-Unit8-E")
+    assert finishing.any()
+    assert (stone[finishing] == spec["Cladding"]["distance"]).all()
+
+    # ...and a face on no cladding plane at all keeps this skin's own distance,
+    # because there is nothing there to mitre onto. The scupper's cornice is the
+    # case: clad by nobody and coplanar with nothing anyone clads
+    lonely = exterior & owned_by("Cornice-Headhouse-E")
+    assert lonely.any()
+    assert (stone[lonely] == spec["Masonry"]["distance"]).all()
+
+
 def test_the_skirt_turns_down_to_the_sill_on_the_live_bake():
     """Duncan, 2026-08-22: *"The skirt should turn downwards on each side of the
     scupper."* And, reading the built bake on 2026-08-26: *"E84, 86 should be
@@ -669,8 +855,16 @@ def test_the_skirt_turns_down_to_the_sill_on_the_live_bake():
     assert on.any(), "no skirt at all on the parapet's inner face"
     y, z = skin.triangles[on][:, :, 1], skin.triangles[on][:, :, 2]
 
-    # 4.755 = the cheek at 4.785 less the 30 mm drip; 4.870 = its own lining
-    for lo, hi in ((4.755, 4.870), (5.100, 5.215)):
+    # the cheek at 4.785 less the drip, out to the cheek's own lining at 4.870
+    # -- and mirrored on the far side. Read off the authored `drop` rather than
+    # written out, because these are seeds and a seed moves: `Cladding.drop` went
+    # 0.030 -> 0.033 on 2026-08-26 when the masonry allowance arrived at 0.150
+    # and `check_seeds` refused an exact 5x
+    drop, out = spec["drop"], spec["distance"]
+    for lo, hi in (
+        (4.785 - drop, 4.785 + out),   # the near cheek, drip to lining
+        (5.185 - out, 5.185 + drop),   # ...and the far one, mirrored
+    ):
         band = (y.min(axis=1) > lo - 1e-6) & (y.max(axis=1) < hi + 1e-6)
         assert band.any(), f"no turn-down between y {lo} and {hi}"
         assert z[band].min() == pytest.approx(14.580, abs=1e-6), (

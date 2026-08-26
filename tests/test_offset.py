@@ -374,6 +374,175 @@ def test_a_facade_s_cladding_system_comes_from_the_part_not_its_position():
     check_facades(faces, FALL, systems=(BRICK, RAINSCREEN))
 
 
+def test_a_cornice_is_stamped_whether_or_not_there_is_an_element_to_join():
+    """Being a cornice, and finishing a wall, are facts about the geometry.
+
+    Whether there is an element to join is a fact about how the substrate was
+    authored: `substrate.polyhedron` stamps no `"object"`, so gating the stamps
+    on one switched both off for every transcribed substrate and every fixture
+    here — `cladding_faces` would have wrapped the cornice instead of stopping
+    below it. Found on review, 2026-08-26.
+    """
+    from build import CORNICE, TOP_CORNICE, group_cornices
+
+    def band(x0, x1, z0, z1):
+        return substrate.polyhedron(
+            [(x0, 0, z0), (x1, 0, z0), (x1, 4, z0), (x0, 4, z0),
+             (x0, 0, z1), (x1, 0, z1), (x1, 4, z1), (x0, 4, z1)],
+            [[0, 3, 2, 1], [4, 5, 6, 7], [0, 4, 7, 3],
+             [1, 2, 6, 5], [0, 1, 5, 4], [3, 7, 6, 2]],
+        )
+
+    wall, cornice = band(0.0, 0.4, 0.0, 3.0), band(-0.17, 0.0, 2.93, 3.0)
+    group_cornices([wall, cornice])
+    assert cornice.metadata[CORNICE] is True
+    # the stamp is the direction the band stands proud in, not merely the fact
+    # of one: the masonry is the face it overhangs and not the wall's ends
+    assert wall.metadata[TOP_CORNICE] == (-1.0, 0.0, 0.0)
+    assert "object" not in cornice.metadata  # ...and nothing was regrouped
+
+    # a band that does not reach the top is the scupper kind: a cornice, but not
+    # one that finishes the wall
+    wall, low = band(0.0, 0.4, 0.0, 3.0), band(-0.17, 0.0, 1.5, 1.57)
+    group_cornices([wall, low])
+    assert low.metadata[CORNICE] is True
+    assert TOP_CORNICE not in wall.metadata
+
+
+def _stacked_box(x0, x1, y0, y1, z0, z1, ztop=None):
+    """A box, optionally sloped on top so `uphill` can read a fall off it."""
+    high = z1 if ztop is None else ztop
+    return substrate.polyhedron(
+        [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0),
+         (x0, y0, z1), (x1, y0, high), (x1, y1, high), (x0, y1, z1)],
+        [[0, 3, 2, 1], [4, 5, 6, 7], [0, 4, 7, 3],
+         [1, 2, 6, 5], [0, 1, 5, 4], [3, 7, 6, 2]],
+    )
+
+
+def test_the_masonry_runs_the_whole_face_below_a_cornice_not_one_lift():
+    """A wall is built in lifts and a cornice only touches the topmost one.
+
+    Claiming the host body alone leaves the panel below it rainscreen on the
+    *same facade plane*, and that is not an under-claim, it breaks the build:
+    one plane is then asked to move 0.085 and 0.150 at the same vertex and
+    `_vertex_planes` refuses. So the face the cornice overhangs is grown along
+    the surface, contiguously, the way `_opening` grows a cheek. Found on
+    review, 2026-08-26 — the live bake cannot pose it, because its wall is one
+    lift and its cap plate is coplanar with the cornice rather than the wall.
+    """
+    from build import (
+        FACADE, RAINSCREEN, TOP_CORNICE, classifier, cladding_faces, group_caps,
+        group_cornices, masonry_faces, skins, _owner, _skin_from,
+    )
+    from skin import parameters, substrate
+    from skin.offset import Faces
+
+    params = parameters.load_validated()
+    panel = _stacked_box(0.0, 0.4, 0.0, 6.0, 0.0, 3.0)
+    parapet = _stacked_box(0.0, 0.4, 0.0, 6.0, 3.0, 4.0, ztop=3.97)
+    cornice = _stacked_box(-0.17, 0.0, 0.0, 6.0, 3.9, 4.0)
+    parts = [panel, parapet, cornice]
+    for part, name in zip(parts, ("panel", "parapet", "cornice")):
+        part.metadata[FACADE] = RAINSCREEN
+        part.metadata["name"] = name
+
+    group_cornices(parts)
+    group_caps(parts, classifier(params))
+    # the cornice touches the parapet and nothing else
+    assert parapet.metadata[TOP_CORNICE] == (-1.0, 0.0, 0.0)
+    assert TOP_CORNICE not in panel.metadata
+
+    body = substrate.union(parts)
+    faces = Faces(body, parts, _owner(body, parts), classifier(params))
+    masonry = masonry_faces(faces, params["fall"])
+    owners = {parts[o].metadata["name"] for o in faces.owner[masonry]}
+    assert owners == {"panel", "parapet"}, "the masonry stopped at the lift"
+    assert not (masonry & cladding_faces(faces, params["fall"])).any()
+
+    # ...and it builds, which is the point: one plane, one offset
+    for spec in skins(params):
+        skin = _skin_from(spec, parts)
+        assert skin.metadata["offset_residual"] < 1e-9
+    masonry_skin = _skin_from(
+        next(s for s in skins(params) if s["name"] == "Masonry"), parts
+    )
+    # the whole facade, ground to cornice underside, at the masonry allowance
+    assert np.abs(masonry_skin.vertices[:, 0] + 0.15).max() < 1e-6
+    assert masonry_skin.vertices[:, 2].min() == pytest.approx(0.0, abs=1e-6)
+    assert masonry_skin.vertices[:, 2].max() == pytest.approx(3.9 - 0.15, abs=1e-6)
+
+
+def test_a_wall_corniced_on_two_faces_is_refused():
+    """Two masonry elevations on one wall, and one stamp cannot name both.
+
+    Assigning in a loop kept whichever cornice came last and left the other
+    face rainscreen with no warning — found on review, 2026-08-26.
+    """
+    from build import TOP_CORNICE, group_cornices
+
+    wall = _stacked_box(0.0, 0.4, 0.0, 6.0, 0.0, 3.0)
+    front = _stacked_box(-0.17, 0.0, 0.0, 6.0, 2.93, 3.0)
+    back = _stacked_box(0.4, 0.57, 0.0, 6.0, 2.93, 3.0)
+    with pytest.raises(ValueError, match="two masonry elevations on one wall"):
+        group_cornices([wall, front, back])
+
+    group_cornices([wall, front])  # ...one of them alone is fine
+    assert wall.metadata[TOP_CORNICE] == (-1.0, 0.0, 0.0)
+
+
+def test_two_masonry_systems_on_one_substrate_are_refused():
+    """One masonry skin is one allowance. The student-house has two corniced
+    walls — brick and the firewall's block — and `masonry_faces` selects on the
+    cornice alone, so both would land in one skin at one offset while
+    `check_facades` kept passing, neither tag being wrong. Name the condition
+    that makes the cornice insufficient rather than meet it as geometry."""
+    from build import BRICK, FACADE, RAINSCREEN, TOP_CORNICE, check_cladding
+
+    one = _facing_wall(0.0, 0.4, 0.0, 6.0, 3.0, 2.99)
+    two = _facing_wall(3.0, 3.4, 1.0, 4.0, 4.0, 3.99)
+    for part, system in ((one, BRICK), (two, RAINSCREEN)):
+        part.metadata[FACADE] = system
+        part.metadata[TOP_CORNICE] = (-1.0, 0.0, 0.0)
+
+    parts = [one, two]
+    with pytest.raises(ValueError, match="one masonry skin is one allowance"):
+        check_cladding(_faces(parts), FALL)
+
+    two.metadata[FACADE] = BRICK  # ...one system, and it builds
+    check_cladding(_faces(parts), FALL)
+
+
+def test_a_facade_no_cladding_skin_covers_is_refused():
+    """`check_facades` asks the authored tag; `check_cladding` asks the skins.
+
+    They are different claims and the fixture above is why they had to split: a
+    facade tagged for a declared system is legitimately claimed at the tag while
+    being covered by no skin at all, which is the brick-skin open item in
+    miniature. The masonry set is *derived* rather than tagged, so nothing at
+    the tag level can notice a carve-out that drops a facade or claims one
+    twice.
+
+    Stamping the wall the way `group_cornices` stamps one a cornice finishes is
+    what puts it back in a skin — the same fixture, read by the other check.
+    """
+    from build import BRICK, FACADE, TOP_CORNICE, check_cladding, check_facades
+
+    front = _facing_wall(0.0, 0.4, 0.0, 6.0, 3.0, 2.99)
+    front.metadata[FACADE] = BRICK
+    parts = [front]
+    faces = _faces(parts)
+
+    # the tag is happy: brick is a declared system and this wall carries it
+    check_facades(faces, FALL, systems=(BRICK,))
+    # the skins are not: no rule set in RULES claims a brick-tagged facade
+    with pytest.raises(ValueError, match="claimed by neither cladding skin"):
+        check_cladding(faces, FALL)
+
+    front.metadata[TOP_CORNICE] = (-1.0, 0.0, 0.0)
+    check_cladding(_faces(parts), FALL)  # ...now the masonry skin covers it
+
+
 def test_an_unclaimed_facade_is_refused():
     """A facade no cladding system claims is a silently bare wall. Fail instead."""
     from build import BRICK, FACADE, RAINSCREEN, check_facades
@@ -402,9 +571,20 @@ def test_build_does_not_emit_the_substrate_unless_asked():
 
     manifest = build(parts)
     roles = {e["name"]: e["role"] for e in manifest}
-    assert set(roles) == {s["name"] for s in skins()}
+    # every skin the rig poses, which is not every skin authored: the masonry
+    # needs a wall a cornice finishes and the rig has no cornice. `build` skips
+    # it and says so -- see `build.covered`
+    assert set(roles) == {"Membrane", "Cladding"}
+    assert {s["name"] for s in skins()} - set(roles) == {"Masonry"}
     assert set(roles.values()) == {"skin"}
     assert not list(build_module.BUILD_DIR.glob("Substrate_*.obj"))
+
+    # a skin this run skipped must not leave last run's file in build/, holding
+    # geometry offset from a different substrate. Found on review, 2026-08-26
+    stale = build_module.BUILD_DIR / "Masonry.obj"
+    stale.write_text("# left by an earlier bake that posed a cornice\n")
+    build(parts)
+    assert not stale.exists()
 
     opted_in = build(parts, emit_substrate=True)
     kinds = {e["role"] for e in opted_in}
@@ -537,7 +717,7 @@ def test_cladding_and_membrane_cover_complementary_walls_and_never_meet():
     parts = current_substrate()
     faces = _faces(parts)
 
-    membrane, cladding = skins()
+    membrane, cladding = skins()[:2]
     # the membrane climbs the interior walls and laps down the exterior; the
     # cladding does the reverse. The membrane may lap onto any vertical face,
     # so the discriminating direction is the cladding's
@@ -545,6 +725,7 @@ def test_cladding_and_membrane_cover_complementary_walls_and_never_meet():
     assert not (cladding["keep"](faces) & cladding["lap"](faces)).any()
 
     gap, skins = separation_check(parts)
+    assert len(skins) == 2, "the rig poses no masonry: it has no cornice"
     assert gap > 0.05, f"skins only {gap * 1000:.1f} mm apart"
     for skin in skins:
         assert not skin.is_watertight
@@ -570,7 +751,7 @@ def test_both_skins_cover_the_coping_and_stack_rather_than_collide():
 
     parts = current_substrate()
     faces = _faces(parts)
-    membrane, cladding = skins()
+    membrane, cladding = skins()[:2]
 
     shared = membrane["keep"](faces) & cladding["keep"](faces)
     assert shared.any(), "the coping should be claimed by both skins"

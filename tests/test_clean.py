@@ -212,14 +212,25 @@ def test_a_mesh_with_nothing_to_dissolve_keeps_its_area_and_its_border():
 
 
 def _rig_skins():
-    from build import _skin_from, classifier, current_substrate, group_caps, group_cornices, skins
-    from skin import parameters
+    """Every skin the rig actually poses. The masonry needs a wall a cornice
+    finishes and the rig has no cornice at all, so it is skipped here the way
+    `build()` skips it — see `build.covered`."""
+    from build import (
+        _owner, _skin_from, classifier, covered, current_substrate, group_caps,
+        group_cornices, skins,
+    )
+    from skin import parameters, substrate
+    from skin.offset import Faces
 
     params = parameters.load_validated()
     parts = current_substrate()
     group_cornices(parts)
     group_caps(parts, classifier(params))
-    return parts, {s["name"]: _skin_from(s, parts) for s in skins(params)}
+    body = substrate.union(parts)
+    faces = Faces(body, parts, _owner(body, parts), classifier(params))
+    return parts, {
+        s["name"]: _skin_from(s, parts) for s in skins(params) if covered(s, faces)
+    }
 
 
 def test_the_rig_membrane_overlaps_itself_and_the_pass_dissolves_it():

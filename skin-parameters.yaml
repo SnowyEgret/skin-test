@@ -31,7 +31,7 @@ classify:
 # along the fall of that wall's own top, and as an end when it lies across it.
 fall: 0.707
 
-# The five skin distances. NON-DEGENERATE SEEDS (student-house CLAUDE.md, hard
+# The skin distances. NON-DEGENERATE SEEDS (student-house CLAUDE.md, hard
 # rule, enforced by `parameters.check_seeds`): no two are equal and none is an
 # integer multiple of another. `Membrane.drop` and `Cladding.distance` were both
 # 0.100 until 2026-08-14, which meant a bug swapping a skirt depth for an offset
@@ -64,9 +64,30 @@ skins:
     display: solid
   - name: Cladding
     distance: 0.085
-    drop: 0.03      # down the interior walls, part 4's included
+    drop: 0.033      # down the interior walls, part 4's included. Was 0.030
+                     # until 2026-08-26, when `Masonry.distance` arrived at
+                     # 0.150 — exactly 5x it, which `check_seeds` refuses. The
+                     # masonry allowance is the authored one of the two, so this
+                     # is the number that moved
     out: 0.0         # the cladding never laps upward or sideways
     base: 0.0        # stops at ground level rather than at its own miter, which
                      # would hang `distance` below the substrate's underside
     close: 0.0       # the cladding tears nowhere; nothing to gusset
+    display: wire
+  - name: Masonry
+    distance: 0.15   # the finished face of a masonry facade, off the structural
+                     # outer face. Copied — not read — from the student-house's
+                     # `cladding.allowance.street-front` (0.15, brick veneer +
+                     # cavity); nothing here imports anything from that repo.
+                     # It checks out against the substrate independently:
+                     # `Cornice-Unit8-E` projects 170 mm, and the same file
+                     # authors `cornice.projection.street-front` at 0.020, so
+                     # the cornice oversails this face by exactly the 20 mm it
+                     # is drawn to. A second masonry — block on the firewall,
+                     # 0.140 + 0.020 cavity — is a different allowance and so a
+                     # different skin; no substrate here poses it yet
+    drop: 0.0        # unread: the rule set's `lap` is None. Masonry is
+    out: 0.0         # abstracted as a surface until its thickness is drawn
+    base: 0.0        # stops at ground level, as the cladding does
+    close: 0.0       # nothing to gusset
     display: wire
