@@ -327,10 +327,60 @@ knife is a property of the face and not of how the lap arrived at it. Filtering 
 put two 205 mm panels across the mouth of the scupper, on the roof taper's end face.
 
 **A lap does not stop where the face it laps onto stops.** At the free end of a run it asks what
-the substrate presents there, and there are three answers: *the same plane carries on* (an in-line
+the substrate presents there, and there are four answers: *the same plane carries on* (an in-line
 butt — the lap runs on), *another face meets it at an arris* (the lap folds round the corner, its
-direction the departing face's normal signed by whether that arris is convex or concave), or
-*nothing* (it ends — Duncan's stop condition).
+direction the departing face's normal signed by whether that arris is convex or concave), *the
+boundary of the face it is lapping onto turns* (the band turns with it and runs on along that
+boundary, staying on the face it already laps — the skirt turning down each side of the scupper),
+or *nothing* (it ends — Duncan's stop condition).
+
+**A band that turns keeps its own pricing** (Duncan, 2026-08-25, choosing this over authoring the
+cladding an `out`). The turn reaches an arris the seam loop declined to lap along, because the
+direction that arris leaves in is switched off for this skin; a band already running does not stop
+there. So it is priced by the band it continues and measured from that band's datum, not re-priced
+by the direction it now runs in — which is why the skirt turns down the scupper's reveal at
+`drop`, on a skin whose `out` is `0.0`. It revises Duncan's own *"down is a drip, up or sideways
+is an upstand"*: that prices a lap which **starts**, and is the wrong question about one that
+merely turns a corner.
+
+**A turn only closes a gap that is open.** The band runs from the skin's own edge to `drop` past
+the substrate arris, so it exists only where that arris lies **ahead** of the edge along the turn.
+This is what tells the scupper from a wall standing out of the face a drip runs along — locally
+the two arrises are indistinguishable, a covered face meeting the receiving plane at right angles
+at the free end of a run. At the scupper the lined cheek faces back along the turn, the skin's
+edge is 85 mm on the far side of the arris, and the band spans 115 mm. At `Headhouse-E`'s foot the
+covered facade faces along it, the skin already stands 85 mm out that way, the outer line falls
+behind the edge it would spring from, and no band is placed. Both wall ends of the live bake are
+the second case, and the attempt this replaced put a band 30 mm off the substrate at each of them.
+Where `drop` is the longer of the two the band is exactly the difference — the part of the drip
+the skin does not already cover.
+
+The test is on the **datum**, so it bites on a band measured on the substrate and nowhere else: a
+band measured from the skin's own edge has no gap to close and its width is `want` whatever the
+arris does. Every turn on all three substrates today is a drip, so what a turning *upstand* should
+be refused at is undecided rather than settled — a skin of `drop: 0.0, out: 0.03` turns at both
+wall ends with no discrimination at all.
+
+**A turned band runs to the end of the arris**, past the corner where the *receiving* face itself
+stops. At the scupper that corner is the knife: the parapet's inner face is buried by the roof
+taper's end below `z = 14.5036`, while the cheek the band is flashing carries on 8.6 mm lower to
+the sill. The band follows the covered face, because it is that face's flashing — Duncan,
+2026-08-26: *"E84, 86 should be 5 mm lower, even with E70, 71."* It is not lapping onto the knife:
+it stays on its own receiving plane, and `_knife_side` has already put those vertices on the
+covered side of it. The guard is that the seam must lie on the band's own offset plane at both
+ends — the test the fold already makes — plus two bounds: **only a band that has itself turned**
+(otherwise it reaches for an arris at the free end of every drip), and **the seam must be
+crossways to the band** (an arris running along the lap direction is the band's own outer edge).
+`_room` is not asked and cannot be: the receiving face is by definition absent past its own
+corner, so asking would refuse every continuation this exists for.
+
+**The turn's own room is asked at the end it arrives from**, not at both ends the way a lap that
+starts is, and that is a weaker guard rather than a different one. A turned band follows the
+boundary of the face it laps onto, so `_room` at its far end answers *"the face corners here"* with
+the same zero it uses for *"the face runs out here"*; nothing in the code separates them, so the
+far end goes unguarded and a receiving face that genuinely stopped short there would take a band
+hanging over nothing. No substrate here does. Measured at the scupper: the far end reads no room,
+because the roof falls away under it — 1.29 mm over the 30 mm lap, which is the case this allows.
 
 **A run-on runs `out`.** It runs sideways, along the surface, so it is an upstand and never a
 drip — `drop` is for a lap that hangs *below its arris*, which a run-on never does. It used to be
@@ -406,9 +456,16 @@ legitimately emits **whole quads**, so where one band lies inside another on the
 two overlap: the summed triangle area is not the area covered — 0.180% of the membrane on the
 live bake — and the four bowtie quads left in it are what that looks like from outside. A miter
 between two overlapping bands cannot un-overlap them, and two source-level attempts are measured
-and rejected in NOTES, so it is resolved afterwards, plane by plane, with a 2D boolean. (The
-cladding's two bowties had a different cause — a tiling the offset inverted — and are fixed at
-source by `_tiling`, above. Its summed area is now exactly its covered area.)
+and rejected in NOTES, so it is resolved afterwards, plane by plane, with a 2D boolean.
+
+The **cladding** has two bowties of its own again, and they are worth telling apart from the pair
+it used to have: those came from a tiling the offset inverted and are fixed at source by
+`_tiling`, above, where these are a miter doing exactly what a miter does. Where the drip's skirt
+turns down the scupper, the miter between the two bands reaches 112 mm along the turn while the
+first link of the turn is only 101 mm long, so the corner it computes falls past that link's far
+end and the quad crosses itself. 2530 mm² on the live bake, dissolved by `clean`, after which the
+summed area is exactly the area covered. This is the condition the pass exists for, not a defect
+in the turn.
 
 **Nothing in `skin/offset.py` or `RULES` knows it exists**, and it is named for a mesh rather than
 for a skin because overlapping itself in a plane is a property of a mesh, not of a skin. It is
@@ -429,10 +486,11 @@ longer existed. A verdict that changes with the triangulation is not a verdict a
 
 That figure is **dated because it no longer reproduces**, and what replaced it makes the same
 point. `_tiling` fixed the inversion at source and the cheeks are now clad, so on the live bake
-the cladding reads 3.6593 mm raw and 3.6593 mm cleaned — `clean` moves it not at all, because the
-centroid finding the low reading is now on the defective cheek panel rather than on a mis-tiled
-face. The **membrane** is where the split still shows: 7.8808 mm raw against 5.8793 mm cleaned,
-the gusset being a chord across a fold. Re-measure before quoting either.
+the cladding reads 75.0194 mm raw and 75.0194 mm cleaned (measured 2026-08-26) — `clean` moves it
+not at all, because the point finding the low reading is the turn-down's bottom-outer corner over
+the headhouse roof and no pass touches it. The **membrane** is where the split still shows: 7.8808 mm
+raw against 5.8793 mm cleaned, the gusset being a chord across a fold. Re-measure before quoting
+either.
 
 The split survives `clearance` being demoted, with one deliberate exception. Everything *printed*
 stays a property of the offset and so is measured raw. The **verdict** is taken on both meshes:
@@ -490,9 +548,12 @@ facet and a corner on the one beside it. It is a tidy-up, so it is allowed the a
 `STRAIGHT_TOL` (1e-9 m off the line) where a derivation would not be; it changes no outline, and
 the measurements say so — area equals the covered area to 0.000000 mm² on all three substrates,
 with no vertex more than 2.5 nm off a plane the offset produced. `build()` opts in: on the live
-bake the membrane goes 153 → 115 triangles and 67 → 35 border edges, the cladding 134 → 81 and
-54 → 45, and T-junctions fall (membrane 3 → 0) because a vertex no ring turns at **is** the
-T-junction anchor. Pass `dissolve=False` — the default — to keep every vertex.
+bake the membrane goes 145 → 115 triangles and 59 → 29 border edges, the cladding 144 → 88 and
+56 → 44, and T-junctions fall (membrane 15 → 0, cladding 6 → 4) because a vertex no ring turns at
+**is** the T-junction anchor. Measured 2026-08-26 — the first two pairs are `build.py`'s own
+output, which is what opts in; `audit.py` calls `clean` with `dissolve=False` and so prints
+145 → 142 and 144 → 130 for the same meshes, and is the source of the T-junction figures only.
+Pass `dissolve=False` — the default — to keep every vertex.
 
 What it does **not** do: it says nothing about two *different* planes intersecting. Closing a hole
 is a wholly separate mechanism, because nothing about a hole falls out of a coplanar union — the

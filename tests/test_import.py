@@ -397,12 +397,18 @@ def test_the_baked_headhouse_reads_and_skins():
 
     membrane, cladding = built["Membrane"], built["Cladding"]
 
-    # 79.9703 and 71.973. Both read wrong until 2026-08-25 -- 3.6593 mm and
-    # 4.337 mm -- for one reason, the scupper knife, and both came right when
-    # `_knife_side` landed. 79.9703 is the figure NOTES derived for the geometry
-    # Duncan asked for, from his own target quad, before any of it was built.
-    assert clearance(parts, cladding) == pytest.approx(0.0799703, abs=1e-6)
-    assert separation(membrane, cladding) == pytest.approx(0.0719734, abs=1e-6)
+    # Both read wrong until 2026-08-25 -- 3.6593 mm and 4.337 mm -- for one
+    # reason, the scupper knife, and both came right together when `_knife_side`
+    # landed, at 79.9703 and 71.973. They moved once more on 2026-08-26, when
+    # the skirt's turn-down ran down to the sill's offset at Duncan's *"E84, 86
+    # should be 5 mm lower"*: the sample taking the low reading is now the
+    # turn-down's own bottom-outer corner at `(8.585, 4.755, 14.580)`, which
+    # stands 75.0194 mm over the headhouse roof taper where the lining's corner
+    # 115 mm inboard stands 79.9703. Both figures are the same geometry read at
+    # two points, and neither is a defect -- this is the documented `clearance`
+    # exception, which is why it is printed and asserts nothing in `build.py`.
+    assert clearance(parts, cladding) == pytest.approx(0.0750194, abs=1e-6)
+    assert separation(membrane, cladding) == pytest.approx(0.0670180, abs=1e-6)
 
     # both skins cap the coping, as they did when the plates lived inside their
     # parapets. The cladding wraps over the plate; the membrane goes under it
@@ -627,3 +633,52 @@ def test_the_cheek_lining_reaches_the_coping_on_the_live_bake():
         # separates the two states is where the plane stops, not whether the
         # point exists
         assert corners[:, 1].max() == pytest.approx(14.84009, abs=1e-6)
+
+
+def test_the_skirt_turns_down_to_the_sill_on_the_live_bake():
+    """Duncan, 2026-08-22: *"The skirt should turn downwards on each side of the
+    scupper."* And, reading the built bake on 2026-08-26: *"E84, 86 should be
+    5 mm lower, even with E70, 71."*
+
+    So the turn-down's bottom edge sits at the sill's offset, `z = 14.580`,
+    level with the cheek lining's own bottom edge beside it — not at 14.585,
+    where the **receiving** face corners. The parapet's inner face is buried by
+    the roof taper's end below `z = 14.5036`, 8.6 mm above the sill, so the band
+    runs past that corner to the end of the arris the cheek gives it.
+
+    Pinned on the bake rather than on a synthetic rig deliberately: the shape
+    that poses this is a knife, and a miniature of it raises in `_reconcile`
+    unless the lap predicate is contrived to dress one side and not the other,
+    which is the bake's own condition and not a general one.
+
+    Both sides, because the scupper is mirrored and defects here have read
+    correctly on one side and not the other before.
+    """
+    from build import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins, _skin_from
+    from skin import parameters, substrate
+
+    parts = substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN})
+    params = parameters.load_validated()
+    group_cornices(parts)
+    group_caps(parts, classifier(params))
+    spec = next(s for s in skins(params) if s["name"] == "Cladding")
+    skin = _skin_from(spec, parts)
+
+    # the skirt lies on the parapet's inner face offset, x = 8.5 + 0.085
+    on = np.abs(skin.triangles[:, :, 0] - 8.585).max(axis=1) < 1e-6
+    assert on.any(), "no skirt at all on the parapet's inner face"
+    y, z = skin.triangles[on][:, :, 1], skin.triangles[on][:, :, 2]
+
+    # 4.755 = the cheek at 4.785 less the 30 mm drip; 4.870 = its own lining
+    for lo, hi in ((4.755, 4.870), (5.100, 5.215)):
+        band = (y.min(axis=1) > lo - 1e-6) & (y.max(axis=1) < hi + 1e-6)
+        assert band.any(), f"no turn-down between y {lo} and {hi}"
+        assert z[band].min() == pytest.approx(14.580, abs=1e-6), (
+            f"the turn-down at y {lo}…{hi} stops at z = {z[band].min():.4f}: it "
+            "ended where the parapet's inner face is buried by the roof taper "
+            "rather than at the sill's offset, level with the lining beside it"
+        )
+        assert y[band].min() == pytest.approx(lo, abs=1e-6)
+        assert y[band].max() == pytest.approx(hi, abs=1e-6)
+        # ...and it reaches the coping's offset at the top
+        assert z[band].max() == pytest.approx(14.819018, abs=1e-6)

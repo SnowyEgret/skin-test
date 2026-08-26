@@ -958,7 +958,7 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
 
     **A lap does not stop where the face it laps onto stops** (Duncan,
     2026-08-20). At the free end of a run it asks what the substrate presents
-    there, and there are exactly three answers:
+    there, and there are four answers:
 
     * *the same plane carries on* -- an in-line butt, where a parapet runs into a
       wall presenting the very same face. The lap runs on, which is the whole of
@@ -967,6 +967,17 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
     * *another face meets it at an arris* -- the lap folds round the corner onto
       that face. This carries the upstand at that junction onto `Headhouse-N`'s
       north face, and turns the rig's exterior-wall skirt out onto part 4.
+    * *the boundary of the face it is lapping onto turns* -- the band turns with
+      it and runs on along that boundary, staying on the face it already laps.
+      This is the skirt turning down each side of the scupper. It keeps the
+      price and the datum of the band it continues rather than being re-priced
+      by the direction it now runs in, and it is placed only where the arris
+      lies ahead of the skin's own edge along that direction -- where the skin
+      already stands proud of the arris that way there is no gap to close. Once
+      turned it runs to the **end of the arris**, past the corner where the
+      receiving face itself stops: at the scupper the parapet's inner face is
+      buried by the roof taper 8.6 mm above the sill, and the band follows the
+      covered cheek down to it.
     * *nothing* -- the lap ends. Duncan's stop condition, exactly.
 
     Laps are **chained and mitered within each receiving plane**, so a run that
@@ -1027,7 +1038,30 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
         """A drip hangs `drop`; anything that rises or runs sideways goes `out`."""
         return drop if t[2] < -PLANE_TOL else out
 
-    def seg(pa, pb, qa, qb, t, far, va=None, vb=None):
+    def turned(v: int, t, want: float, drip: bool) -> np.ndarray:
+        """The outer line of a band that turned, at substrate vertex `v`.
+
+        A turn keeps the band it continues, so it keeps that band's datum: the
+        outer line lies `want` past the **substrate** arris for a band measured
+        on the substrate, and `want` past the **skin's own edge** for one that
+        is not. In every other direction it stays on the skin's own edge, which
+        is what keeps the band a strip of the width it already had rather than
+        a flap skewed by the offset it turned out of.
+
+        Measuring the gap along `t` is also what strikes out the plane the band
+        steps away from. The skin's edge lies `distance` off the covered face
+        the band turns off, and that face's normal points along `t` -- so
+        offsetting out along it and then stepping back along it are the same
+        displacement counted twice. Subtracting the gap cancels exactly that
+        component, whatever produced it, and leaves the 30 mm drip 115 mm wide
+        at the scupper: 85 across the reveal it laps out of, plus its own 30.
+        For a drip the gap is a height and `drip_at` is what miters it, which
+        is why this is the turned band's construction and not the drip's.
+        """
+        gap = float((body.vertices[v] - V[v]) @ t) if drip else 0.0
+        return V[v] + (gap + want) * t
+
+    def seg(pa, pb, qa, qb, t, far, want, drip, turn=False, va=None, vb=None):
         return {
             "pa": np.asarray(pa, float), "pb": np.asarray(pb, float),
             "qa": np.asarray(qa, float), "qb": np.asarray(qb, float),
@@ -1036,19 +1070,41 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
             # an end that does not -- the far end of a run-on, the rim end of a
             # fold -- is out over the offset and has nothing left to ask
             "va": va, "vb": vb,
+            # what this band cost and where it was measured from, carried so a
+            # band that turns can keep them rather than be re-priced by the
+            # direction it turns in. `want` is what the band was actually placed
+            # at, not what its direction is worth, so a band the receiving face
+            # shortened turns at the width it really has. `turn` says this band
+            # is itself one that turned, which is what may run to the end of the
+            # arris it turned onto
+            "want": float(want), "drip": bool(drip), "turn": bool(turn),
             "t": t, "far": int(far), "plane": int(ids[far]),
             "out": body.face_normals[far],
         }
 
     segs = []
+    # arrises this skin declined to lap along because the direction they leave in
+    # is switched off for it. They are not dead: a band already running into one
+    # of them turns and carries on along it, at its own price -- see `carry_on`
+    deferred: dict[int, list] = {}
+    # arrises where the skin's own surface ends but there is no face to lap onto
+    # at all -- the covered face runs on past the corner where the receiving one
+    # stops. Kept by vertex rather than by plane, because the face on the far
+    # side is by definition not the receiving one and its plane says nothing
+    beyond: dict[int, list] = {}
     for (f, g), (a, b) in zip(body.face_adjacency, body.face_adjacency_edges):
         for near, far in ((f, g), (g, f)):
-            if not (covered[near] and lappable[far] and not covered[far]):
+            if not (covered[near] and not covered[far]):
                 continue
             a, b, far = int(a), int(b), int(far)
+            if not lappable[far]:
+                for v in (a, b):
+                    beyond.setdefault(v, []).append((a, b))
+                continue
             t = _across(body, a, b, far)
             want = reach(t)
             if want == 0.0:
+                deferred.setdefault(int(ids[far]), []).append((a, b, t, far))
                 continue  # that direction is switched off for this skin
             # shortened to what the receiving face actually offers, measured
             # from both ends of the seam so the band stays a band. Without this
@@ -1064,10 +1120,12 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
             )
             if want < PLANE_TOL:
                 continue
-            root = drip_at if t[2] < -PLANE_TOL else (lambda v: V[v])
+            drip = t[2] < -PLANE_TOL
+            root = drip_at if drip else (lambda v: V[v])
             step = t * want
             segs.append(
-                seg(V[a], V[b], root(a) + step, root(b) + step, t, far, va=a, vb=b)
+                seg(V[a], V[b], root(a) + step, root(b) + step, t, far,
+                    want=want, drip=drip, va=a, vb=b)
             )
 
     if not segs:
@@ -1136,9 +1194,10 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
         return found
 
     def carry_on(k, back, here):
-        """Run the lap past its tip, fold it round the corner, or leave it.
+        """Run the lap past its tip, fold it round the corner, turn it along the
+        face it is on, or leave it.
 
-        The three answers Duncan's rule allows, asked in that order. Both need
+        The four answers Duncan's rule allows, asked in that order. Each needs
         to know where the tip stands on the substrate, so an end that is out
         over the offset -- the far end of a run-on, the rim end of a fold --
         simply stops, which is what bounds the recursion.
@@ -1275,8 +1334,145 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
                 for other in segs
             ):
                 continue  # already lapped onto that face along this arris
-            segs.append(seg(side, rim, side + step, rim + step, into, far, va=tip))
+            segs.append(seg(side, rim, side + step, rim + step, into, far,
+                            want=reach(into), drip=into[2] < -PLANE_TOL, va=tip))
             return True
+
+        # ...and where the boundary of the face it is lapping onto turns at the
+        # tip, the band turns with it and runs on along that boundary, staying
+        # on the face it already laps. It reaches an arris this skin declined to
+        # lap along -- `deferred` -- because the direction that arris leaves in
+        # is switched off for it; a band that is already running does not stop
+        # there. It keeps its own price and its own datum rather than being
+        # re-priced by the direction it now runs in (Duncan, 2026-08-25, having
+        # been offered the alternative of authoring the cladding an `out` and
+        # refused it: that turns the skirt at the scupper into an upstand set
+        # out from the skin's edge, and reverts the drip's rim to a miter he
+        # had just approved away).
+        #
+        # This is the fourth answer at a free end, and it is deliberately last:
+        # the substrate carrying on, and the substrate turning a corner, are
+        # both answers about where the band **goes**, where this one is about a
+        # band that has nowhere to go and follows the face it is on instead.
+        for a, b, t, far in deferred.get(one["plane"], ()):
+            if tip not in (a, b):
+                continue
+            w = b if a == tip else a
+            seam = {_key(V[tip]), _key(V[w])}
+            if any(
+                other["plane"] == one["plane"]
+                and {_key(other["pa"]), _key(other["pb"])} == seam
+                for other in segs
+            ):
+                continue  # already turned along that arris, from its other end
+            # A turn only closes a gap that is open. The band runs from the
+            # skin's own edge to `want` past the substrate arris, so it exists
+            # only where the arris lies **ahead** of that edge along `t`; where
+            # the skin already stands proud of the arris that way, the outer
+            # line falls behind the edge it springs from and there is no band.
+            # That is what tells the scupper from a wall running into a parapet:
+            # at the scupper the covered cheek faces back along the turn and the
+            # band spans 115 mm, while at `Headhouse-E`'s foot the covered
+            # facade faces along it, the skin is already 85 mm out that way, and
+            # the width comes out negative. Both wall ends were placed as bands
+            # 30 mm off the substrate by the attempt this replaces.
+            #
+            # It is a test on the **datum**, so it bites on a band measured on
+            # the substrate and only there: one measured from the skin's own
+            # edge has no gap to close, its width is `want` whatever the arris
+            # does, and this reduces to `want > 0`. Every turn on all three
+            # substrates today is a drip -- the cladding's, and the membrane
+            # defers nothing to turn onto -- so what a turning upstand ought to
+            # be refused at is undecided rather than decided this way. Found by
+            # `/code-review high` 2026-08-26, which built the case: a cladding
+            # of `drop: 0.0, out: 0.03` turns at `v42` and `v116`, the two
+            # vertices this gate exists to refuse, each passing at `+0.03`.
+            #
+            # Asked at **both** ends: the two ends of one arris need not stand
+            # the same distance off it, since each is mitered onto whatever else
+            # meets it, and a quad positive at one end and negative at the other
+            # is a band turned inside out along its own length.
+            ends = [turned(v, t, one["want"], one["drip"]) for v in (tip, w)]
+            if min(float((q - V[v]) @ t) for q, v in zip(ends, (tip, w))) < PLANE_TOL:
+                continue
+            # ...and the lap past the arris still has to land on the receiving
+            # face. Asked at the tip alone, which is a **weaker** guard than the
+            # one a lap that starts gets, and knowingly so: a turned band
+            # follows the boundary of the face it laps onto, so its far end sits
+            # on that boundary and `_room` there answers "the face corners here"
+            # with the same 0 it would use for "the face runs out here". The
+            # code cannot tell those apart, so the far end is not guarded at
+            # all, and a receiving face that genuinely stops short at the far
+            # end of a turn would take a band hanging over nothing. No substrate
+            # here does. Measured at the scupper: the far end reads no room,
+            # because the roof falls away under it -- 1.29 mm over the 30 mm
+            # lap, which is the case this is written to allow. Raised by
+            # `/code-review high` 2026-08-26 and left as a named limit rather
+            # than repaired with a threshold.
+            if _room(body, body.vertices[tip], t, coplanar[one["plane"]],
+                     body.face_normals[far], one["want"]) < one["want"] - PLANE_TOL:
+                continue
+            segs.append(seg(
+                V[tip], V[w], ends[0], ends[1],
+                t, far, want=one["want"], drip=one["drip"], turn=True,
+                va=tip, vb=w,
+            ))
+            return True
+
+        # ...and a band that has already turned runs to the end of the arris it
+        # turned onto, past the corner where the **receiving** face stops. At
+        # the scupper that corner is the knife: the parapet's inner face is
+        # buried by the roof taper's end below `z = 14.5036`, so the plane has
+        # no face there, while the cheek the band is flashing carries on down to
+        # the sill 8.6 mm lower. The band follows the covered face, because it
+        # is that face's flashing -- Duncan, 2026-08-26, reading the built bake:
+        # *"E84, 86 should be 5 mm lower, even with E70, 71"*, which is the
+        # turn-down's bottom edge brought level with the lining's own.
+        #
+        # Only a band that has itself turned: the three answers above are what a
+        # band that has not turned gets, and this one would otherwise reach for
+        # an arris at the free end of every drip in the model.
+        #
+        # `_room` is **not** asked. It cannot be: the receiving face is by
+        # definition absent past its own corner, so it would refuse every
+        # continuation this exists for. What stands in for it is that the seam
+        # must lie on the band's own offset plane at both ends, which is the
+        # test the fold already makes -- had `_knife_side` put these vertices on
+        # the other side of the knife, they would be 170 mm away and nothing is
+        # placed.
+        if one["turn"]:
+            level = planes[one["far"], 3] + distance
+            facing = body.face_normals[one["far"]]
+            for a, b in beyond.get(tip, ()):
+                w = b if a == tip else a
+                seam = {_key(V[tip]), _key(V[w])}
+                if any(
+                    other["plane"] == one["plane"]
+                    and {_key(other["pa"]), _key(other["pb"])} == seam
+                    for other in segs
+                ):
+                    continue
+                run = V[w] - V[tip]
+                if np.linalg.norm(run) < WELD_TOL:
+                    continue
+                # a seam is crossways to the band; an arris running along the
+                # lap direction is the band's own outer edge, not its next seam
+                if abs(float(run @ one["t"])) > PLANE_TOL:
+                    continue
+                if max(abs(V[v] @ facing - level) for v in (tip, w)) > PLANE_TOL:
+                    continue
+                ends = [turned(v, one["t"], one["want"], one["drip"])
+                        for v in (tip, w)]
+                if min(
+                    float((q - V[v]) @ one["t"]) for q, v in zip(ends, (tip, w))
+                ) < PLANE_TOL:
+                    continue
+                segs.append(seg(
+                    V[tip], V[w], ends[0], ends[1],
+                    one["t"], one["far"], want=one["want"], drip=one["drip"],
+                    turn=True, va=tip, vb=w,
+                ))
+                return True
         return False
 
     # One continuation at a time, re-reading the runs after each. A run-on moves

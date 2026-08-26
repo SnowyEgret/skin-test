@@ -3,13 +3,13 @@
 Offsetting a **substrate** (an assembly of solid parts) outward by a fixed distance to
 produce **skins**: open surfaces that cover a chosen subset of faces.
 
-Last worked: 2026-08-25.
+Last worked: 2026-08-26.
 
 `CLAUDE.md` has the commands, the architecture and its invariants, and the tolerance
 rationale. This file is the running log: what the geometry currently is, what was tried
 and rejected, and what is still open.
 
-## Start here (picking up after 2026-08-25)
+## Start here (picking up after 2026-08-26)
 
 ### Where to pick up
 
@@ -22,17 +22,28 @@ lining's head now sits exactly where Duncan said it should, on both cheeks.
 substrate**: zero crossings, nothing buried, nothing self-crossing. Cause 2 landed the same day as
 cause 1 — see *"Cause 2 fixed: a knife has a side"*.
 
-**First job: the turn-down**, step 4 and the last of the four. **Attempted on 2026-08-25 and
-backed out** — read *"The turn-down: what is actually in the way"* before anything else, because
-it replaces the guess this section used to carry. In short: it is not missing code, it is
-`out: 0.0` gating it in `_lap`'s seam loop; Duncan chose to fix that by making a band that
-**turns** keep its own pricing rather than by authoring the cladding an `out`; the construction
-for that is solved and written down; and what defeated the attempt is the *gate* — two versions of
-"is this the same band turning" both fired at building corners instead of at the scupper, putting
-spurious bands 30 mm off the substrate. That section says where to start and names two things to
-check first that the attempt skipped.
+**The turn-down is built, and corrected.** Step 4, the last of the four, landed 2026-08-26 — see
+*"The turn-down: a band that turns keeps its own price"*. The skirt turns down both sides of the
+scupper, 115 mm wide (85 across the reveal plus its own 30 mm drip), from the coping's offset down
+to the sill's offset at `z = 14.580`, and it does not return across the bottom. Duncan read the
+first build back and asked for the last 5 mm of it — *"E84, 86 should be 5 mm lower, even with
+E70, 71"* — which is the band running past the corner where the receiving face is buried by the
+roof taper, to the end of the arris the cheek gives it. Done the same day. **All four of his
+corrections are now built and there is nothing queued behind this.**
 
-Also settled there, from Duncan reading the bake back: the square 230 mm notch cause 1 produced is
+The two things the previous attempt skipped were measured first, and both mattered:
+
+- a building corner's two drips **do** share a union vertex index — v13, v26, v51, v82, v113,
+  v124, v130 on the live bake, one index and one offset point each — so `carry_on`'s existing
+  free-end guard already tells a corner from the scupper. The failed gate over-fired because it
+  was in the *seam loop*, which has no such guard.
+- `_room` along the turned direction reads **1935 mm** at the scupper's upper corners and **0**
+  at its lower one, so it neither refuses the building corners nor allows the whole turn: a gate
+  was needed, and where `_room` is asked had to move.
+
+The measurement that actually settled it was a third one nobody had asked for. See the section.
+
+Also settled from Duncan reading the bake back: the square 230 mm notch cause 1 produced is
 **right**, and his 2026-08-22 *"V62 should remain where it is"* is superseded. Do not restore the
 400 mm rim.
 
@@ -129,8 +140,8 @@ Three were in the day-old `measure` code and four in code that had never been in
 - `clearance`'s docstring said parts are "concatenated" where the code queries per part and its
   own inline comment gives the opposite reason.
 
-**Not done:** the turn-down — attempted 2026-08-25 and backed out, see its own section. The tree
-is clean apart from an untracked `audit.py`.
+**Not done:** nothing of the four. The turn-down landed on 2026-08-26. The tree is clean apart
+from an untracked `audit.py`.
 
 **A fourth `/code-review high` ran over the whole branch after cause 1 landed**, and found six
 things. The one that mattered is recorded above: the cheek growth was bounded by a shared plane
@@ -283,17 +294,27 @@ before touching `_lap`, and 9 before touching the solve.**
 Re-measured 2026-08-25, after the `_trim_beside` revert. The **rig has no scupper** and is
 therefore the row that did not move; the two bakes carry the cheek lining and read its defect.
 
+Re-measured again 2026-08-26, after the turn-down landed. Only the cladding on the two bakes with
+a scupper moved; the rig and the membrane are unchanged to the digit.
+
 | | separation | membrane / cladding clearance | skins cross | buried |
 |---|---|---|---|---|
 | rig | 76.071 | 7.7760 / 84.6091 | 0 | none |
-| walls-and-caps | 71.973 | 7.8808 / 79.9703 | 0 | none |
-| extended cornices (live) | 71.973 | 7.8808 / 79.9703 | 0 | none |
+| walls-and-caps | 67.018 | 7.8808 / 75.0194 | 0 | none |
+| extended cornices (live) | 67.018 | 7.8808 / 75.0194 | 0 | none |
 
 | | coplanar overlap removed, membrane / cladding | triangles | border edges |
 |---|---|---|---|
 | rig | 53554 / 0 mm² | 33→34 / 29→22 | 25→16 / 23→18 |
-| walls-and-caps | 13530 / 0 mm² | 68→52 / 88→44 | 16→8 / 32→24 |
-| extended cornices (live) | 173172 / 0 mm² | 145→115 / 132→84 | 59→29 / 56→44 |
+| walls-and-caps | 13530 / 2530 mm² | 68→52 / 100→48 | 16→8 / 32→24 |
+| extended cornices (live) | 173172 / 2530 mm² | 145→115 / 144→88 | 59→29 / 56→44 |
+
+The cladding's two figures fell 5 mm on 2026-08-26 and **neither is a defect**. The sample taking
+the low reading is now the turn-down's own bottom-outer corner at `(8.585, 4.755, 14.580)`, which
+stands 75.0194 mm over the headhouse roof taper, where the lining's corner 115 mm inboard stands
+79.9703. Same geometry, read at a point that did not exist before. The 2530 mm² is the miter
+between the skirt and its turn-down, dissolved by `clean` — see *"The turn-down: a band that turns
+keeps its own price"*.
 
 Re-measured again on 2026-08-25 after cause 2 landed. The cladding's 3.6593 mm and the 4.337 mm
 separation are gone — both were the scupper knife, and both came right together. **79.9703 rather
@@ -2672,6 +2693,11 @@ four of them synthetic. 114 tests, ~8.9 s.
 
 ## The turn-down: what is actually in the way (2026-08-25)
 
+*(Built on 2026-08-26 — see "The turn-down: a band that turns keeps its own price". Everything
+below still reads true except the construction, which the build replaced with a simpler one, and
+the search for a gate, which ended somewhere this section did not expect. Kept because it is the
+diagnosis the build was written from.)*
+
 **Attempted, reverted, nothing committed.** What follows is what the attempt established, so the
 next session starts from here rather than from the guess this file used to carry.
 
@@ -3200,10 +3226,212 @@ of weekly budget and expects to pick this up Monday night.
    vertex when it pulls it inside `distance` — the same test `_trim_beside` makes, applied at
    solve time to a plane instead of after the fact to a triangle. Write it as a candidate and
    measure it; do not design it further on paper.
-4. **The turn-down.** The last of the four, and the only one still open. **Attempted and backed
-   out on 2026-08-25** — the construction is solved, the *gate* is not. See *"The turn-down: what
-   is actually in the way"* below before touching it; the framing in this list, and in the
-   paragraph on correction 3 above, is superseded by it.
+4. **The turn-down.** The last of the four. Attempted and backed out on 2026-08-25, then
+   **built on 2026-08-26** — see *"The turn-down: a band that turns keeps its own price"*. The
+   framing in this list, and in the paragraph on correction 3 above, is superseded by it.
+
+## The turn-down: a band that turns keeps its own price (2026-08-26)
+
+**Built and landed.** Duncan's step 4 and the last of the four cheek corrections. The skirt now
+turns down each side of the scupper: a band 115 mm wide on `x = 8.585`, from the coping's offset
+at `z = 14.819` down to `z = 14.585`, mitered into the drip it continues at `(y 4.755, z 14.707)`,
+and not returned across the bottom. Mirrored at `y 5.100…5.215`. That is *"the skirt should turn
+downwards on each side of the scupper"* (2026-08-22) as asked.
+
+The 115 mm is 85 across the reveal it laps out of plus its own 30 mm drip, which is the width the
+2026-08-25 what-if independently produced from the other direction.
+
+**The bottom took two goes.** The first build stopped at `z = 14.585`, because that is where the
+band's *receiving* face stops: the parapet's inner face is buried by the roof taper's end below
+`z = 14.5036`, 8.6 mm above the sill, so `v67` is the last arris vertex the receiving plane has.
+The lining beside it reaches 14.580 (`V[66]`), which left a 5 mm sliver open where the two meet.
+Duncan, shown it: *"E84, 86 should be 5 mm lower, even with E70, 71."* See *"The band runs to the
+end of the arris"* below — it now reads 14.580 on both sides.
+
+### The two checks the previous attempt skipped
+
+Both were named in that section, both were measured first, and both mattered.
+
+**A building corner's two drips share a union vertex index**, not merely a position. On the live
+bake: v13, v26, v51, v82, v113, v124, v130 each carry two drip bands on two planes, and each band
+takes its seam endpoint from the same index, so `inner()` hands both the identical offset point.
+That means `carry_on`'s existing free-end guard — *"a run is only free at its end if nothing else
+turns the same way there"* — already fires at every corner and at neither side of the scupper. The
+failed gate over-fired **because it was in the seam loop**, which runs before any of that and
+knows nothing about runs. Moving the question into `carry_on` was the whole of the fix the
+previous section predicted, and it cost no gate of its own.
+
+**`_room` along the turned direction** reads 1934.9999 mm at v71 and v72 and **0 mm at v67**, the
+lower corner, because the roof falls toward the scupper and its line rises away under the band —
+by 4.96 mm over the band's 115 mm, and 1.29 mm over the 30 mm that actually laps the substrate. So
+`_room` refuses the corners nowhere and refuses the lower half of the turn-down. Asked at both
+ends the way a lap that *starts* is, the turn stops 138 mm above the sill.
+
+That moved where it is asked rather than whether: **at the end the band arrives from**. A turned
+band follows the boundary of the face it laps onto, so its far end sits on that boundary, and
+requiring the boundary to carry on past its own corner is the wrong question.
+
+Be honest about what that costs, as `/code-review high` was on 2026-08-26: it is a **weaker**
+guard, not a differently-aimed one. `_room` at the far end answers *"the face corners here"* with
+the same zero it uses for *"the face runs out here"*, and nothing in the code separates them — so
+the far end is not guarded at all, and a receiving face that genuinely stopped short there would
+take a band hanging over nothing. That contradicts *"a continuation runs only where the whole of
+it lands on substrate"* in the direction of laxity. No substrate here poses it, and the repair on
+offer is a threshold on how far short is tolerable, which is not a derivation. Named as a limit
+instead.
+
+### The measurement that settled the gate, which nobody had asked for
+
+There are **four** free drip-run ends on the live cladding with a deferred arris at them, not two.
+Besides the scupper's `v72` and `v74` there are `v42` at `(8.08, 2.85, 13.096)` and `v116` at
+`(10.68, 7.54, 13.096)` — which are exactly where the 2026-08-25 attempt left its two spurious
+bands. Nothing local to those vertices distinguishes them from the scupper: each is a covered face
+meeting the receiving plane at right angles at a free end of a drip run.
+
+What distinguishes them is **which way the covered face looks**. At the scupper the lined cheek
+faces *back* along the turn, so the skin's own edge stands 85 mm on the far side of the arris and
+the band spans the gap: `gap = (substrate arris − skin edge) · t = +85 mm`, width `85 + 30`. At
+`v42` the covered face is `Headhouse-E`'s facade and it faces *along* the turn, so the skin
+already stands 85 mm out that way: `gap = −85 mm`, width `−55 mm`, and the outer line falls behind
+the edge it would spring from. There is no band, and refusing a negative width is the entire gate.
+
+It is not a special case bolted on. The band is *defined* as running from the skin's own edge to
+`drop` past the substrate arris; a negative width is that band not existing. Where `drop` is the
+longer of the two the width is the difference, which is exactly the part of the drip the skin does
+not already cover — pinned by the second new test, which runs one substrate at two drops.
+
+**It bites on a drip and nowhere else**, which `/code-review high` found the same day and which
+this section originally overstated as *"the entire gate"*. The test is on the **datum**: a band
+measured from the skin's own edge has no gap to close, its width is `want` whatever the arris
+does, and the check reduces to `want > 0`. Demonstrated by the review with a cladding of
+`drop: 0.0, out: 0.03` — the turn then fires at `v42` and `v116`, the two vertices the gate exists
+to refuse, each passing at `+0.03`, and the band it places is a 30 mm flange on `y = 2.935` at
+`x 7.965…7.995`. Left as it is rather than repaired: every turn on all three substrates today is a
+drip (the cladding's; the membrane defers nothing to turn onto), so what a turning **upstand**
+should be refused at is undecided, and inventing the answer here would be guessing at a case no
+substrate poses. Worth revisiting the first time one does.
+
+### The construction, simpler than the one recorded
+
+2026-08-25 recorded three moves: price the turned band by the band it continues, root it on the
+substrate with `drip_at`, and make `drip_at` exclude the plane the band steps away from. The first
+is right and is what landed. The other two collapse into one line:
+
+```python
+gap = (body.vertices[v] - V[v]) @ t if drip else 0.0
+return V[v] + (gap + want) * t
+```
+
+The outer line lies `want` past the substrate arris along `t` and stays on the skin's own edge in
+every other direction. Measuring the gap **along `t`** is what strikes out the plane the band
+steps away from — it cancels the offset component along `t` whatever produced it, which is
+precisely what excluding that plane from the miter was for. And keeping the other components on
+the skin's edge is what the recorded construction was missing: `drip_at` leaves `z` on the
+substrate, so `drip_at(72) + step` puts the band's outer corner at `z = 14.737` against an inner
+edge at `14.819` — an 82 mm skew, a flap rather than a strip.
+
+**It is deliberately not applied to a drip that starts**, although the two agree along `t` by
+construction for every downward drip (`drip_at`'s displacement is horizontal, so its `z` is the
+substrate's). They disagree in **plan**, and the rig is where: at four cladding drip ends, `V` is
+mitered onto a vertical plane that `skinned_wall` does not contain, and `drip_at` is not — 85 mm
+apart. Measured over every drip end on all three substrates before deciding: the two agree to
+`0.000 nm` on unit8 and headhouse and to `1.2 nm` on the rig's membrane, and differ by `85 mm` at
+four of the rig's cladding drip ends. So unifying them would have moved the rig, and the rig is
+not moved.
+
+### What it cost, and what it did not move
+
+Two lines of build output change, on the two bakes that have a scupper, and nothing else:
+
+```
+-  clearance 79.9703 mm | cleaned: 0 mm2 of coplanar overlap removed, 24 collinear vertices dissolved, 132 -> 84 triangles, 56 -> 44 border edges
++  clearance 75.0194 mm | cleaned: 2530 mm2 of coplanar overlap removed, 26 collinear vertices dissolved, 144 -> 88 triangles, 56 -> 44 border edges
+```
+
+The **rig is untouched** and the **membrane is untouched on all three substrates** — every
+residual, clearance, fold count and separation figure is unchanged, to the digit. The membrane
+cannot reach the rule at all: it authors `out: 0.205`, so its seam loop defers nothing and there
+is nothing for a turn to continue onto. The build warns on nothing on any of the three.
+
+`clearance` falls 79.9703 → 75.0194 and the separation 71.973 → 67.018, and **neither is a
+defect**. The sample taking the low reading is now the turn-down's own bottom-outer corner at
+`(8.585, 4.755, 14.580)`, which stands 75.0194 mm over the headhouse roof taper, where the
+lining's corner 115 mm inboard — the old low sample — stands 79.9703. It is the same geometry read
+at a point that did not exist before, and it is the documented `clearance` exception again: the
+reveal's mouth sits on the roof, so no correct panel stands 85 mm off everything there. Both
+figures are re-pinned in `test_the_baked_headhouse_reads_and_skins`.
+
+The 2530 mm² is **two bowties**, and they are the miter behaving as designed rather than a defect.
+The drip's outer line is 112 mm below its seam while the first link of the turn is 101 mm long, so
+the corner where the two outer lines meet falls past that link's far end and its quad crosses
+itself. `clean` dissolves it and the summed area comes back exactly equal to the area covered.
+The cladding's *old* pair of bowties had a different cause — a tiling the offset inverted — and
+stays fixed at source by `_tiling`. `/code-review high` flagged that `skin_over` therefore returns
+a raw mesh with a self-crossing outline in it, where `_retiled` and the ear clipper treat exactly
+that as a hard error. The inconsistency is real and it is **older than this change** — the
+membrane has shipped four of them since 2026-08-21, and `build()` measures raw and writes cleaned
+precisely because of it. The repair on offer, clamping the miter parameter to the shorter of the
+two links, would move those four as well, so it is not a change to make while landing a turn-down.
+
+Live bake, after. From `build.py` (`dissolve=True`): membrane 145 → 115 triangles and 59 → 29
+border edges, cladding 144 → 88 and 56 → 44. From `audit.py`, which calls `clean` with
+`dissolve=False` and so reports different counts for the same meshes: membrane 145 → 142 and
+59 → 38, cladding 144 → 130 and 56 → 54, T-junctions 15 → 0 and 6 → 4. **Do not quote one as the
+other** — an earlier draft of this section did, and a reader re-running `audit.py` to check would
+have read a regression that is not there (`/code-review high`, 2026-08-26). Three new tests, 124
+in ~8 s.
+
+### The band runs to the end of the arris
+
+Duncan, shown the first build: *"E84, 86 should be 5 mm lower, even with E70, 71."* E84 and E86
+are the turn-down's bottom edges, `z = 14.585`; E70 and E71 the cheek lining's, `z = 14.580`.
+
+**Why it stopped short.** The turn walks arrises at its free end, and an arris is a candidate only
+where the face beyond it is one the skin may lap onto. At `v67 = (8.5, 4.785, 14.5036)` the
+receiving face runs out: the parapet's inner face is buried by the roof taper below that level.
+The edge `v66`–`v67` that carries on down to the sill is shared by the cheek — **covered** — and
+by `f91`, the taper's end face on plane 16, which is `x = 8.5` facing the other way. That is the
+scupper knife, and `_knifed` refuses it by name, correctly: a lap *onto* a knife has no offset for
+its vertices.
+
+**Why the band may run there anyway.** It is not lapping onto that face. It stays on its own
+receiving plane, and `_knife_side` has already put `V[66]` and `V[67]` on the covered side of the
+knife — both at `x = 8.585`, which is cause 2's fix from 2026-08-25 doing exactly what it was
+built to do. So the offset surface carries on even though the substrate face does not, and the
+band follows the **covered** face, because the band is that face's flashing. The seam has to lie
+on the band's own offset plane at both ends, which is the test the fold already makes and is what
+would refuse this if `_knife_side` had chosen the other side — the vertices would be 170 mm away.
+
+Three things bound it, and they are what stop it reaching into the rest of the model:
+
+- **only a band that has itself turned.** The three older answers are what a band that has not
+  turned gets; without this the rule would reach for an arris at the free end of every drip.
+- **the seam must be crossways to the band.** An arris running along the lap direction is the
+  band's own outer edge, not its next seam.
+- **`_room` is not asked, and cannot be.** The receiving face is by definition absent past its own
+  corner, so asking would refuse every continuation this exists for. What stands in for it is the
+  offset-plane test above. This is the same limit `/code-review high` named for the turn itself,
+  reached deliberately rather than by omission.
+
+The chain then stops at `v66` on its own: the only other arris there is the cheek's bottom edge,
+which runs along the lap direction and is refused as the band's own outer edge.
+
+Pinned by `test_the_skirt_turns_down_to_the_sill_on_the_live_bake`, on the bake rather than on a
+synthetic rig. A miniature of this shape raises in `_reconcile` — the knife is the point of it —
+unless the lap predicate is contrived to dress one side and not the other, which is the bake's own
+condition and not a general one. Both sides asserted, because defects here have read correctly on
+one side and not the other before.
+
+### What is deliberately left
+
+**A skin that authors a non-zero `out` gets the seam loop's upstand at that arris, not a turn.**
+The rule revives only an arris the seam loop declined *for price*, so `out: 0.0` is what exposes
+it. That keeps `_room`'s all-or-nothing intact for every band the seam loop actually considered,
+and it is the honest limit: a skin that says it laps sideways is taken at its word. It is also
+what makes the membrane provably unmoved. If a future skin wants both, the question to ask is
+whether the seam loop should defer *every* candidate that turns out to continue a band — which is
+the gate this section spent two sessions failing to write, and it should not be reopened without a
+substrate that needs it.
 
 ## Open items
 

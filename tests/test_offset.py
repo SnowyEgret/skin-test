@@ -1372,3 +1372,121 @@ def test_a_free_miter_reaches_past_the_face_it_covers():
     assert np.allclose(skin.bounds[1], [1.0 + D, 4.0 + D, 2.0 + D])
     assert np.isclose(skin.area, (1.0 + 2 * D) * (4.0 + 2 * D))
     assert clearance(parts, skin) > D - 1e-6
+
+
+def _slotted(x0, x1):
+    """A parapet with a slot cut clean through it, the scupper in miniature."""
+    return [
+        substrate.prism((0.0, 0.0, 0.0), (x0, 0.4, 1.0)),
+        substrate.prism((x1, 0.0, 0.0), (2.0, 0.4, 1.0)),
+    ]
+
+
+def _lined(parts, d, drop):
+    """Cap the parapet and line the slot's cheeks, with `out` switched off."""
+    return skin_over(
+        parts, d,
+        keep=lambda faces: (faces.normals[:, 2] > 1e-6)
+        | (
+            (np.abs(faces.normals[:, 0]) > 1 - 1e-6)
+            & (np.abs(np.abs(faces.centres[:, 0] - 1.0) - 0.2) < 1e-6)
+        ),
+        lap=lambda faces: np.abs(faces.normals[:, 2]) < 1e-6,
+        drop=drop, out=0.0,
+    )
+
+
+def test_a_band_turns_down_the_reveal_it_runs_into():
+    """Duncan, 2026-08-22: *"The skirt should turn downwards on each side of the
+    scupper."* The scupper in miniature: a slot cut through a parapet whose
+    cheeks the skin lines.
+
+    The drip along the coping runs into the lined cheek and does not stop there.
+    It turns and runs down the reveal, staying on the very face it was already
+    lapping onto — the fourth answer at a free end, after the run-on and the
+    fold. The band it continues is a drip, so it stays priced at `drop` and
+    stays measured on the substrate, although the direction it now runs in is
+    sideways and `out` is switched off. That is Duncan's option B, taken on
+    2026-08-25 over the alternative of authoring the skin an `out`.
+
+    So the band spans **`distance + drop`**: across the reveal it laps out of,
+    plus its own drip beyond the arris.
+    """
+    d, drop = 0.05, 0.12
+    parts = _slotted(0.8, 1.2)
+    skin = _lined(parts, d, drop)
+
+    front = np.abs(skin.triangles[:, :, 1] + d).max(axis=1) < 1e-6
+    assert front.any(), "nothing at all on the face the coping's drip hangs down"
+    x, z = skin.triangles[front][:, :, 0], skin.triangles[front][:, :, 2]
+
+    # the drip alone reaches z = 1 - drop; anything below that turned down
+    turned = z.min(axis=1) < 1.0 - drop - 1e-6
+    assert turned.any(), (
+        "the skirt stopped at the slot: no surface on the front plane below the "
+        f"drip's own reach of z = {1.0 - drop:.4f}"
+    )
+    assert z[turned].min() == pytest.approx(-d, abs=1e-6), (
+        "the turn-down did not run the full depth of the reveal"
+    )
+
+    west = turned & (x.mean(axis=1) < 1.0)
+    east = turned & (x.mean(axis=1) > 1.0)
+    assert west.any() and east.any(), "only one side of the slot turned down"
+    for side, near, out_ in ((west, 0.8, -1.0), (east, 1.2, 1.0)):
+        span = x[side]
+        inner, outer = near + out_ * -d, near + out_ * drop
+        assert min(span.min(), span.max()) == pytest.approx(min(inner, outer), abs=1e-6)
+        assert max(span.min(), span.max()) == pytest.approx(max(inner, outer), abs=1e-6)
+
+
+def test_a_turn_is_refused_where_the_skin_already_stands_proud_of_the_arris():
+    """A band turns only where there is a gap to close.
+
+    A wall standing out of the face a drip runs along poses the same arris the
+    scupper does — a covered face meeting the receiving plane at right angles,
+    at the free end of the drip's run — and nothing local to the vertex tells
+    them apart. What differs is which way the covered face looks: at the scupper
+    it faces back along the turn, so the skin's edge is `distance` on the far
+    side of the arris and the band spans the gap; here it faces along the turn,
+    the skin already stands `distance` past the arris that way, and the outer
+    line falls **behind** the edge it would spring from.
+
+    So the band is not placed at all where `drop` is the shorter of the two, and
+    where it is the longer the band is exactly the difference — the part of the
+    drip the skin does not already cover. Both wall ends of the live bake are
+    the first case, and the attempt this rule replaces put a band 30 mm off the
+    substrate at each of them.
+    """
+    parts = [
+        substrate.prism((0.0, 0.0, 0.0), (1.0, 0.4, 1.0)),
+        substrate.prism((1.0, -0.3, 0.0), (2.0, 0.4, 1.0)),
+    ]
+    d = 0.05
+
+    def covered(faces):
+        return (faces.normals[:, 2] > 1e-6) | (
+            (faces.normals[:, 0] < -1 + 1e-6)
+            & (np.abs(faces.centres[:, 0] - 1.0) < 1e-6)
+        )
+    for drop, width in ((0.03, None), (0.12, 0.12 - d)):
+        skin = skin_over(
+            parts, d, keep=covered,
+            lap=lambda faces: np.abs(faces.normals[:, 2]) < 1e-6,
+            drop=drop, out=0.0,
+        )
+        front = np.abs(skin.triangles[:, :, 1] + d).max(axis=1) < 1e-6
+        z = skin.triangles[front][:, :, 2]
+        turned = z.min(axis=1) < 1.0 - drop - 1e-6
+        if width is None:
+            assert not turned.any(), (
+                f"a band turned down at drop {drop} where the skin already "
+                f"stands {d} past the arris: the outer line is behind the edge "
+                "it springs from"
+            )
+            continue
+        assert turned.any(), f"no band turned down at drop {drop}"
+        span = skin.triangles[front][:, :, 0][turned]
+        assert span.max() - span.min() == pytest.approx(width, abs=1e-6), (
+            "the band is not the part of the drip the skin leaves uncovered"
+        )
