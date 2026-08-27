@@ -3,7 +3,7 @@
 Offsetting a **substrate** (an assembly of solid parts) outward by a fixed distance to
 produce **skins**: open surfaces that cover a chosen subset of faces.
 
-Last worked: 2026-08-26.
+Last worked: 2026-08-27.
 
 `CLAUDE.md` has the commands, the architecture and its invariants, and the tolerance
 rationale. This file is the running log: what the geometry currently is, what was tried
@@ -13,51 +13,361 @@ and rejected, and what is still open.
 
 ### Where to pick up
 
-**Steps 1 and 2 of the four are done.** `_trim_beside` is backed out, and cause 1 is fixed by
-growing the cheek set up the stack — see *"What landed on 2026-08-25"* and *"Cause 1 fixed: the
-cheek set grows up the stack"*. The cheek selection in `cladding_faces` stayed throughout, and the
-lining's head now sits exactly where Duncan said it should, on both cheeks.
+**The fourth substrate arrived on 2026-08-26 and now builds, warning-free.**
+`deck9-parapets-caps-cornices-clt-insulation-unit7-walls-headhouse.obj` — 35 objects, the
+student-house deck 9 with its L7 walls under it, the same headhouse on top, **two** scuppers, and
+a second corniced wall. Duncan: *"The geometry is familiar, I am hoping this will skin without
+incident. A real test for our program."* It was not without incident: **seven** defects, all in
+this module, all fixed and pinned. See *"The deck 9 bake: what it found"* below.
 
-**All four of Duncan's cheek corrections now hold**, and the build prints **no warning on any
-substrate**: zero crossings, nothing buried, nothing self-crossing. Cause 2 landed the same day as
-cause 1 — see *"Cause 2 fixed: a knife has a side"*.
+    Membrane   offset   8 mm | residual 9.89e-17 | clearance  7.3149 mm | 215 -> 163 triangles
+    Cladding   offset  85 mm | residual 1.10e-15 | clearance 74.8901 mm | 215 -> 126 triangles
+    Masonry    offset 150 mm | residual 1.78e-15 | clearance 150.0000 mm |  12 ->   2 triangles
 
-**The turn-down is built, and corrected.** Step 4, the last of the four, landed 2026-08-26 — see
-*"The turn-down: a band that turns keeps its own price"*. The skirt turns down both sides of the
-scupper, 115 mm wide (85 across the reveal plus its own 30 mm drip), from the coping's offset down
-to the sill's offset at `z = 14.580`, and it does not return across the bottom. Duncan read the
-first build back and asked for the last 5 mm of it — *"E84, 86 should be 5 mm lower, even with
-E70, 71"* — which is the band running past the corner where the receiving face is buried by the
-roof taper, to the end of the arris the cheek gives it. Done the same day. **All four of his
-corrections are now built and there is nothing queued behind this.**
+No self-crossing, nothing crossing into the substrate, nothing buried, no pair of skins crossing.
+The three earlier substrates are unchanged to the figure — 173172 mm², 3304 mm², 145 → 115,
+142 → 86, clearance 7.8808 and 74.8903, separation 66.889 — and the suite is 131 → 138.
 
-The two things the previous attempt skipped were measured first, and both mattered:
+**`Headhouse-N`'s nib needs no re-modelling after all.** Duncan chose on 2026-08-26 to cut it and
+re-export rather than build a vertex split, and that is now moot: the fold at `v53` was the
+membrane covering the inside of the headhouse, and once the deck under the headhouse is read as
+the floor it is, the membrane never goes near that pinch. The substrate builds as exported. The
+vertex split stays undone and unqueued — see *"The open question"* for what it would be, and note
+that nothing now poses it.
 
-- a building corner's two drips **do** share a union vertex index — v13, v26, v51, v82, v113,
-  v124, v130 on the live bake, one index and one offset point each — so `carry_on`'s existing
-  free-end guard already tells a corner from the scupper. The failed gate over-fired because it
-  was in the *seam loop*, which has no such guard.
-- `_room` along the turned direction reads **1935 mm** at the scupper's upper corners and **0**
-  at its lower one, so it neither refuses the building corners nor allows the whole turn: a gate
-  was needed, and where `_room` is asked had to move.
+**The 771 mm² triangle buried in the cap plate is gone too**, and for a reason rather than by
+luck: it was a face of a **boolean flap**, not of the substrate. Duncan chose to leave it warned;
+`substrate.union` dropping the flap removed the face it stood on, and the cladding's clearance
+went 0.0006 → 74.8901 mm. Nothing was tolerated in the end.
 
-The measurement that actually settled it was a third one nobody had asked for. See the section.
+### Open, and first thing tomorrow
 
-Also settled from Duncan reading the bake back: the square 230 mm notch cause 1 produced is
-**right**, and his 2026-08-22 *"V62 should remain where it is"* is superseded. Do not restore the
-400 mm rim.
+**The cladding skirt around the deck is fixed** — Duncan described the two errors on 2026-08-27
+and both are closed. See *"The skirt around the deck, and the two rules under it"* below for the
+diagnosis, the fixes and what they moved.
 
-**The `clearance` verdict is settled**: Duncan took option D on 2026-08-25 — `clearance` is a
-printed number, and `measure.intersects` + `measure.buried` are what the build asserts. See *"The
-clearance verdict"*. It turned up something nobody had measured: **the two skins cross** on the
-cheek lining, which is cause 2 seen from the other side. The old `0 / 0` crossings figure
-predated the cheeks being clad.
+**One thing was found on the way and is left for Duncan to call**: `L7-alleyback-W` reads its own
+corner return as a facade, and the cladding puts an 87 x 250 mm panel on it at `y = 7.2069`,
+`z 8.065…8.315`. The cause is `_next_lift`, not the skirt — see *"The lift that is not a lift"*.
+It was there before this session and was hidden inside a panel the false cheek pair drew over it;
+removing that panel is what left it standing alone. Nothing else on this substrate is open, and
+all four builds are warning-free.
 
-**The review debt is paid.** `/code-review high` ran over both landing commits, and
-`/code-review high skin/` over the whole directory on 2026-08-25 — which is what finally reached
-`clean._sheets`, `dissolve`, `close` and `offset._tiling` / `_rings` / `_retiled`, none of which
-had ever appeared in a diff. Eight findings, all verified, all fixed bar one that is Duncan's
-call (the fourth bake, in Open items). See *"What landed on 2026-08-25"*.
+### The skirt around the deck, and the two rules under it (2026-08-27)
+
+Duncan, reading the deck 9 build back: *"The cladding skirt is inconsistent around the deck. It is
+correct around the headhouse. It is correct to the east of the deck scupper. To the west of the
+scupper the skirt descends all the way down to the ledge (E44) instead of stopping at 12.792 and
+turning down the scupper as it did correctly to the east. It is correct on the west parapet. To the
+north, instead of stopping at 12.792 it descends all the way down to the ledge (E31) then covers
+the ledge (E54). On the east parapet it stops correctly (E121 at 12.792) then continues all the way
+down (E57) then covers the ledge (E55). It looks like the rule is being interpreted differently in
+slightly different contexts."*
+
+He was right about the last sentence, and it was two rules rather than one — the two errors his
+2026-08-26 note promised. What made it look like four different behaviours is that two *accidents*
+masked the second error on two of the four parapets.
+
+**Error 1: two corner returns read as a scupper.** `_opening` pairs cheeks by the sign alone — two
+vertical faces of one body looking **at** each other rather than away. `Parapet-Deck9-W` carries
+the deck's north-west and south-west corner blocks, because the north and south parapets stop at
+`x = 20.52` and it runs on to fill both corners. So one body holds a return on `y = 0.1881` and
+another on `y = 7.2919`, the two planes that face each other across the deck, 7.1 m apart. They
+paired. `cheeks` is then grown along the surface, so **both whole planes** were claimed the length
+and width of the building — the inner faces of the north and south parapets, the L7 walls' faces
+below them, and the cap plates' reveals — and `cladding_faces` covers `cheeks & WALL`. A covered
+face is skinned over its whole outline, so the skirt was not a drip that ran too far: it was the
+inside of the parapet clad head to foot, mitred onto the ledge at the bottom.
+
+The missing half of the test is the word **through** in `_opening`'s own first sentence. A reveal
+is cut through its wall and so comes through the union flanked by the wall's two faces — an opposed
+pair looking *away* from each other, which is a thickness by the same sign the pairing uses. The
+scupper's cheeks are flanked by their parapet's exterior and interior faces, 248 mm apart; a corner
+return is flanked by the two faces turning that corner, a quarter turn apart, and by nothing
+opposed at all.
+
+The flanking **pair** is what carries it, and a first attempt that asked only for *some* opposed
+pair was accidental rather than structural: a court's inner face is flanked by an opposed pair too
+— the returns at its two ends — and passes. What separates them is that those look *toward* each
+other, because what lies between them is the court and not a wall. `tests/test_offset.py` poses a
+plain rectangular ring wall, asserts it reads as no opening at all, then cuts a real slot through
+one side of the same body and asserts the slot's cheeks come back.
+
+Measured on the deck bake: 45 cheek faces → 18, which is exactly the two scuppers' four reveals and
+the plate reveals the growth adds to them. 0 → 0 on the other three substrates; the single cheek
+pair each of the two headhouse bakes poses is unchanged.
+
+**Error 2: "every wall top" claimed the ledge.** The ledge at `z = 11.5344` is an upward face of a
+wall, so the cladding covered it — and that is why the skin then ran out across it under the
+membrane. It is `_rules`' own sentence read the other way round: a wall **thicker below the roof
+than above it** presents its roof's own datum, not a coping. `cladding_faces` now subtracts it,
+named by the very relation that elects the wall to be climbed, and the membrane still covers it on
+that same election.
+
+Both halves of that are load-bearing. *The roof runs in* is what makes it roof rather than coping.
+*The wall carries on above it* is what makes it a step rather than a top — and it is not
+belt-and-braces: a coping shares an edge with the top of a cornice beside it, and an **ungrouped**
+cornice is its own element and classifies `ROOF`, which is the `_stacked_box` fixture in
+`test_the_masonry_runs_the_whole_face_below_a_cornice_not_one_lift`. On the roof clause alone that
+test's cladding came back empty and the build raised in the base trim. The seed is grown along the
+surface through the wall tops, because the union triangulates a ledge and only the triangles on the
+roof's own edge touch it.
+
+**The two accidents that hid it.** The south ledge was already gone, taken out with the scupper's
+sill as *the floor of an opening* — `floor` is read per coplanar region and the sill and the ledge
+are one region of one part. The west ledge was already gone too, taken out by the false cheek pair
+standing over it. So the rainscreen sat on the north and east ledges and not on the other two,
+which is the inconsistency Duncan was reading, and neither exclusion had anything to do with what a
+ledge is.
+
+**What error 1 was doing for the membrane, and where that belongs.** Fixing the pairing alone broke
+the membrane: 7 crossings into the substrate and `clearance 7.3149 → 0.0002 mm`. The corner returns
+lie *across* their wall's fall, so `wall_faces` calls them ends and neither exterior nor interior
+reached them; the membrane was covering them as `cheeks & climbed`, and with the cheeks gone it
+lapped a 205 mm upstand onto them instead. That is a real requirement wearing the wrong rule's
+clothes. **An interior wraps a corner the same way a facade does**, and `wall_faces` already grows
+ends into the exterior set for exactly that reason — it now grows them into the interior set as
+well, exterior first and keeping precedence. The membrane then came back **bit-identical** to
+before: 215 → 163 triangles, 214901 mm², clearance 7.3149, 81 border edges.
+
+**Measured, deck bake.** Cladding 215 → 193 raw triangles, 126 → 121 cleaned, 107 → 87 raw border
+edges, `clearance 74.8901` unmoved, no warning. The skirt is now a 33 mm band from the coping's
+offset down to `12.792` on all four parapets, and the only cladding below that anywhere on the deck
+is the two turn-downs at the scupper — `x 15.157…15.275` and `16.305…16.423`, each `85 + 33` wide,
+mirrored, both running to the sill at `11.6194`. Before the fix only the east one existed; the west
+one was buried inside the full-height panel. The other three substrates are unchanged to the
+figure, and `_opening`, `wall_faces` and the ledge subtraction each move **nothing at all** on them
+— 0 faces, measured on all three.
+
+Four tests, all four red before the fixes: the courtyard-and-slot pair in `tests/test_offset.py`,
+the ledge and coping on a stepped-parapet fixture there, and two on the deck bake in
+`tests/test_import.py` — the whole run of the skirt, and the corner returns reading as interior.
+
+### The lift that is not a lift (2026-08-27, open)
+
+Found while checking what the skirt fix left behind, and **not fixed**: it is a `_next_lift`
+question, which decides every wall's exterior and interior, and Duncan should choose whether to
+spend that.
+
+`L7-alleyback-W` (`x 20.52…20.9`, `y 0…7.54`) comes out with `rise = (0.604, -0.797)` — a diagonal,
+which is the average of two parapets' falls. `_next_lift` accepts three lifts on it:
+`Parapet-Deck9-W`, which genuinely is its next lift, and `Parapet-Deck9-N` and `-S`, which are the
+returns at its two ends. Those two pass the flush-on-both-faces test only because the pair is made
+up **across two bodies of one element**: the parapet supplies `x = 20.52` and its own cap plate,
+which overhangs to the building's outer plane, supplies `x = 20.9`. The docstring's own reasoning
+against a neighbour's cap plate — *"It is not flush with y = 7.12, so it is not another lift"* — is
+defeated by the parapet standing beside it in the same element.
+
+What it costs today is one panel: the wall's own corner return at `y = 7.2919`, `z 8.065…8.315`,
+`x 20.52…20.6069`, reads `facing = 0.797 > fall` and so is a facade rather than an end, and the
+cladding covers it. With `rise = (1, 0)` it would read as an end, be grown into the **interior** by
+the rule this session added, and take a lap instead. `L7-courtfacing-E` has the same shape of
+answer (`rise = (-0.154, -0.988)`, two lifts, one of them the north parapet across a zero-area plan
+overlap) and no visible defect. The alley elevation itself is saved by the growth: `x = 20.9` reads
+as an end at `facing = 0.604` and is grown into the exterior set off `Parapet-Deck9-W`'s facade.
+
+The shape of a fix is to require the opposed pair to be held by one body, or to require a plan
+overlap of substance rather than of bounds. Both reach every wall in every substrate, so neither is
+a small change.
+
+### The deck 9 bake: what it found
+
+The substrate is `deck9-parapets-caps-cornices-clt-insulation-unit7-walls-headhouse.obj`, exported
+2026-08-26 and matching the Blender scene object for object. What it poses that no earlier bake
+did: **cap plates mitred at the corners** rather than overlapping, a **cornice running the full
+width of an elevation** and past the returns at both ends, a **wall cantilevered out over the
+court** above `z = 12.595`, and a roof plane carrying an insulation CLT's end face.
+
+Seven defects, each found by running it, each fixed and pinned. The first four came out of
+getting it to build at all; the last three out of Duncan reading the result back:
+
+1. **A cornice at a corner picked the wrong host.** `Cornice-Deck9-N` runs 12.4 m over an 11.6 m
+   parapet and over the 380 and 420 mm ends of the two parapets returning at its ends. It stands
+   proud of all three and passes every condition against all three, and all three are 1856 mm
+   tall, so *"the tallest wins"* had nothing to choose with and kept the first in the file. The
+   union of that 380 mm return with the band read horizontality 0.235 — `WALL` by area, `ROOF` by
+   the thinnest OBB side — and `group_caps` stopped the build. Now the host is the body **backing
+   most of the band's run** (11.6 m against 0.38), height breaking a tie. Every cornice on every
+   other substrate here has exactly one candidate, so nothing else moved.
+
+2. **A cap plate at a corner was claimed by two walls and went to the wrong one.**
+   `CapPlate-Deck9-S2` runs 4510 mm along the south parapet and lands in a 248 mm rebate at the
+   head of `Parapet-Deck9-W`, flush with both faces of *that* rebate, so `_next_lift` accepts it
+   for both walls. `group_caps` assigned inside the loop, so the last element in the file won, and
+   the plate joined the return: `Parapet-Deck9-W` then read horizontality 0.204 and `Faces.roles`
+   refused it. Claims are now collected and the plate goes to the wall backing most of it in plan,
+   1.025 m² against 0.094 m². One plate contested out of ten; the rest are unchanged.
+
+3. **`facade_offsets` decided per facade-face where it had to decide per plane.** The masonry
+   mitres onto a neighbour's plane, and the neighbour's *facades* are what identify that plane —
+   but the assignment was also scoped to the exterior set, so a face on the plane that is nobody's
+   facade kept `mine`. `Roof_Deck9_CLT`'s end lies in the court elevation at `x = 8.5` between two
+   rainscreen-clad walls, and the plane was asked for 0.085 and 0.150 at once at the vertex it
+   shares with the parapet above: `two offsets on one plane at vertex 14`. The identification is
+   still made off the neighbour's facades; the assignment now reaches the whole plane, minus what
+   this skin covers — which is the split that is *meant* to raise, and still does.
+
+4. **`clean`'s `dissolve` cut a corner off the cladding.** GEOS returned one ring with two
+   consecutive coordinates 1.78e-15 m apart, where several rectangles meet at a point. They weld
+   to one vertex, each then reads as straight through *itself* — its ring neighbour is the same
+   point, so the cross product is exactly zero — and both were dropped. An L-shaped ring came back
+   as a diagonal and the cladding **gained 0.910 m²**, on the one pass whose whole claim is that it
+   changes no outline. `build.py` printed it as `-904982 mm2 of coplanar overlap removed`, a
+   negative that is worth reading as the alarm it is. Consecutive repeats are now dropped where the
+   ring is built. `tests/test_import.py` states the property on both committed bakes.
+
+5. **The membrane covered the inside of the headhouse.** Duncan, reading the build back:
+   *"The selected faces in Membrane should not be covered. They are on the inside of the headhouse
+   walls."* Seven faces — the interior faces of `Headhouse-N`, `-S` and `-W`, two laps onto
+   `Headhouse-E`, and the deck itself at `z = 11.195` between them. One cause under all of it:
+   `Roof_Deck9_CLT` runs on under the headhouse with the insulation cut away around it, so its
+   bare top read as a roof surface, and a roof surface elects the walls it runs into. **A roof is
+   a roof where it has the sky over it** — `_under_cover` casts straight up from the face and
+   reads whether the substrate is hit. One part, one role, two surfaces: no test on the part could
+   have separated them. 2 faces on this bake, none on either headhouse bake.
+
+6. **The membrane stopped at the roof's edge on every deck 9 parapet.** Duncan: *"Horizontal
+   ledges like F11 in Substrate_Parapet-Deck9-S should be covered with membrane. Membrane then
+   continues up the parapet wall and covers the cap plates like on the headhouse."* The parapet is
+   420 mm thick to `z = 11.5344` and 248 mm above it, so the roof build-up butts into the thick
+   part and what it meets at its own level is the **top** of that thickening — a 172 mm ledge,
+   coplanar with the finished roof and continuous with it. It touches no vertical face of the
+   parapet at all, so `interior & meets` elected none of the four, and their copings went bare.
+   **A roof runs into a wall through a ledge as well as through a face.** Both halves of Duncan's
+   sentence are that one election: the ledge and the coping are both "every upward face of a
+   climbed wall", the cap plate being one body of the element. Nothing is elected on either
+   headhouse bake, where the build-up sits on the walls and meets the parapets face to face.
+
+7. **The union came back in three pieces.** Two **flaps**: four triangles each, two facing each
+   way, enclosing nothing, at two of the four cap-plate mitres — the shared face manifold3d left
+   behind where two plates meet exactly on one plane. Invisible until fix 6 climbed the parapets;
+   then the membrane covered both sides of one and `_reconcile` refused the vertex, which is the
+   fold `planar_offset`'s own runaway guard names "a fragment a boolean left behind". Volume over
+   area separates a flap from a solid with nothing to tune — 197 mm of mean thickness against 1.8
+   and 12.6 **nm**, on a substrate snapped to a 1 µm lattice — so `substrate.union` drops them and
+   says how many in `metadata["flaps_dropped"]`. It also took the cladding's buried triangle with
+   it: that face was the flap's, not the substrate's.
+
+#### `Headhouse-N`'s nib, and `v53` — closed, and how
+
+This was the blocker for most of 2026-08-26, and fixes 5 and 7 dissolved it. It is written up
+because the diagnosis is still the right one to reach for the next time a fold refuses, and
+because what closed it was **not** the answer that had been chosen.
+
+With the first four fixes in and none of the later ones, the membrane raised at
+
+    the surface folds back on itself at vertex 53 [8.5, 2.85, 12.595]: it lies on planes
+    facing [-1, 0, 0] and [1, 0, 0] ... 6 of its faces are covered by a skin
+
+and it is not a sliver. The geometry is real, and it is a **point** of zero thickness:
+
+- `Headhouse-E` is the west wall, `x 8.08…8.5`, and it begins at `z = 12.595` — it cantilevers out
+  over the court, with nothing under it in this export. Its face at `x = 8.5` faces **+x**, into
+  the headhouse: the interior face of that wall.
+- `Headhouse-N` below that level stops at `x = 8.5`, flush with where `Headhouse-E`'s inner face
+  will be. Its face at `x = 8.5` faces **−x**, out over the court: the wall's end.
+- The two meet at exactly one point, `[8.5, 2.85, 12.595]`, coplanar and opposed. Material is on
+  the −x side above it and on the +x side below it.
+
+The membrane reaches both sides, and legitimately. It covers `Headhouse-N`'s interior face at
+`y = 2.85` and turns concavely onto `Headhouse-E`'s inner face — an ordinary internal corner of a
+room. And it covers a small rebate face at `y = 2.6781` and turns concavely onto `Headhouse-N`'s
+end — that rebate is the **nib**: a 420 x 248 x 245 mm block hanging below the cantilever's north
+edge, `y 2.43…2.6781`, `z 12.35…12.595`, isolated in space, its numbers borrowed from elsewhere in
+the model (248.1 mm is the deck 9 cap plate's width, 245 mm a CLT thickness). Both concave, so
+`_receivers` has nothing to choose with — its rule is *concave beats convex* — and it hands the
+contradiction to `_reconcile`, which is what the docstring says it does where a pair is concave on
+both sides.
+
+`_knife_side` cannot help: it substitutes the far half's normal only where the skin **dresses
+nothing of that body**, and here it dresses both.
+
+Two ways out were costed, and Duncan chose the first — cut the nib and re-export. **Neither was
+needed.** The membrane only reached the rebate face because it was climbing `Headhouse-N` at all,
+and it was climbing it because the deck under the headhouse read as a roof. Fix 5 stops that, the
+rebate face is no longer covered, and the pinch at `v53` is simply not somewhere this skin goes.
+The substrate builds as exported. What follows is what the two ways out were, kept because the
+second is still the honest general answer if a skin ever does have to dress both sides of a pinch.
+
+- **Change the substrate.** Measured, not guessed: an OBJ with `Headhouse-N` rebuilt as the plain
+  L-prism it would be without the nib — every other object byte-identical — builds all three
+  skins, no self-crossing, nothing crossing into the substrate, residuals 1.35e-16 / 4.15e-15 /
+  1.61e-15. The nib is the whole cause. (An earlier probe that replaced the part with a boolean
+  union of two boxes threw up other errors; that was the probe, not the geometry. The surgical
+  rewrite is the one to believe.)
+- **Split the vertex.** The correct general answer: where the substrate pinches to zero thickness
+  on a plane, the two sides are separate sheets and the shared vertices should be duplicated, one
+  per side, each solved from its own side's planes. That subsumes `_knife_side`, which is the
+  one-sided special case of it. It is invasive — `planar_offset` returns `faces=mesh.faces.copy()`
+  and `_tiling` and `_lap` both index `skin.vertices` with `body.faces`, so a split changes the
+  indexing every one of them shares. One instance so far.
+
+Deferring is a real answer here, and there is exactly one instance.
+
+#### What `/code-review high` found on top
+
+Five findings on the same diff, all verified against the code before acting, all addressed.
+
+- **`buried` was not deterministic**, which made the verdict itself flap: 3 and 4 in alternate
+  runs over one fixed cladding mesh, with nothing about the geometry changing. `trimesh.contains`
+  casts a ray in a random direction and a sample *on* a part's surface resolves whichever way the
+  ray leaves. That is no longer a rare reading — `facade_offsets`' zero branch puts skin vertices
+  in a substrate face on purpose — and a verdict that moves without the geometry moving is
+  precisely what `clearance` was demoted for on 2026-08-25. Containment is now confirmed against
+  the distance to the surface, at `SURFACE_TOL = 1e-6`: the union's float32 floor, not a weld
+  radius. The sample that flapped sat **6.390e-07 m** from `CapPlate-Deck9-N`, on the plane its
+  cornice shares. The deck bake now reads a steady 3.
+- **The cross-skin verdict read the raw meshes alone.** The per-skin verdict is deliberately taken
+  on both, because `clean` invents a gusset and a verdict is about what ships; the pairwise loop
+  was not, which left exactly the gap that change closed. The membrane carries 3459 mm² of gusset
+  on the live bake. Both now.
+- **`cladding_laps`' docstring cited a guard that fix 3 above removed.** It said the `_lap` hazard
+  was unreachable "because an interior face is never in the exterior set `facade_offsets` moves" —
+  true until the miter widened from the neighbour's facade *faces* to the whole plane. What keeps
+  it unreachable is now a measurement and the docstring says so: across all four substrates, no
+  face any skin may lap onto is a face `facade_offsets` moves (0 of 2, 0 of 12, 0 of 102, 0 of
+  138), and `Masonry` is safe by construction with `lap: None`. Check it again if either predicate
+  widens.
+- **`others` is every sibling skin, not every cladding system**, so the membrane is a miter
+  *target* as well as being exempt as a miter *taker*. What stops the cladding taking an 8 mm
+  miter onto it is that `membrane_faces & exterior` is 0 on every substrate — geometry, not
+  construction, and `membrane_faces` claims cheeks while `wall_faces` grows a wall end into the
+  exterior set, so a scupper cut at a building corner would reach it. Measured and written down,
+  not fixed: a system list here would be a second place saying what `CLADDING_SYSTEMS` says.
+- **`check_seeds` exempts every zero, not only a zero `out`**, and three places said otherwise.
+  Load-bearing now rather than academic: `Masonry.drop` is authored `0.0` beside `Cladding.out`,
+  and they would collide as equal seeds if the claim were true. Corrected in `parameters.py`,
+  `skin-parameters.yaml` and CLAUDE.md.
+
+The review also confirmed independently that the deck bake's 3 cladding crossings are **not**
+caused by the `facade_offsets` widening — the old mask gives the same 3 — and that `v53` is the
+code correctly refusing a substrate condition.
+
+#### The cap-plate mitre step — also closed
+
+Behind the fold sat one warning: the cladding buried a single 771 mm² triangle at
+`x 8.68…8.82, y −0.05…0.14, z 12.806…12.825`, on the mitre plane at the west end of
+`CapPlate-Deck9-E`. Duncan chose to leave it warned, on the grounds that nothing in the face rules
+can tell a 19 mm step in a coping mitre from a facade. That turned out to be the wrong reading of
+it, and the record below is kept for the diagnosis rather than the conclusion: **the face was not
+the substrate's.** The two plates mitre exactly and share that face; what stood there was the
+boolean flap of fix 7, and dropping the flap removed it. Cladding clearance 0.0006 → 74.8901 mm,
+buried samples 3 → 0.
+
+#### What the mitre actually is, since two readings of it were wrong
+
+Worth recording, because both wrong readings were plausible and the measurement settled it in one
+line. `CapPlate-Deck9-E` and `CapPlate-Deck9-N` **mitre exactly**: they share the four corners
+`(8.5, −0.16, 12.806/12.833)` and `(8.7481, 0.1881, 12.806/12.825)`, their boolean intersection is
+−4.6e-18 m³, and the two mitre faces coincide face for face at 2965 mm² each way. There is no
+wedge, no step, and nothing proud of anything — the first reading, that their different falls
+leave a sliver exposed, was wrong. Nor is the exposed face a facade the rules over-claim, which
+was the second reading. It is the **contact itself**, which manifold3d kept as a detached flap
+instead of dissolving, and `_owner` then split between the two plates because a coincident face
+has no nearest part. Four faces on one plane, two each way, on the same four vertex indices.
+
+The lesson for next time: when two coplanar opposed faces turn up, check `union.body_count`
+before reasoning about what the substrate is doing.
 
 ### What landed on 2026-08-25
 
@@ -3727,6 +4037,84 @@ item rather than closing it: what is still missing is a substrate that poses **t
 assumes it will — the deck-9 opening carries a **mouth** cornice (`cornice.projection.court-facing`),
 which is the scupper kind and should be refused by the flushness test, but that is a prediction
 until an export is read.
+
+## A review round on the ledge branch: one fix, two divergences written down (2026-08-27)
+
+`/code-review high` over the branch diff and the working tree. Three findings, all real as
+statements about the code; one of them is a defect and is fixed, and the other two are places
+where two readings of one sentence have drifted apart without any substrate here noticing. Both
+are now stated where the code is, because the alternative is that they are rediscovered by a
+review a third time.
+
+### A face with no area was an unsatisfiable hard constraint
+
+`_opposed` was hardened earlier on this branch to drop a zero-length normal — *"a face with no
+area states no plane"* — but `_vertex_planes` still returned that `[0, 0, 0]` row, and
+`planar_offset`'s constraint loop turned it into an equation: `abs(n_z) < tol` reads a zero normal
+as **level**, so it went into `hard` with rhs `distance`. The row says `0 . t = distance`.
+
+It does not move a vertex, and that is what makes it worth fixing rather than shrugging at. The
+solve still places the surface correctly; what it destroys is the readout. `offset_residual` is
+`max|H t - h|`, so it is pinned at `distance` and can never fall below it, and being a max it then
+**masks** a genuine violation anywhere else in the body. The residual is the one number this build
+asserts nothing about but everybody reads: above ~1e-9 means something broke.
+
+Measured on a unit cube with one degenerate face appended:
+
+| | `offset_residual` |
+| --- | --- |
+| clean | 2.26e-17 |
+| one degenerate face | 0.01 — `distance`, exactly |
+
+Dropped in `_vertex_planes` now, where `faces` and `normals` are still in step so `offsets` keeps
+its per-face join. The live bake is unmoved to the digit: 145 -> 115 and 142 -> 86 triangles,
+clearance 7.8808 and 74.8903 mm, the same four folds. No substrate here poses a degenerate face —
+the two guards this branch already grew are the evidence that manifold3d's float32 hands them
+over — so the property is pinned by a test on a cube rather than by a bake.
+
+### The ledge test is wider in `_rules` than in `cladding_faces`, and stays wider
+
+`cladding_faces` asks two things of a ledge: the roof runs into it, **and** the wall carries on
+above it. `_rules` asks only the first. The second half is not decoration — a coping beside an
+*ungrouped* cornice shares an edge with that cornice's top, and a lone cornice classifies `ROOF` —
+so on the first half alone such a coping reads as a ledge, and in `_rules` that elects the whole
+wall `climbed`. `membrane_faces` would then take its interior face, its tops and its cheeks off an
+election no roof made.
+
+Measured both ways on all five substrates: the elected element set is **identical** (rig 2, deck
+bakes 8 and 4, headhouse 4, live bake 8), and the divergent face set `tops & ~under & meets` is
+empty on every one of them — no wall top that a roof face touches is the top of its own element
+anywhere here. So it is latent, and it is recorded at `_rules` with the condition that would make
+it bite and the direction to fix it in: add `& under` there, and do **not** narrow
+`cladding_faces` to match, where the second half is load-bearing today.
+
+### The `< 3` fallback in `clean` restores the duplicates it just removed
+
+The ring dedup added on this branch is right and fixes the 0.910 m² L-ring. Its fallback — fewer
+than three distinct points, so put them all back — hands `_corners` the very pathology the dedup
+removes: with `one[k - 1] == one[k]` the cross product is exactly zero and the ring registers no
+corner at the point it doubles back from. Deduped, the same point comes back with `span == 0` and
+**is** registered, which is the conservative answer. The cost of the permissive one is a
+T-junction, which is what this pass exists not to make.
+
+It fires. Once, on the live bake's membrane: an `[a, b, a]` spur between (8.072, 5.293, 14.619)
+and (8.072, 5.177, 14.503). So the question is not hypothetical and was measured rather than
+argued — run both ways, `clean(dissolve=True)` gives **identical** output on all three skins, 145
+-> 113 triangles, 59 -> 35 border edges, 15 -> 0 T-junctions, the same area to 1e-6 mm², because `a`
+takes its corner vote from another ring anyway. (`build.py` says 145 -> 115 for the same skin: it
+also asks for `close`, and the tear takes two gussets.) Left as it is, with the finding written at
+the branch. If a substrate ever poses a spur whose point has no other vote, **drop the ring** —
+it encloses nothing, so dropping removes the false vote without deleting surface, where restoring
+keeps a vertex that nothing corners at.
+
+### One thing the review raised that is not a finding
+
+`_lap` still reads a receiving face's offset plane as `planes[far, 3] + distance`, the skin's own
+scalar, while `facade_offsets` now moves a plane by a **neighbour's** allowance or by zero. That
+is the limit already recorded at `cladding_laps` on 2026-08-26, with the measurement that keeps it
+unreachable (0 of 2, 0 of 12, 0 of 102, 0 of 138 receivers). Repeated here only because two
+independent readers have now found it: it is the thing that breaks first if `cladding_laps` ever
+widens past `interior`.
 
 ## Open items
 

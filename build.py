@@ -275,6 +275,22 @@ def _next_lift(parts, elements, members) -> list:
     return lifts
 
 
+def _plan_overlap(parts, members, other) -> float:
+    """The plan area two groups of bodies share — how much of one backs the other.
+
+    A tie-break, and only ever that: both sides of every comparison it settles
+    have already passed a test of the geometry proper. Bounds are enough for
+    that, and are what the caller has; a diagonal wall's box overstates it, but
+    both candidates are overstated the same way and the answer is a comparison.
+    """
+    boxes = []
+    for group in (members, other):
+        plan = np.array([[parts[i].bounds[j][:2] for i in group] for j in (0, 1)])
+        boxes.append((plan[0].min(axis=0), plan[1].max(axis=0)))
+    span = np.minimum(boxes[0][1], boxes[1][1]) - np.maximum(boxes[0][0], boxes[1][0])
+    return float(np.prod(np.maximum(span, 0.0)))
+
+
 def _projection_axis(a, b):
     """The plan axis `a` stands clear of `b` on, or None if their footprints overlap.
 
@@ -331,8 +347,21 @@ def group_cornices(parts: list) -> list:
       `_next_lift` makes when it asks about faces "across this element's
       thickness".
 
-    Where several bodies qualify the tallest wins, since a cornice hangs on the
-    wall rather than on whatever else happens to touch it.
+    Where several bodies qualify, the one **backing most of the cornice's run**
+    wins, and height breaks a tie in that. A band runs along the face it hangs
+    on and past the returns at each end, so at a building corner it touches
+    three walls and stands proud of all three: `Cornice-Deck9-N` runs 12.4 m
+    across a 11.6 m parapet and over the 380 and 420 mm ends of the two walls
+    returning at its ends. All three are the same 1856 mm tall, so height alone
+    could not tell them apart and took whichever came first in the file — the
+    380 mm return — and the union of that wall with a band four times its own
+    length classified `ROOF` at horizontality 0.235 and stopped the build.
+    Overlap says what "hangs on" means: 11.6 m of the run is backed by the wall
+    the cornice belongs to and 380 mm by the one it merely crosses at the end.
+    It is measured across the run — the plan axis the band is *not* projecting
+    on — because along the projection axis every candidate is flush by
+    construction. Every cornice on every other substrate here has exactly one
+    candidate, so nothing but this corner is moved by the change.
 
     Two stamps come out of this as well as the regrouping. The cornice itself
     gets `metadata[CORNICE]`, because the two skins want different things and
@@ -371,9 +400,13 @@ def group_cornices(parts: list) -> list:
                 theirs[1][k] - theirs[0][k] for k in (0, 1)
             ):
                 continue  # projects further than the wall is thick: a wing, not a band
-            taller = theirs[1][2] - theirs[0][2]
-            if index not in hosts or taller > hosts[index][1]:
-                hosts[index] = (other, taller, outward)
+            # how much of the band this body actually backs, measured across the
+            # run. At a corner the returns back only their own thickness
+            run = 1 - axis
+            backed = min(mine[1][run], theirs[1][run]) - max(mine[0][run], theirs[0][run])
+            rank = (backed, theirs[1][2] - theirs[0][2])
+            if index not in hosts or rank > hosts[index][1]:
+                hosts[index] = (other, rank, outward)
 
     for index, (host, _, outward) in hosts.items():
         # the stamps come first and unconditionally. Being a cornice, and
@@ -455,6 +488,16 @@ def group_caps(parts: list, classify) -> list:
     for members in elements:
         roles[members[0]] = substrate.role_of(classify, [parts[i] for i in members])
 
+    # a plate at a building corner rests on the wall it runs along *and* on the
+    # return it crosses at its end, and continues both: `CapPlate-Deck9-S2` lies
+    # in a rebate at the head of `Parapet-Deck9-W`, flush with both faces of it,
+    # 380 mm of a 4510 mm run. So the claims are collected and the plate goes to
+    # the wall that **backs most of it in plan** -- 1.025 m2 against 0.094 --
+    # rather than to whichever element came last in the file, which is what an
+    # assignment inside the loop amounted to. Contested on exactly one plate of
+    # the three substrates here; everywhere else there is a single claimant and
+    # the answer is unchanged
+    claims = {}
     for members in elements:
         if roles[members[0]] != substrate.WALL:
             continue
@@ -464,8 +507,12 @@ def group_caps(parts: list, classify) -> list:
         for lift in _next_lift(parts, elements, members):
             if roles[lift[0]] != substrate.ROOF:
                 continue
-            for index in lift:
-                parts[index].metadata["object"] = owner
+            backed = _plan_overlap(parts, members, lift)
+            if lift[0] not in claims or backed > claims[lift[0]][1]:
+                claims[lift[0]] = (lift, backed, owner)
+    for lift, _, owner in claims.values():
+        for index in lift:
+            parts[index].metadata["object"] = owner
     return parts
 
 
@@ -573,6 +620,16 @@ def wall_faces(faces, fall):
     an end, and is grown into the exterior set. Part 1's +X end is exactly this:
     the same plane as part 2's +X facade, continuing it round the corner. Its -X
     end is not, and stays bare.
+
+    **And an interior wraps a corner the same way.** Four parapets round a deck
+    are one enclosure, and the wall that turns the corner presents its return on
+    the neighbour's interior plane, joined to it — `Parapet-Deck9-W` at both ends
+    of the deck. That is the inside of the enclosure continuing, and the membrane
+    lining it has to cover the corner as well as the runs. It reached those
+    returns until 2026-08-27 only because `_opening` was reading two of them as a
+    7.1 m scupper, which is not a fact about the enclosure at all; said here, it
+    is the same sentence as the facade's, and the exterior keeps precedence where
+    an end somehow joins both.
     """
     vertical = np.abs(faces.normals[:, 2]) < TOL
     exterior = np.zeros(len(faces.owner), dtype=bool)
@@ -594,7 +651,53 @@ def wall_faces(faces, fall):
         interior |= mine & (facing < -fall)
 
     ends = vertical & faces.of_role(substrate.WALL) & ~exterior & ~interior
-    return _grow_coplanar(faces, exterior, ends), interior
+    outside = _grow_coplanar(faces, exterior, ends)
+    return outside, _grow_coplanar(faces, interior, ends & ~outside)
+
+
+def _under_cover(faces, mask) -> np.ndarray:
+    """Faces with substrate over them — the ones that cannot see the sky.
+
+    A roof is a roof because it is the outside. The same slab can be both: the
+    student-house's `Roof_Deck9_CLT` is the deck 9 roof where the insulation and
+    the membrane sit on it, and the **headhouse floor** where it runs on under
+    the headhouse and the insulation is cut away around it. One part, one role,
+    two surfaces — so no test on the part can separate them and it has to be
+    asked of the face. Duncan, 2026-08-26, on seven membrane faces inside the
+    headhouse: *"The selected faces in Membrane should not be covered. They are
+    on the inside of the headhouse walls."*
+
+    Asked by casting straight up from the face and seeing whether the substrate
+    is hit. That is what "outside" means, and there is nothing to author but the
+    reading of a hit: one that rises less than `TOL` is the face catching its own
+    ray, or a neighbour in its own plane clipped at the shared edge, and anything
+    genuinely standing over a face is millimetres up at the very least. Filtering
+    on the hit rather than nudging the origin is the difference between a rule
+    and a fudge — a 1 µm nudge read **32** sloped faces as covered by themselves,
+    a 10 µm one read none of them, and neither figure says anything about the
+    building. The one that survives says a hit at zero height is not a hit.
+
+    Read at the face **centroid**, which is exact here rather than a sample: the
+    union splits a face wherever anything stands on it, so the deck's top comes
+    through already cut along the headhouse's walls, one face inside and another
+    outside. A roof only *partly* overhung — by a bridge landing on neither side
+    of it — would come through whole and be read by its middle. No substrate
+    here poses that.
+
+    Measured: 2 faces of the deck 9 bake, both `Roof_Deck9_CLT` at z = 11.195
+    inside the headhouse, and **none at all** on either of the other two.
+    """
+    which = np.flatnonzero(mask)
+    covered = np.zeros(len(mask), dtype=bool)
+    if not len(which):
+        return covered
+    origins = faces.centres[which]
+    where, ray, _ = faces.body.ray.intersects_location(
+        origins, np.tile((0.0, 0.0, 1.0), (len(which), 1)), multiple_hits=True
+    )
+    over = where[:, 2] - origins[ray][:, 2] > TOL
+    covered[which[np.unique(ray[over])]] = True
+    return covered
 
 
 def _rules(faces, fall):
@@ -611,6 +714,27 @@ def _rules(faces, fall):
     whole face — so the touching faces elect the wall, and the wall carries all
     of its own faces.
 
+    **A roof runs into a wall through a ledge as well as through a face.** Where
+    a parapet is thicker below the roof than above it, the roof build-up butts
+    into the thick part and what it meets at its own level is the *top* of that
+    thickening — an upward face of the wall, coplanar with the finished roof
+    surface and continuous with it. `Parapet-Deck9-S` is 420 mm thick to
+    z = 11.5344 and 248 mm above it, so the taper's top at 11.5344 shares an edge
+    with a 172 mm ledge and touches no vertical face of the parapet at all: on
+    `interior & meets` alone not one of the four deck 9 parapets was climbed, the
+    membrane stopped at the roof's edge and their copings went bare. Duncan,
+    2026-08-26: *"Horizontal ledges like F11 in Substrate_Parapet-Deck9-S should
+    be covered with membrane. Membrane then continues up the parapet wall and
+    covers the cap plates like on the headhouse."* Both halves of that are this
+    one election — the ledge is picked up by "every upward face of a climbed
+    wall" and the coping by the same rule, the cap plate being one body of the
+    element. It elects nothing new on either headhouse bake, where the roof
+    build-up sits on the walls and meets the parapets face to face.
+
+    A wall a roof merely **bears on** is not elected by this: what is tested is
+    the roof's *upward* face, and a deck resting on a wall top touches it with
+    its underside. The two are at different levels and share no edge.
+
     There is no `flanged` any more. It named the walls a roof runs into on the
     *outside*, and existed to hand those faces a turn-out and to keep them from
     also getting a skirt. Both of those are now `_lap`'s, read off the substrate,
@@ -619,14 +743,36 @@ def _rules(faces, fall):
     wall it does not cover, the lap turns it up without being told.
     """
     exterior, interior = wall_faces(faces, fall)
-    roof = _upward(faces.normals) & faces.of_role(substrate.ROOF)
+    upward = _upward(faces.normals)
+    # ...and only where it is the outside. See `_under_cover`: one slab is the
+    # roof where the sky is over it and a floor where the building is
+    roof = upward & faces.of_role(substrate.ROOF)
+    roof &= ~_under_cover(faces, roof)
     meets = faces.touching(roof)
     # elected per ELEMENT, not per body: the face that touches the roof belongs
     # to the inner leaf, and the top the membrane then carries over belongs to
     # the cap — different bodies of the same wall. Electing per body would climb
     # a leaf and stop at its flat top, leaving the cap bare.
     element = faces.element_of[faces.owner]
-    climbed = np.isin(element, np.unique(element[interior & meets]))
+    # the ledge test here is the **wider** of the two, and it is left so rather
+    # than fixed. `cladding_faces` reads the same sentence with a second half —
+    # the wall carries on above it — because a coping beside an *ungrouped*
+    # cornice shares an edge with that cornice's top, a lone cornice classifies
+    # `ROOF`, and on the first half alone the coping reads as a ledge. That
+    # applies here too: such a wall is elected `climbed` off its own coping, and
+    # `membrane_faces` then claims its interior face, its tops and its cheeks
+    # although no roof runs into it anywhere. Measured 2026-08-27 by running
+    # both: the elected element set is identical on all five substrates (rig 2,
+    # deck bakes 8 and 4, headhouse 4, live bake 8), and the divergent face set
+    # `tops & ~under & meets` is **empty** on every one of them — no wall top a
+    # roof face touches is the top of its own element anywhere here. So
+    # it is a latent divergence between two readings of one sentence, not a live
+    # defect — add `& under` here, computed as `cladding_faces` computes it, on
+    # the first substrate that puts an exposed cornice top beside the coping of
+    # a wall no roof reaches. Do not narrow `cladding_faces` to match this
+    # instead: there the second half is load-bearing today
+    ledge = upward & faces.of_role(substrate.WALL)
+    climbed = np.isin(element, np.unique(element[(interior | ledge) & meets]))
     return exterior, interior, roof, climbed
 
 
@@ -637,9 +783,15 @@ def _opening(faces):
     **at** each other, the cheeks, and where it does not run to the bottom an
     upward face between them, the sill. The two faces across a wall's thickness
     are also opposed, and so are the two ends of a wall, but both of those look
-    **away** from each other. That sign is the whole test, and it is the same
-    measure `_next_lift` takes when it asks for faces "across this element's
-    thickness". Nothing is authored.
+    **away** from each other. That sign is the same measure `_next_lift` takes
+    when it asks for faces "across this element's thickness". Nothing is
+    authored.
+
+    It is half the test and not the whole of it, which took a courtyard to show:
+    a wall turning both inner corners of one holds a return on each of the two
+    planes that face each other across it, and they face **toward**. So a cheek
+    must also be **cut through** its wall, reaching both of its sides — see
+    `through`, which is the other half of this function's own first sentence.
 
     Read per **body**, not per element, and that is not a detail. Group the
     scupper by element and the answer inverts twice over: the slot cuts through
@@ -672,6 +824,68 @@ def _opening(faces):
         regions.setdefault((int(part[f]), int(ids[f])), []).append(f)
     middle = {k: faces.centres[v].mean(axis=0) for k, v in regions.items()}
 
+    where = np.empty(len(part), dtype=int)
+    for number, members in enumerate(regions.values()):
+        where[members] = number
+    neighbours: dict[int, set] = {n: set() for n in range(len(regions))}
+    for u, v in body.face_adjacency:
+        a, b = int(where[u]), int(where[v])
+        if a != b:
+            neighbours[a].add(b)
+            neighbours[b].add(a)
+    keys = list(regions)
+
+    cut_through: dict[tuple, bool] = {}
+
+    def through(key) -> bool:
+        """Is this region a reveal — cut through its wall, side to side?
+
+        A reveal reaches both faces of the wall the opening is cut through, so
+        it comes through the union flanked by them: an opposed pair looking
+        **away** from each other, which is a thickness by the same sign this
+        function pairs cheeks with. The scupper's cheeks are flanked by their
+        parapet's exterior and interior faces, 248 mm apart.
+
+        This is the other half of "cut **through** a wall", and the half the
+        toward-facing test above cannot supply. Both are true of a scupper;
+        only the first is true of a courtyard, and a body carrying two opposite
+        corners of one — `Parapet-Deck9-W`, which turns at both ends of the deck
+        and so holds a return on each of the two planes that face each other
+        across it — read as a 7.1 m cheek pair without it. What that cost was not
+        a stray face: `cheeks` is grown along the surface below, so both planes
+        were claimed the whole way round the building and the cladding came down
+        the inside of every deck parapet to the ledge instead of stopping at its
+        drip. Duncan, 2026-08-27: *"It looks like the rule is being interpreted
+        differently in slightly different contexts."*
+
+        The sign is the whole of it here too, and a flanking **pair** rather than
+        a flanking face is what carries it: a court's inner face is flanked by
+        the returns at its two ends, which are opposed as well — and look
+        *toward* each other, because what lies between them is the court and not
+        a wall.
+
+        A **rebated** reveal — one stepped in the middle of the wall's thickness,
+        as a window's often is — reaches one side only and is refused here. That
+        is an under-claim rather than a wrong claim, it is posed by no substrate
+        yet, and the shape of the answer when one poses it is that the step's two
+        halves are one reveal continuing, which is what the growth below already
+        says about a plate split by a slot.
+        """
+        if key not in cut_through:
+            at = [
+                keys[n]
+                for n in neighbours[where[regions[key][0]]]
+                if vertical[regions[keys[n]][0]]
+            ]
+            cut_through[key] = any(
+                abs(faces.normals[regions[u][0]] @ faces.normals[regions[v][0]] + 1) < TOL
+                # a thickness, so `-TOL` rather than `0`: two flanks on one
+                # plane are a knife, and a knife is not a wall to cut through
+                and faces.normals[regions[u][0]] @ (middle[v] - middle[u]) < -TOL
+                for u, v in combinations(at, 2)
+            )
+        return cut_through[key]
+
     cheeks = np.zeros(len(part), dtype=bool)
     by_body: dict[int, list] = {}
     for key in regions:
@@ -683,8 +897,11 @@ def _opening(faces):
                 nu, nv = faces.normals[regions[u][0]], faces.normals[regions[v][0]]
                 if abs(nu @ nv + 1) > TOL:
                     continue
-                if nu @ (middle[v] - middle[u]) > 0:   # toward, not away
-                    cheeks[regions[u]] = cheeks[regions[v]] = True
+                if nu @ (middle[v] - middle[u]) <= 0:   # away, not toward
+                    continue
+                if not (through(u) and through(v)):
+                    continue
+                cheeks[regions[u]] = cheeks[regions[v]] = True
 
     floor = np.zeros(len(part), dtype=bool)
     beside: dict[tuple, set] = {}
@@ -918,7 +1135,16 @@ def facade_offsets(faces, fall, mine, keep, others):
       roofs, interior faces, copings and cheeks and never an exterior facade, so
       it has no corner with a cladding system and every plane it touches moves
       by its own 8 mm. Derived, not listed: the test is whether this skin covers
-      any of the exterior set at all.
+      any of the exterior set at all. It cuts one way only, and that is the
+      catch: `others` is every **sibling skin**, not every cladding system, so
+      the membrane is also a miter *target*, and what keeps the cladding from
+      taking an 8 mm miter onto it is the same emptiness read from the other
+      side (`membrane_faces & exterior` is 0 on every substrate here). Not a
+      construction: `membrane_faces` claims cheeks, and `wall_faces` grows a
+      wall end coplanar with a neighbour's facade into the exterior set, so a
+      scupper cut at a building corner would put a membrane face in it. Found on
+      review, 2026-08-26; measured, not fixed, because a system list here would
+      be a second place that says what `CLADDING_SYSTEMS` already says.
     - **The decision is per *plane*, not per face — over everything this skin
       does not itself cover.** A facade plane carries faces of several parts: at
       the north corner the `y = 2.43` plane holds the parapet's end, the wall
@@ -943,16 +1169,28 @@ def facade_offsets(faces, fall, mine, keep, others):
     """
     exterior, _ = wall_faces(faces, fall)
     offsets = np.full(len(faces.owner), float(mine))
-    if not (exterior & keep(faces)).any():
+    covers = keep(faces)
+    if not (exterior & covers).any():
         return offsets  # clads no facade, so it meets no cladding system
 
-    elsewhere = exterior & ~keep(faces)
+    elsewhere = exterior & ~covers
     ids, _ = _plane_ids(faces.body)
     for other, distance in others:
         theirs = np.unique(ids[other(faces) & elsewhere])
         if not len(theirs):
             continue
-        offsets[np.isin(ids, theirs) & elsewhere] = (
+        # the neighbour's facade **plane**, not just the facade faces on it. A
+        # plane is one surface to the solve -- `_vertex_planes` refuses a vertex
+        # asked for two distances on one normal -- so a face that is on the
+        # plane but is nobody's facade cannot be left at `mine` beside one that
+        # mitres. `Roof_Deck9_CLT`'s end lies in the court elevation at
+        # `x = 8.5` between two rainscreen-clad walls; leaving it out asked that
+        # plane for 0.085 and 0.150 at once, at the vertex it shares with the
+        # parapet above it. Faces this skin covers stay excluded, because those
+        # move by `mine` by definition -- a plane carrying one of those and a
+        # neighbour's facade too still splits, and still raises, which is the
+        # decision described above
+        offsets[np.isin(ids, theirs) & ~covers] = (
             float(distance) if distance <= mine else 0.0
         )
     return offsets
@@ -1086,10 +1324,36 @@ def cladding_faces(faces, fall):
     # is what carries the rainscreen round to the wall face at `x = 0`. The
     # corniced wall's **top** is still a wall top and still takes this skin's
     # coping, which is the 2026-08-16 "both skins cap a wall" decision unchanged
+    # ...and never a **ledge**: a wall top at the finished roof level, where the
+    # roof runs into the wall rather than stopping at it. "Every wall top" meant
+    # every upward face of a wall, so the rainscreen came down the inside of the
+    # parapet and out across the ledge, under the membrane -- which is not
+    # somewhere a rainscreen goes. Duncan, 2026-08-27; the test is below
+    _, _, roof, _ = _rules(faces, fall)
+    tops = _upward(faces.normals) & faces.of_role(substrate.WALL)
+    # a ledge is `_rules`' own sentence read the other way round: an upward face
+    # of a wall that is **thicker below the roof than above it**. Both halves are
+    # needed. The roof running in is what makes it roof rather than coping -- it
+    # is the finished roof level, continuous with the build-up, and the membrane
+    # covers it on that same election. And the wall carrying on above it is what
+    # makes it a step rather than a top: a coping with a cornice beside it shares
+    # an edge with the cornice's top, and where that cornice is its own element
+    # -- ungrouped, as `group_cornices` leaves it -- the cornice classifies
+    # `ROOF` and the coping would read as a ledge on the first half alone.
+    highest = np.array([
+        max(faces.parts[i].bounds[1][2] for i in members)
+        for members in faces.elements
+    ])[faces.element_of[faces.owner]]
+    under = faces.body.triangles[:, :, 2].max(axis=1) < highest - TOL
+    # ...and grown along the surface to the whole ledge, because the union
+    # triangulates one and only the triangles on the roof's own edge touch it --
+    # the same reason `_opening` reads a sill per coplanar region and `_rules`
+    # elects a whole wall off the one triangle that meets the roof
+    ledges = _grow_coplanar(faces, tops & under & faces.touching(roof), tops)
     cheeks, floor = _opening(faces)
     return (
         (facades_of(faces, RAINSCREEN, fall) & ~masonry_faces(faces, fall))
-        | (_upward(faces.normals) & faces.of_role(substrate.WALL))
+        | (tops & ~ledges)
         | (cheeks & faces.of_role(substrate.WALL))
     ) & ~faces.tagged(CORNICE, True) & ~floor
 
@@ -1114,8 +1378,19 @@ def cladding_laps(faces, fall):
     against a level that is not the surface, and silently place nothing or start
     a probe out in space. Measured on the live bake by doing it — `clearance`
     74.89 → 8.62 mm. `_lap` has to take the per-face offsets first. Found on
-    review, 2026-08-26; unreachable today because this returns `interior` alone,
-    and an interior face is never in the exterior set `facade_offsets` moves.
+    review, 2026-08-26.
+
+    What keeps it unreachable is now a **measurement, not a guarantee**, and the
+    difference is worth stating. It used to be that an interior face was never in
+    the exterior set `facade_offsets` moved; that stopped being true the same day,
+    when the miter widened from the neighbour's facade *faces* to the neighbour's
+    facade **plane** — one plane is one surface to the solve, and a face on it
+    that is nobody's facade cannot be left behind. So an interior face on a
+    neighbour's facade plane, facing the same way, is now moved. What is measured
+    across all four substrates here is that **no** face any skin may lap onto is
+    a face `facade_offsets` moves: 0 of 2, 0 of 12, 0 of 102, 0 of 138. Masonry
+    is safe by construction — `lap: None` — and this skin is safe by that count.
+    Check it again if either predicate widens. Found on review, 2026-08-26.
     """
     exterior, interior, roof, climbed = _rules(faces, fall)
     return interior
@@ -1394,7 +1669,6 @@ def build(
             continue
         distance = spec["distance"]
         skin = _skin_from(spec, parts)
-        built[spec["name"]] = skin
         # measured on the raw emission and written cleaned and thinned. The lap
         # rule legitimately covers part of a plane twice, and `clean` dissolves that
         # — but everything printed below is a property of the *offset*, and
@@ -1402,7 +1676,11 @@ def build(
         # moves the samples and would quietly change the verdict without any
         # surface moving. So the numbers stay on what `skin_over` produced, and
         # the file gets the mesh with the double cover resolved
+        #
+        # ...so both are kept. The pairwise verdict at the end of the run is a
+        # statement about what ships, and is taken on the written mesh as well
         tidy = clean(skin, dissolve=True, close=spec["close"])
+        built[spec["name"]] = (skin, tidy)
         named.append((spec["name"], tidy, spec["display"], "skin"))
 
         gap = clearance(parts, skin)
@@ -1484,19 +1762,30 @@ def build(
 
     # every pair, not the two there used to be: a third skin whose separation
     # went unprinted would be a skin nothing measured against anything
-    for (one, a), (other, b) in combinations(built.items(), 2):
+    for (one, (a, tidy_a)), (other, (b, tidy_b)) in combinations(built.items(), 2):
         print(
             f"           {one}/{other} separation {separation(a, b) * 1000:.3f} mm"
         )
         # two skins are *designed* to touch — both cap a wall, and they stack
         # outboard by the difference of the offsets — so what is checked is that
         # neither passes through the other, not that they stand apart
-        between = intersects(a, b)
-        if between:
-            print(
-                f"           WARNING: {one} and {other} cross,"
-                f" {between} triangle pair(s)"
-            )
+        #
+        # ...and the verdict is taken on **both** meshes, for the same reason
+        # the per-skin one is: `clean` invents a gusset, which is surface no
+        # offset placed, and a gusset spanning a tear can reach where the raw
+        # emission never did. The membrane carries 3459 mm² of it on the live
+        # bake, so this is reachable surface and not a hypothetical. The
+        # separation stays on the raw pair, because it is a printed number and
+        # every printed number is a property of the offset. Found on review,
+        # 2026-08-26; this loop read the raw meshes alone
+        for first, second, where in ((a, b, "raw"), (tidy_a, tidy_b, "written")):
+            note = "" if where == "raw" else f" ({where})"
+            between = intersects(first, second)
+            if between:
+                print(
+                    f"           WARNING: {one} and {other} cross{note},"
+                    f" {between} triangle pair(s)"
+                )
 
     manifest = []
     BUILD_DIR.mkdir(exist_ok=True)

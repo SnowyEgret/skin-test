@@ -321,6 +321,7 @@ def test_the_transcribed_substrate_round_trips_through_obj(tmp_path):
 REPO = Path(__file__).resolve().parent.parent
 BAKE = REPO / "headhouse-walls-parapets-caps-clt-insulation.obj"
 LIVE = REPO / "unit8-parapets-caps-clt-insulation-headhouse-extended-cornices.obj"
+DECK = REPO / "deck9-parapets-caps-cornices-clt-insulation-unit7-walls-headhouse.obj"
 
 
 def test_the_baked_headhouse_reads_and_skins():
@@ -876,3 +877,330 @@ def test_the_skirt_turns_down_to_the_sill_on_the_live_bake():
         assert y[band].max() == pytest.approx(hi, abs=1e-6)
         # ...and it reaches the coping's offset at the top
         assert z[band].max() == pytest.approx(14.819018, abs=1e-6)
+
+
+def _slab(lo, hi, name):
+    """One axis-aligned box, named and grouped as its own element."""
+    lo, hi = np.array(lo, dtype=float), np.array(hi, dtype=float)
+    box = trimesh.creation.box(
+        extents=hi - lo,
+        transform=trimesh.transformations.translation_matrix((lo + hi) / 2),
+    )
+    box.metadata.update({"name": name, "object": name})
+    return box
+
+
+def test_a_cornice_at_a_corner_hangs_on_the_wall_it_runs_along():
+    """A band runs past the returns at each end, so it touches three walls.
+
+    Every condition in `group_cornices` holds for all three — the returns are
+    within its height, taller than it, outside its plan footprint and thicker
+    than it projects — and where the three are the same height, as parapets
+    around one roof are, the old "tallest wins" could not tell them apart and
+    took whichever came first. On the live deck that was a 380 mm return, and
+    the union of that wall with a band four times its own length classified
+    `ROOF`: the build stopped in `group_caps` before any skin was tried.
+    """
+    from build import TOP_CORNICE, group_cornices
+
+    parts = [
+        _slab((0.0, 0.0, 0.0), (0.4, 5.0, 2.0), "Return-W"),   # first in the file
+        _slab((0.4, 0.0, 0.0), (9.6, 0.4, 2.0), "Wall-Along"),
+        _slab((9.6, 0.0, 0.0), (10.0, 5.0, 2.0), "Return-E"),
+        _slab((0.0, -0.1, 1.9), (10.0, 0.0, 2.0), "Cornice"),
+    ]
+    group_cornices(parts)
+
+    assert parts[3].metadata["object"] == "Wall-Along", (
+        "the cornice joined a wall it only crosses at its end"
+    )
+    # ...and the stamp that makes a masonry elevation goes with it
+    assert TOP_CORNICE in parts[1].metadata
+    assert TOP_CORNICE not in parts[0].metadata
+    assert TOP_CORNICE not in parts[2].metadata
+
+
+def test_a_cap_plate_joins_the_wall_that_backs_most_of_it():
+    """One plate over two walls in line is the longer wall's coping.
+
+    `_next_lift` accepts it for both — it rests on each and is flush with the
+    same pair of faces across both, which is exactly what "the next lift of
+    this wall" means — so the plate is genuinely claimed twice and something
+    has to choose. Assigning inside the loop chose whichever element came last
+    in the file, which is not a property of the geometry at all.
+    """
+    from build import classifier, group_caps
+    from skin import parameters
+
+    parts = [
+        _slab((0.0, 0.0, 0.0), (8.0, 0.4, 2.0), "Wall-Long"),
+        _slab((8.0, 0.0, 0.0), (9.2, 0.4, 2.0), "Wall-Short"),  # last in the file
+        _slab((0.0, 0.0, 2.0), (9.2, 0.4, 2.03), "Plate"),
+    ]
+    group_caps(parts, classifier(parameters.load_validated()))
+
+    assert parts[2].metadata["object"] == "Wall-Long"
+    # the walls themselves are untouched: `group_caps` groups the cap and not
+    # the parapet under it, and the two walls are separate elements either way
+    assert parts[0].metadata["object"] == "Wall-Long"
+    assert parts[1].metadata["object"] == "Wall-Short"
+
+
+@pytest.mark.parametrize("path", (BAKE, LIVE))
+def test_dissolving_collinear_vertices_moves_no_outline(path):
+    """`clean`'s `dissolve` is a tidy-up, and its whole claim is that it thins
+    a ring without moving it. So the area it leaves is the area it was given.
+
+    It stopped being true where a ring came back from GEOS with two consecutive
+    coordinates a couple of ulps apart: they weld to one point, each then reads
+    as straight through *its own self*, and both are dropped — which cuts the
+    corner off. Measured on the deck bake before the fix: one L-shaped ring of
+    the cladding came back as a diagonal and the skin gained 0.910 m² of
+    surface the offset never placed. Neither bake here poses it; this states
+    the property so that the next one that does is caught rather than shipped.
+    """
+    from build import FACADE, RAINSCREEN, classifier, covered, group_caps, group_cornices
+    from build import skins, _skin_from
+    from skin import parameters, substrate
+    from skin.clean import clean
+    from skin.offset import Faces, _owner
+
+    parts = substrate.from_obj(path, metadata={FACADE: RAINSCREEN})
+    params = parameters.load_validated()
+    group_cornices(parts)
+    group_caps(parts, classifier(params))
+    body = substrate.union(parts)
+    faces = Faces(body, parts, _owner(body, parts), classifier(params))
+
+    for spec in skins(params):
+        if not covered(spec, faces):
+            continue
+        skin = _skin_from(spec, parts)
+        thin = clean(skin, dissolve=True, close=spec["close"])
+        whole = clean(skin, dissolve=False, close=spec["close"])
+        assert len(thin.faces) <= len(whole.faces), spec["name"]
+        assert thin.area == pytest.approx(whole.area, abs=1e-8), (
+            f"{spec['name']}: dissolving moved an outline — "
+            f"{(thin.area - whole.area) * 1e6:+.3f} mm²"
+        )
+
+
+def test_a_roof_under_the_building_is_a_floor():
+    """`_under_cover`, on the shape that poses it: a slab with a canopy over part
+    of it.
+
+    A roof is a roof because it is the outside, and the same slab is both — the
+    student-house's deck 9 CLT is the roof where the insulation and the membrane
+    sit on it and the **headhouse floor** where it runs on under the headhouse.
+    One part, one role, two surfaces, so nothing about the part can separate
+    them.
+    """
+    from build import _under_cover, _upward
+    from skin import substrate
+    from skin.offset import Faces, _owner
+
+    parts = [
+        _slab((0.0, 0.0, 0.0), (6.0, 6.0, 0.2), "Slab"),
+        _slab((1.0, 1.0, 2.0), (3.0, 5.0, 2.2), "Canopy"),
+        _slab((0.8, 0.8, 0.2), (1.0, 5.2, 2.0), "Prop"),
+    ]
+    body = substrate.union(parts)
+    faces = Faces(body, parts, _owner(body, parts))
+    up = _upward(faces.normals)
+    covered = _under_cover(faces, up)
+
+    assert covered.any() and not covered.all()
+    for f in np.flatnonzero(up):
+        under = 1.0 <= faces.centres[f][0] <= 3.0 and 1.0 <= faces.centres[f][1] <= 5.0
+        # ...on the slab, and below the canopy. The canopy's own top is not
+        assert bool(covered[f]) == (under and faces.centres[f][2] < 1.0), (
+            f"face at {np.round(faces.centres[f], 3).tolist()} read as "
+            f"{'covered' if covered[f] else 'open'}"
+        )
+    # ...and it answers only what it is asked: a face outside the mask is left
+    # alone, whatever is over it
+    assert not _under_cover(faces, np.zeros(len(up), dtype=bool)).any()
+
+
+def test_the_deck_bake_reads_and_skins():
+    """The fourth substrate, and the one that found most of this.
+
+    It poses what the two headhouse bakes do not: cap plates **mitred** at the
+    corners rather than overlapped, a cornice running the full width of an
+    elevation and past the returns at each end, a wall cantilevered over the
+    court, and a roof deck that runs on under the headhouse and is that
+    building's floor there.
+
+    Pinned here: the union is one body (two of the mitres return a detached
+    zero-thickness flap that `substrate.union` drops), all three skins solve,
+    none of them crosses the substrate or itself, and the two things Duncan read
+    back on 2026-08-26 — nothing inside the headhouse, and every parapet's ledge
+    and coping carried.
+    """
+    from build import (
+        FACADE, RAINSCREEN, classifier, covered, group_caps, group_cornices,
+        skins, _skin_from,
+    )
+    from skin import parameters, substrate
+    from skin.measure import buried, intersects
+
+    parts = substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN})
+    assert len(parts) == 42          # 35 objects, six taper bodies in one of them
+    params = parameters.load_validated()
+    group_cornices(parts)
+    group_caps(parts, classifier(params))
+
+    body = substrate.union(parts)
+    assert body.body_count == 1, "a boolean flap survived the union"
+    assert body.metadata["flaps_dropped"] == 2
+
+    built = {}
+    for spec in skins(params):
+        skin = _skin_from(spec, parts)
+        built[spec["name"]] = skin
+        assert not intersects(skin, skin), f"{spec['name']} folds through itself"
+        assert not intersects(skin, body), f"{spec['name']} crosses the substrate"
+        assert not buried(parts, skin), f"{spec['name']} has a sample inside a part"
+    assert set(built) == {"Membrane", "Cladding", "Masonry"}
+
+    # nothing inside the headhouse: that deck is its floor, not a roof
+    tri = built["Membrane"].triangles
+    room = np.all(
+        (tri >= (8.51, 2.86, 10.9)) & (tri <= (13.09, 7.11, 14.0)), axis=(1, 2)
+    )
+    assert not room.any()
+
+    # ...and every deck 9 parapet carries the membrane from its ledge, at the
+    # roof's own finished level, up and over its coping
+    ledge = (np.abs(tri[:, :, 2] - (11.5344 + 0.008)) < 1e-6).all(axis=1)
+    assert ledge.sum() >= 8
+    for name, low, high in (("S", 7.11, 7.70), ("N", -0.20, 0.40),
+                            ("E", 8.49, 8.94), ("W", 20.50, 20.92)):
+        axis = 1 if name in "SN" else 0
+        band = (tri[:, :, axis] >= low).all(axis=1) & (tri[:, :, axis] <= high).all(axis=1)
+        assert (ledge & band).any(), f"parapet {name} has no membrane on its ledge"
+        assert (band & (tri[:, :, 2] > 12.80).all(axis=1)).any(), (
+            f"parapet {name} carries no membrane over its coping"
+        )
+
+
+def test_the_cladding_skirt_stops_at_its_drip_all_round_the_deck():
+    """Duncan, 2026-08-27, reading the deck 9 build back: *"The cladding skirt is
+    inconsistent around the deck... To the west of the scupper the skirt descends
+    all the way down to the ledge (E44) instead of stopping at 12.792 and turning
+    down the scupper as it did correctly to the east... It looks like the rule is
+    being interpreted differently in slightly different contexts."*
+
+    One skirt, four parapets, and it was three different things. Two rules were
+    wrong under it and a third accident hid them apart:
+
+    * `_opening` read `Parapet-Deck9-W`'s two corner returns as a 7.1 m cheek
+      pair — they look at each other across the deck — and grew that along both
+      planes, so the cladding **covered** the inside of the north and south
+      parapets head to foot instead of lapping a drip onto them.
+    * "every wall top" claimed the ledge at the finished roof level, so the skin
+      then ran out across it, under the membrane.
+    * and the two accidents that hid it: the scupper's sill takes the whole south
+      ledge out with it as the floor of an opening, and the false cheek pair took
+      the west one, leaving north and east clad and the other two bare.
+
+    So the pin is the whole run: on every one of the four inner faces the skirt
+    is a band from the coping's offset down to `12.825 - drop`, and the only
+    cladding below that anywhere on the deck is the two turn-downs at the
+    scupper, which are mirrored.
+    """
+    from build import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins, _skin_from
+    from skin import parameters, substrate
+
+    parts = substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN})
+    params = parameters.load_validated()
+    group_cornices(parts)
+    group_caps(parts, classifier(params))
+    spec = next(s for s in skins(params) if s["name"] == "Cladding")
+    skin = _skin_from(spec, parts)
+    out, drop = spec["distance"], spec["drop"]
+    tri = skin.triangles
+    arris, sill = 12.8250, 11.5344
+
+    # the two turn-downs beside the scupper: `out` across the reveal the band
+    # laps out of, plus its own `drop`, and mirrored about the slot
+    turns = [(15.19 - drop, 15.19 + out), (16.39 - out, 16.39 + drop)]
+    # the slot's own arris comes through the union up to a float32 ulp off the
+    # nominal -- 1.0 um at the east cheek -- and these are containment tests
+    # rather than measurements, so they are given the union's own accuracy floor
+    near = 1e-5
+
+    for name, axis, plane in (
+        ("N", 1, 0.1881 + out), ("S", 1, 7.2919 - out),
+        ("E", 0, 8.7481 + out), ("W", 0, 20.6919 - out),
+    ):
+        # ...at deck level: these planes carry the storey below as well, where
+        # `L7-alleyback-W` reads its own return as a facade -- see NOTES
+        on = (np.abs(tri[:, :, axis] - plane).max(axis=1) < 1e-6) & (
+            tri[:, :, 2].min(axis=1) > sill - 1e-6
+        )
+        assert on.any(), f"no skirt at all on parapet {name}'s inner face"
+        z, x = tri[on][:, :, 2], tri[on][:, :, 1 - axis]
+        assert z.max() > arris + out - 0.005, f"parapet {name}'s skirt misses the coping"
+        assert z.min() == pytest.approx(
+            min(sill + out, arris - drop) if name == "S" else arris - drop, abs=1e-6
+        )
+        for f in range(len(z)):
+            if z[f].min() > arris - drop - 1e-6:
+                continue
+            assert name == "S" and any(
+                x[f].min() > lo - near and x[f].max() < hi + near for lo, hi in turns
+            ), (
+                f"parapet {name} carries cladding down to z = {z[f].min():.4f}, "
+                f"below its own drip at {arris - drop:.4f}, away from the scupper"
+            )
+        if name == "S":
+            for lo, hi in turns:
+                band = (x.min(axis=1) > lo - near) & (x.max(axis=1) < hi + near)
+                assert band.any(), f"no turn-down between x {lo} and {hi}"
+                assert z[band].min() == pytest.approx(sill + out, abs=1e-6)
+
+    # ...and nothing of this skin lies on the ledge, which is the roof's own
+    # level and the membrane's to cover
+    assert not (np.abs(tri[:, :, 2] - (sill + out)).max(axis=1) < 1e-6).any(), (
+        "the rainscreen ran out across a ledge at the finished roof level"
+    )
+
+
+def test_the_deck_s_inner_corners_are_the_enclosure_continuing():
+    """A facade wraps a corner and so does an interior.
+
+    `Parapet-Deck9-W` runs past the ends of the north and south parapets, so it
+    presents a return on each of *their* inner planes, joined to them. Those are
+    the inside of the deck's enclosure continuing round the corner, and the
+    membrane lining it covers them. Until 2026-08-27 it reached them only
+    because `_opening` was reading two of them as a scupper's cheeks — which is
+    not a fact about an enclosure at all, and which clad the whole of both planes
+    on the way past.
+    """
+    from build import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, wall_faces, _owner
+    from skin import parameters, substrate
+    from skin.offset import Faces
+
+    parts = substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN})
+    params = parameters.load_validated()
+    group_cornices(parts)
+    group_caps(parts, classifier(params))
+    body = substrate.union(parts)
+    faces = Faces(body, parts, _owner(body, parts), classifier(params))
+    exterior, interior = wall_faces(faces, params["fall"])
+
+    names = [parts[o].metadata.get("object") for o in faces.owner]
+    for plane, axis, sign in ((0.1881, 1, 1.0), (7.2919, 1, -1.0)):
+        corner = np.array([
+            abs(faces.centres[f][axis] - plane) < 1e-6
+            and faces.normals[f][axis] * sign > 1 - 1e-6
+            and names[f] == "Parapet-Deck9-W"
+            for f in range(len(faces.owner))
+        ])
+        assert corner.any(), f"the fixture has no return on the plane at {plane}"
+        assert not (corner & ~interior).any(), (
+            f"the return on the plane at {plane} is not read as the inside of "
+            "the deck: the membrane laps onto it instead of covering it"
+        )
+        assert not (corner & exterior).any(), "...and it is not a facade either"

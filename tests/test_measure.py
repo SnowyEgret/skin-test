@@ -156,3 +156,45 @@ def test_buried_samples_centroids_as_well_as_vertices():
     )
     assert not part.contains(panel.vertices).any()      # no vertex is inside
     assert buried([part], panel) > 0                    # a centroid is
+
+
+def test_a_sample_on_a_part_surface_is_not_buried_in_it():
+    """A skin that dies *on* the substrate is where it was asked to be.
+
+    `build.facade_offsets`' "the outer system owns the corner" branch offsets a
+    facade by **zero**, which puts the skin's vertices in a substrate face
+    deliberately — so this is an ordinary reading and not an edge case.
+    `trimesh.contains` cannot answer it: it casts a ray in a random direction,
+    and where the sample sits on a plane two parts share, the ray resolves
+    whichever way it happens to leave. The fixture below reads 6 and 0 in
+    alternate runs without it, and the build's own verdict came back 3 and 4
+    over one fixed cladding mesh. A verdict that moves without the geometry
+    moving is exactly what `clearance` was demoted for.
+
+    The tolerance is the **union's** accuracy floor, not a weld radius: a skin
+    vertex is placed off a face of the union, which manifold3d computes in
+    float32, so one meant to lie exactly in a substrate plane arrives up to
+    ~5e-7 m either side of it. The sample that flapped on the live deck sat
+    6.390e-07 m from `CapPlate-Deck9-N`, on the plane its cornice shares.
+    """
+    lower = _box((2.0, 2.0, 2.0))                       # z in [-1, 1]
+    upper = _box((2.0, 2.0, 0.6), (0.0, 0.0, 1.3))      # z in [1, 1.6]
+    parts = [lower, upper]                              # sharing the plane z = 1
+    on = trimesh.Trimesh(                               # a quad lying on it
+        vertices=np.array([[-0.5, -0.5, 1.0], [0.5, -0.5, 1.0],
+                           [0.5, 0.5, 1.0], [-0.5, 0.5, 1.0]]),
+        faces=np.array([[0, 1, 2], [0, 2, 3]]),
+    )
+    assert buried(parts, on) == 0
+
+    # ...and so is one 0.64 µm under it, which is the reading that flapped
+    noise = on.copy()
+    noise.apply_translation((0.0, 0.0, -6.39e-7))
+    assert len({buried(parts, noise) for _ in range(12)}) == 1, "the verdict flaps"
+    assert buried(parts, noise) == 0
+
+    # ...while a sample a millimetre under still is buried. This narrows the
+    # reading to the surface itself; it does not blunt it
+    under = on.copy()
+    under.apply_translation((0.0, 0.0, -0.001))
+    assert buried(parts, under) == len(under.vertices) + len(under.faces)

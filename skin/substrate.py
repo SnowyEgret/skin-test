@@ -504,6 +504,24 @@ def union(parts: list[trimesh.Trimesh], grid: float = 1e-6) -> trimesh.Trimesh:
     The shift is snapped to `grid` so coordinates stay on the same 1 µm lattice
     `snapped` puts them on, and is undone on the way out, so callers see the
     substrate where they left it.
+
+    **A component too thin to be a solid is dropped**, because it is arithmetic
+    rather than geometry. Where two parts meet exactly on one plane — two cap
+    plates mitred at a building corner, the ordinary way to turn a coping —
+    manifold3d can leave the shared face behind as a detached **flap**: four
+    triangles, two facing each way, enclosing nothing. The deck 9 bake returns
+    two of them, at two of its four mitres, and they are not marginal readings:
+    body 0 has a mean thickness of 197 mm and the flaps 1.8 and 12.6 **nm**,
+    against a substrate every coordinate of which is snapped to the 1 µm lattice.
+    So volume-over-area against `grid` separates them with nothing to tune, and
+    nothing the substrate can express is thin enough to be caught by it.
+
+    Leaving them in is not cosmetic. A flap is two coplanar faces facing opposite
+    ways, which is a **knife**: `_reconcile` refuses the vertex where a skin
+    covers both sides — the membrane does, once a deck's parapets are climbed —
+    and `planar_offset`'s own runaway guard names "a fragment a boolean left
+    behind" as the cause it exists for. Measured 2026-08-26; the two headhouse
+    bakes return one body and are untouched.
     """
     # a **copy**, even though there is nothing to union. `skin_over` treats what
     # comes back as a throwaway and writes plane ids into its metadata, and
@@ -522,6 +540,15 @@ def union(parts: list[trimesh.Trimesh], grid: float = 1e-6) -> trimesh.Trimesh:
         shifted.append(moved)
 
     body = trimesh.boolean.union(shifted)
+    if body.body_count > 1:
+        pieces = body.split(only_watertight=False)
+        solid = [p for p in pieces if p.area > 0 and abs(p.volume) / p.area > grid]
+        # ...unless they all are, which would mean the union itself came back as
+        # nothing solid. That is a different failure and not one to paper over
+        if solid and len(solid) < len(pieces):
+            dropped = len(pieces) - len(solid)
+            body = solid[0] if len(solid) == 1 else trimesh.util.concatenate(solid)
+            body.metadata["flaps_dropped"] = dropped
     body.vertices = body.vertices + centre
     return body
 

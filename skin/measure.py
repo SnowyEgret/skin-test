@@ -51,6 +51,17 @@ def separation(a: trimesh.Trimesh, b: trimesh.Trimesh) -> float:
 # a 20 000-triangle skin would otherwise allocate ~2.4 GB per intermediate.
 CHUNK = 512
 
+# a sample nearer than this to a part's surface is *on* it, not inside it, and
+# `buried` will not count it. It is the union's own accuracy floor and not a
+# weld radius: a skin vertex is placed off a face of the **union**, which
+# manifold3d computes in float32, so a vertex meant to lie exactly in a
+# substrate plane arrives up to ~5e-7 m either side of it. Measured: the sample
+# that made the verdict flap sits 6.390e-07 m from `CapPlate-Deck9-N` — which is
+# to say, on it. Below this figure there is no fact of the matter about which
+# side it is on, so a smaller tolerance does not read the geometry more finely,
+# it just reads the float32 noise. See CLAUDE.md, *Tolerances*
+SURFACE_TOL = 1e-6
+
 
 def _candidate_pairs(a: trimesh.Trimesh, b: trimesh.Trimesh, tol: float):
     """Triangle index pairs whose AABBs overlap, inflated by `tol`.
@@ -290,11 +301,28 @@ def buried(parts, skin: trimesh.Trimesh) -> int:
     caught. A sample inside two overlapping parts is counted **once**: the
     substrate's own layers interpenetrate, and counting per part would inflate
     the number for a reason that says nothing about the skin.
+
+    **Buried means strictly inside, and a sample sitting *on* a part's surface
+    does not count.** `trimesh`'s `contains` cannot tell the two apart: it casts
+    a ray in a random direction, and a point on the boundary resolves whichever
+    way the ray happens to leave. That made the verdict flap — 3 and 4 in
+    alternate runs over one fixed cladding mesh, with nothing about the geometry
+    changing between them — and a verdict that moves without the geometry moving
+    is exactly the defect `clearance` was demoted for. It is not a rare case
+    either: `build.facade_offsets`' "the outer system owns the corner" branch
+    offsets a facade by **zero**, which puts the skin's vertices in a substrate
+    face deliberately. So containment is confirmed against the distance to the
+    surface, which is signless but exact, and anything within `SURFACE_TOL` of a
+    part is on it. Found on review, 2026-08-26.
     """
     if isinstance(parts, trimesh.Trimesh):
         parts = [parts]
     samples = np.vstack([skin.vertices, skin.triangles.mean(axis=1)])
     inside = np.zeros(len(samples), dtype=bool)
     for part in parts:
-        inside |= part.contains(samples)
+        within = np.flatnonzero(part.contains(samples))
+        if not len(within):
+            continue
+        off = trimesh.proximity.closest_point(part, samples[within])[1]
+        inside[within[off > SURFACE_TOL]] = True
     return int(np.count_nonzero(inside))

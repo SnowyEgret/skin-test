@@ -47,6 +47,8 @@ def _vertex_planes(mesh, vertex: int, tol: float, offsets=None, only=None, inste
     Normals within `tol` of an axis are snapped onto it: the union that feeds
     this carries float32 vertices, and an axis-aligned face whose normal is off
     by 1e-7 would otherwise be held to a hard constraint that is itself skew.
+    A face with **no area** is dropped rather than snapped — it states no plane,
+    and its zero-length normal makes an unsatisfiable hard equation.
 
     `only` is a face mask restricting which incident faces are read. It is used
     solely to re-read a contradictory vertex — see `_reconcile`.
@@ -75,6 +77,21 @@ def _vertex_planes(mesh, vertex: int, tol: float, offsets=None, only=None, inste
             swap = instead.get(int(face))
             if swap is not None:
                 normals[row] = swap
+    # a face with no area states no plane, and `_opposed` already drops its
+    # zero-length normal for that reason. It has to be dropped *here* too, or it
+    # reaches the solve as a constraint row of zeros: `abs(n_z) < tol` reads a
+    # zero normal as level, so it is held **hard** at `0 . t = distance` -- an
+    # equation nothing satisfies. Measured on a unit cube with one degenerate
+    # face appended: residual 2.3e-17 clean against 0.01 with it, which is
+    # `distance` exactly and stays there however good the rest of the solve is.
+    # That is the build's primary readout pinned at a value it cannot fall
+    # below, and `offset_residual` is a max, so a real violation anywhere else
+    # in the body is then masked by it
+    live = np.linalg.norm(normals, axis=1) > PLANE_TOL
+    if not live.all():
+        faces, normals = faces[live], normals[live]
+        if not len(faces):
+            return np.zeros((0, 3)), np.zeros(0)
     axis = np.abs(normals).argmax(axis=1)
     aligned = np.abs(normals).max(axis=1) > 1 - tol
     normals = normals.copy()

@@ -80,10 +80,13 @@ def check_seeds(params: dict) -> dict:
     invisible to the tests and to the eye. Degenerate seeds do not make the model
     wrong, they make a whole class of wrongness unobservable.
 
-    A zero `out` is exempt on both counts. It means the skin has no turn-out at
-    all, so it is a feature switched off rather than a distance being seeded —
-    and zero is an integer multiple of everything, so including it would fail
-    every file that has one.
+    A **zero distance** is exempt on both counts, whichever of the three it is.
+    It means the feature is switched off rather than a distance being seeded —
+    the cladding has no turn-out, the masonry no drip — and zero is an integer
+    multiple of everything, so including it would fail every file that has one.
+    (This said "a zero `out`" until 2026-08-26, and the loop never distinguished
+    them; `Masonry.drop` is authored `0.0` beside `Cladding.out`, so the two
+    would collide as equal seeds if it had. Found on review.)
 
     `base` and `close` are not seeds and are not read here, which is why the keys
     are listed rather than taken from the entry: `base` is a datum in the model

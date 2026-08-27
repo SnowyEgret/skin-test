@@ -46,6 +46,16 @@ a skin crosses itself, crosses the substrate, has a sample inside a part, or whe
 cross each other. Those are properties of the geometry: a crossing is a crossing however the
 sheets are tiled, and containment is signed where a closest-point distance is not.
 
+**Buried means strictly inside.** A sample *on* a part's surface does not count, and that has to
+be said in code rather than left to `trimesh.contains`, which casts a ray in a random direction
+and resolves a boundary point whichever way the ray leaves: the deck bake's cladding read 3 and 4
+in alternate runs with nothing about the geometry changing. It is not a rare reading either —
+`facade_offsets`' "the outer system owns the corner" branch offsets a facade by **zero**, which
+puts the skin's vertices in a substrate face on purpose. So containment is confirmed against the
+distance to the surface, and `measure.SURFACE_TOL = 1e-6` is the union's float32 floor rather than
+a weld radius: the sample that flapped sat 6.390e-07 m from `CapPlate-Deck9-N`, on the plane its
+cornice shares, and below that figure there is no fact of the matter about which side it is on.
+
 `clearance` is now **printed and asserts nothing**. It could not tell a skin that deliberately
 stops short of something standing proud of the wall from one folded through itself — it samples
 vertices and centroids against every part — and worse, its answer depends on how the surface
@@ -131,6 +141,14 @@ Key invariants, each of which spans several files:
   Measured: the headhouse parapets at 15 m out unioned into **two** bodies, the second a 359 mm
   sliver of mean thickness 0.04 µm, well under manifold3d's own accuracy floor. Centred, one clean
   body. The shift is snapped to the same 1 µm lattice so coordinates do not drift off it.
+  **A component too thin to be a solid is dropped**, for the same reason: where two parts meet
+  exactly on one plane — two cap plates mitred at a building corner, the ordinary way to turn a
+  coping — manifold3d can leave the shared face behind as a detached **flap** of four triangles,
+  two facing each way, enclosing nothing. The deck 9 bake returns two, at two of its four mitres.
+  Volume-over-area against the 1 µm lattice separates them with nothing to tune: 197 mm of mean
+  thickness for the body against 1.8 and 12.6 **nm** for the flaps. Leaving them in is not
+  cosmetic — a flap is a knife, and once the deck's parapets are climbed the membrane covers both
+  its sides and `_reconcile` refuses the vertex. `metadata["flaps_dropped"]` says how many.
 - **The union is a throwaway.** `skin_over` unions the parts solely to find the outer surface
   (faces where parts touch vanish, so no skin is generated between them), then discards it.
   `parts` is never mutated and stays the substrate. Tests assert this.
@@ -217,8 +235,10 @@ Three rules carried over from student-house `bim/phase1/parameters.py`:
   consumed it.
 
 `parameters.check_seeds` enforces the **non-degenerate seed** rule: no two distances equal, none
-an integer multiple of another. A zero `out` is exempt — it means the turn-out is off, and zero
-is an integer multiple of everything. It is a named function the caller opts into, not part of
+an integer multiple of another. A zero distance is exempt, whichever of the three it is — it
+means that feature is off, and zero is an integer multiple of everything. (This said "a zero
+`out`" until 2026-08-26; the loop never distinguished the three, and `Masonry.drop` is authored
+`0.0` beside `Cladding.out`.) It is a named function the caller opts into, not part of
 `validate`, because it is a discipline for a test rig rather than a code requirement.
 
 Blender's python needs neither PyYAML nor jsonschema: `blender/display.py` imports only `bpy`,
@@ -449,6 +469,17 @@ taller wall is inside its height, shorter than it and outside its footprint, and
 by the thickness test — it stands metres proud of a 420 mm wall. Nothing is authored: the wall's
 own thickness is the measure, the same move `_next_lift` makes.
 
+**Where several bodies qualify, the one backing most of the cornice's run wins**, height breaking
+a tie in that. A band runs along the face it hangs on and past the returns at each end, so at a
+building corner it stands proud of three walls at once: `Cornice-Deck9-N` runs 12.4 m across an
+11.6 m parapet and over the 380 and 420 mm ends of the two returning at each end. All three are
+the same 1856 mm tall, so the height that used to decide could not tell them apart and took
+whichever came first in the file — and the union of that 380 mm return with a band four times its
+own length classifies `ROOF` at horizontality 0.235, which stopped the build in `group_caps`
+before a skin was tried. Overlap says what *hangs on* means, and it is measured across the run —
+the plan axis the band is not projecting on — because along the projection axis every candidate is
+flush by construction.
+
 The membrane needs nothing further — a cornice joined to a climbed parapet has its exposed top
 picked up by "every upward face of a climbed wall", and the lap then hangs a drip down the face
 below it, which is the scupper drip exactly. At `Cornice-Unit8-E` neither happens, because its top
@@ -511,6 +542,14 @@ skin's distance by definition, so the two readings are not reconcilable, and two
 one surface wants a decision rather than a default. The growth above is what keeps the one
 substrate that would otherwise pose it — a wall in lifts under one cornice — from doing so.
 
+Per plane means the **whole** plane, not the neighbour's facade faces on it. The neighbour's
+facades are what *identify* the plane; every face on it then moves the same way, because a plane
+is one surface to the solve. A face that is on the plane and is nobody's facade cannot be left at
+`mine` beside one that miters: `Roof_Deck9_CLT`'s end lies in the court elevation at `x = 8.5`
+between two rainscreen-clad walls, and leaving it out asked that plane for 0.085 and 0.150 at
+once, at the vertex it shares with the parapet above it. Faces this skin covers stay excluded,
+which is the split described above and still raises.
+
 So the masonry comes out as one panel, `x = −0.150`, `y 2.345…11.385`, `z 12.200…12.8566`. The two
 systems stand the masonry's own allowance apart at the corner, and that 150 mm is left open on
 purpose: masonry is thick where a rainscreen is thin enough to abstract as a surface, and the
@@ -533,6 +572,16 @@ and would break something else — the climb-or-flange election is per wall, so 
 its parapet has the membrane climb its full height instead of stopping at the parapet the roof
 runs into. It is inert on a bake whose plates already sit inside their parapet objects, and
 idempotent.
+
+**A plate two walls both continue goes to the one backing most of it in plan.** At a building
+corner a plate rests on the wall it runs along *and* in a rebate at the head of the return it
+crosses, flush with both faces of each, so `_next_lift` accepts it for both and the claim is
+genuinely contested: `CapPlate-Deck9-S2` is 380 mm of a 4510 mm run over `Parapet-Deck9-W`, and
+1.025 m² against 0.094 m² decides it. Assigning inside the loop kept whichever element came last
+in the file, which is not a property of the geometry at all — and the plate it handed to the
+return took that wall's element to horizontality 0.204, `ROOF` by the thin-side measure and `WALL`
+by area, which `Faces.roles` refuses. Contested on exactly one plate of the substrates here;
+everywhere else there is a single claimant and the answer is what it always was.
 
 ## Cleaning a mesh
 
@@ -581,7 +630,11 @@ The split survives `clearance` being demoted, with one deliberate exception. Eve
 stays a property of the offset and so is measured raw. The **verdict** is taken on both meshes:
 it is a statement about what ships, and `clean` invents a gusset — surface that is, by this
 module's own words, not the offset of anything — which would otherwise go out unexamined. They
-agree on all three bakes today.
+agree on every bake today. **Both** verdicts, and that includes the cross-skin one: the pairwise
+loop read the raw meshes alone until 2026-08-26, which left exactly the gap the per-skin double
+check had been added to close — the membrane carries 3459 mm² of gusset on the live bake, so a
+gusset reaching through another skin is reachable surface and not a hypothesis. The **separation**
+stays on the raw pair, because it is a printed number. Found on review.
 
 - **shapely (GEOS) unions, `manifold3d.triangulate` re-triangulates.** Nothing to install here —
   shapely arrives with `trimesh[easy]`, and it joins yaml and jsonschema on the undeclared-
@@ -632,13 +685,23 @@ neighbouring facet corners on leaves a T-junction, and a vertex can be straight 
 facet and a corner on the one beside it. It is a tidy-up, so it is allowed the authored
 `STRAIGHT_TOL` (1e-9 m off the line) where a derivation would not be; it changes no outline, and
 the measurements say so — area equals the covered area to 0.000000 mm² on all three substrates,
-with no vertex more than 2.5 nm off a plane the offset produced. `build()` opts in: on the live
+with no vertex more than 2.5 nm off a plane the offset produced. That is a property it has to be
+*held* to rather than one it has for free: see the ring rule below, and the test that states it. `build()` opts in: on the live
 bake the membrane goes 145 → 115 triangles and 59 → 29 border edges, the cladding 142 → 86 and
 56 → 44, and T-junctions fall (membrane 15 → 0, cladding 6 → 4) because a vertex no ring turns at
 **is** the T-junction anchor. Measured 2026-08-26 — the first two pairs are `build.py`'s own
 output, which is what opts in; `audit.py` calls `clean` with `dissolve=False` and so prints
 145 → 142 and 142 → 128 for the same meshes, and is the source of the T-junction figures only.
 Pass `dissolve=False` — the default — to keep every vertex.
+
+**A ring carries no zero-length edge.** GEOS can return two consecutive coordinates a couple of
+ulps apart — 1.78e-15 m on the deck bake, where several rectangles meet at one point — and those
+weld to a single vertex. The edge between them moves no outline, but it makes each of the pair
+read as *straight through itself*: its ring neighbour is the same point, the cross product is
+exactly zero, and `dissolve` drops both, cutting the corner off. One L-shaped ring of the cladding
+came back as a diagonal and the skin gained **0.910 m²** of surface the offset never placed — on
+the one pass whose whole claim is that it changes no outline. So consecutive repeats are dropped
+where the ring is built, before anything reads it. A test states the property on every bake.
 
 What it does **not** do: it says nothing about two *different* planes intersecting. Closing a hole
 is a wholly separate mechanism, because nothing about a hole falls out of a coplanar union — the
@@ -743,7 +806,25 @@ listed — there are no plane coordinates and no part indices in them:
   without being enumerated. `fall` is the authored direction cosine that separates the two from an
   end (0.707 = 45°); every rule below takes it as an argument and `skins()` binds it. The
   exception is a facade wrapping a corner: an end coplanar with and joined to a neighbour's facade
-  is grown into the exterior set.
+  is grown into the exterior set — **and an interior wraps a corner the same way**. Four parapets
+  round a deck are one enclosure, and the wall that turns the corner presents its return on the
+  neighbour's *interior* plane, joined to it: `Parapet-Deck9-W` does it at both ends of the deck.
+  That is the inside of the enclosure continuing, and the membrane lining it covers it. The
+  exterior is grown first and keeps precedence, so an end that somehow joins both is a facade.
+  Until 2026-08-27 the membrane reached those returns only because `_opening` was reading two of
+  them as a scupper's cheeks — see the opening rule below for what that cost.
+- **a roof is a roof where it has the sky over it.** One slab is both: `Roof_Deck9_CLT` is the
+  deck 9 roof where the insulation and the membrane sit on it, and the **headhouse floor** where it
+  runs on under the headhouse and the insulation is cut away around it. One part, one role, two
+  surfaces — so no test on the part can tell them apart and `build._under_cover` asks it of the
+  face, by casting straight up and reading whether the substrate is hit. Nothing is authored but
+  the reading of a hit: one rising less than `TOL` is the face catching its own ray, or a
+  neighbour in its own plane clipped at the shared edge. Filtering the *hit* rather than nudging
+  the *origin* is what makes it a rule — a 1 µm nudge read 32 sloped faces as covered by
+  themselves and a 10 µm nudge read none, and neither figure says anything about the building.
+  Measured: 2 faces of the deck 9 bake and none at all on either headhouse bake. Duncan,
+  2026-08-26: *"The selected faces in Membrane should not be covered. They are on the inside of
+  the headhouse walls."*
 - **climb or flange** — whichever face of a wall the roof runs into decides it. Into the interior
   face and the membrane climbs the whole of it and carries over the top; into the exterior face
   and it stops, and the lap turns it up there. Tested per **wall**, not per face: only one
@@ -752,9 +833,32 @@ listed — there are no plane coordinates and no part indices in them:
   — the upstand where the membrane stops is not, because the lap reads that off the substrate. So
   `_rules` returns `climbed` and no longer computes `flanged`, which existed only to hand those
   faces a turn-out and to keep them from also getting a skirt.
+  **A roof runs into a wall through a ledge as well as through a face.** Where a parapet is
+  thicker below the roof than above it, the build-up butts into the thick part and what it meets
+  at its own level is the *top* of that thickening — an upward face of the wall, coplanar with the
+  finished roof surface and continuous with it. `Parapet-Deck9-S` is 420 mm thick to z = 11.5344
+  and 248 mm above, so the taper's top shares an edge with a 172 mm ledge and touches no vertical
+  face of the parapet at all: on `interior & meets` alone not one of the four deck 9 parapets was
+  climbed, the membrane stopped at the roof's edge and their copings went bare. Duncan,
+  2026-08-26: *"Horizontal ledges like F11 in Substrate_Parapet-Deck9-S should be covered with
+  membrane. Membrane then continues up the parapet wall and covers the cap plates like on the
+  headhouse."* Both halves are the one election — the ledge is picked up by "every upward face of
+  a climbed wall" and so is the coping, the cap plate being one body of the element. A wall a roof
+  merely **bears on** is not caught by it: what is tested is the roof's *upward* face, and a deck
+  resting on a wall top touches it with its underside, at another level and sharing no edge.
 - **an opening cut through a wall.** `build._opening` reads a slot's **cheeks** — two vertical
   faces of one *body* looking **at** each other, where a wall's thickness and a wall's two ends
-  look away — and its **floor**, an upward face with a cheek pair standing *over* it. Per body,
+  look away, **and each cut through its wall**: flanked by an opposed pair looking *away*, which
+  is the wall's own thickness by the same sign the pairing uses. Both halves are needed and the
+  second was missing until 2026-08-27. A wall that turns both inner corners of an enclosure holds
+  a return on each of the two planes that face each other across it, and they face toward:
+  `Parapet-Deck9-W` read as a 7.1 m cheek pair, the set was then grown along both planes the whole
+  way round the building, and the cladding came down the inside of every deck parapet to the ledge
+  instead of stopping at its drip. A court's inner face is flanked by an opposed pair too — the
+  returns at its two ends — but they look *toward* each other, because what lies between them is
+  the court and not a wall. A **rebated** reveal reaches one side only and is refused, which is an
+  under-claim no substrate here poses. And its **floor**, an upward face with a cheek pair standing
+  *over* it. Per body,
   not per element: a slot cuts through the cap plates too, so per element their two reveals look
   at each other and the coping reads as a cheek pair. And *standing over*, not merely touching:
   the same cheeks meet the wall's own coping where the slot cuts through it, but stop at that
@@ -776,6 +880,17 @@ listed — there are no plane coordinates and no part indices in them:
   wall's own coping becomes the floor of an opening, which `cladding_faces` then subtracts. The
   lining's remaining defect is its **bottom** edge, which is the scupper knife — see NOTES, *"The
   cheek lining is wrong, and what it is"*, cause 2.
+- **a wall top the roof runs into is a ledge, not a coping.** "Every wall top" meant every upward
+  face of a wall, so the rainscreen ran out across the 172 mm ledge at the finished roof level,
+  under the membrane. It is `_rules`' own sentence read the other way round, and it takes both
+  halves: the roof running in is what makes it roof rather than coping — it is the very face that
+  elects the wall to be climbed, and the membrane covers it on that election — and the wall
+  carrying on above it is what makes it a step rather than a top. The second half is not
+  belt-and-braces: a coping shares an edge with the top of a cornice beside it, and an **ungrouped**
+  cornice classifies `ROOF`, so on the first half alone every such coping would read as a ledge.
+  The seed is grown along the surface through the wall tops, because the union triangulates a ledge
+  and only the triangles on the roof's own edge touch it. Duncan, 2026-08-27; measured at 19 faces
+  on the deck bake and none at all on the other three.
 - **both skins cap a wall, deliberately.** A top the membrane carries over is also claimed by
   `cladding_faces`' "every wall top", so a parapet coping belongs to two skins at once — a
   membrane upstand with a metal coping over it, which is what a parapet is built as. Decided
@@ -879,7 +994,9 @@ enough to matter, and the headhouse taper's top already does in the shipping bak
 matches each face against the representatives already found instead, and `_lap`, `_knives` and the
 run chaining all key on its id. A run that silently fails to chain is a lap that silently does not
 happen. That is the accuracy floor for everything downstream: `TOL = 1e-6`
-(`build.py`) and `PLANE_TOL = 1e-6` (`skin/offset.py`) exist for it. Do not tighten them — an
+(`build.py`), `PLANE_TOL = 1e-6` (`skin/offset.py`) and `SURFACE_TOL = 1e-6` (`skin/measure.py`,
+how near a part's surface a sample has to be to count as *on* it) exist for it. Do not tighten
+them — an
 earlier 1 nm threshold produced a bogus self-intersection warning, and a 1e-12 test for *parallel*
 planes produced three more in 2026-08-25's verdict, off a sliver whose normal was 1.4e-11 out.
 `RIDGE = 1e-9` keeps the KKT system non-singular where the soft equations leave a vertex free; it
@@ -893,11 +1010,18 @@ drop duplicate loop corners until 2026-08-25 and now declares its own `WELD_TOL`
 value. It is declared rather than imported, because `skin/clean.py` is the only module that needs
 shapely and nothing in the core may reach into it.
 
-**Two tolerance rules that are easy to get wrong, both found by review:**
+**Three tolerance rules that are easy to get wrong, all found by review:**
 
 - **`np.isclose` and `np.allclose` keep `rtol=1e-5` unless you say otherwise.** At this model's
   ~15 m coordinates that is a 0.15 mm tolerance, not the nanometre the `atol` names. Pass
   `rtol=0.0` at every call that means an absolute distance. Two calls were wrong this way.
+- **A zero-length normal is not a plane, and every reader of one has to say so.** A degenerate
+  face's normal is `[0, 0, 0]`, and `abs(n_z) < tol` reads that as *level* — so it reached the
+  solve as the hard equation `0 · t = distance`, which nothing satisfies and which pins
+  `offset_residual` at `distance` for ever. The surface is placed correctly; the readout is
+  destroyed, and being a max it then masks a real violation elsewhere in the body. `_opposed`
+  drops these and `_vertex_planes` now drops them too. Measured on a cube with one degenerate
+  face: residual 2.26e-17 against 0.01.
 - **Never decide coplanarity from the angle between two normals.** A sliver's normal is noisy
   where its vertices are not: `clean` leaves a 0.13 × 275 mm triangle in the membrane whose normal
   is 1.4e-11 off its plane's. `measure._cross` tests the corners' **distance** to the other plane

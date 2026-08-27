@@ -395,18 +395,57 @@ def clean(
                     # a point the union preserved comes back bit-identical, so
                     # it maps to the vertex it came from rather than to an
                     # unprojection of itself
-                    rings.append(
-                        (
-                            [
-                                points.index(
-                                    held.get(tuple(q), origin + q[0] * u + q[1] * v)
-                                )
-                                for q in plan
-                            ],
-                            plan,
-                            way,
-                        )
-                    )
+                    one = [
+                        points.index(held.get(tuple(q), origin + q[0] * u + q[1] * v))
+                        for q in plan
+                    ]
+                    # ...and two consecutive coordinates of one ring can weld to
+                    # that same point: GEOS reached one crossing twice, from
+                    # each of the two boundaries meeting there, and the two
+                    # answers differ in the last bits. The zero-length edge
+                    # between them changes no outline, but it makes each of the
+                    # pair look **straight through** to `_corners` -- its ring
+                    # neighbour is itself, so the cross product is exactly zero
+                    # -- and `dissolve` then drops both, cutting the corner off.
+                    # Measured on the live bake: one L-shaped ring of the
+                    # cladding came back as a diagonal and the skin gained
+                    # 0.910 m2 of surface the offset never placed, on a pass
+                    # whose whole claim is that it changes no outline
+                    kept = [k for k in range(len(one)) if one[k] != one[k - 1]]
+                    if len(kept) < 3:
+                        # ...and where the dedup leaves fewer than three, the
+                        # duplicates go back. Fewer than three distinct points
+                        # enclose no area, so the ring is a spur and there is
+                        # nothing on it to straighten: `_straightened` refuses
+                        # to leave fewer than three, so it survives whole either
+                        # way. What the restore costs is a **vote**. `_corners`
+                        # is asked once over the whole mesh, and with
+                        # `one[k - 1] == one[k]` it reads `points[here] -
+                        # before` as zero, so this ring registers no corner at
+                        # the point it doubles back from — where the deduped
+                        # ring would come back with `span == 0` and register
+                        # one, which is the conservative answer. The cost of
+                        # getting that wrong is a T-junction, and it is the one
+                        # this pass exists to avoid: a point the spur turns at
+                        # that is straight through on every other ring holding
+                        # it would be dissolved out from under a ring that keeps
+                        # it.
+                        # Measured 2026-08-27, because this does fire — once,
+                        # on the live bake's membrane, an `[a, b, a]` spur
+                        # between (8.072, 5.293, 14.619) and (8.072, 5.177,
+                        # 14.503). Run both ways the output is identical: 145
+                        # -> 113 triangles, 59 -> 35 border edges, 15 -> 0
+                        # T-junctions and the same area to 1e-6 mm2, because `a`
+                        # takes its corner vote from another ring anyway. (That
+                        # is `clean(dissolve=True)` alone; `build.py` reads
+                        # 145 -> 115 on the same skin because it also asks for
+                        # `close` and the tear takes two gussets.) So it
+                        # is left as it is. If a substrate ever poses one that
+                        # does not, drop the ring rather than restoring it — it
+                        # encloses nothing, and dropping it removes the false
+                        # vote without deleting surface
+                        kept = list(range(len(one)))
+                    rings.append(([one[k] for k in kept], plan[kept], way))
         plans.append(rings)
 
     thinned = 0

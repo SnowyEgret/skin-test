@@ -1671,3 +1671,139 @@ def test_a_turn_is_refused_where_the_skin_already_stands_proud_of_the_arris():
         assert span.max() - span.min() == pytest.approx(width, abs=1e-6), (
             "the band is not the part of the drip the skin leaves uncovered"
         )
+
+
+def test_a_courtyard_is_not_an_opening_cut_through_a_wall():
+    """Two returns facing each other across a court are not a scupper's cheeks.
+
+    `_opening` read the sign alone — two vertical faces of one body looking
+    **at** rather than away from each other — and a wall that turns both inner
+    corners of an enclosure presents exactly that: a return on each of the two
+    planes that face each other across it. `Parapet-Deck9-W` carries the deck's
+    north-west and south-west corner blocks, so its two returns read as a 7.1 m
+    cheek pair; `cheeks` is then grown along the surface, so both planes were
+    claimed the whole way round the building and the cladding came down the
+    inside of every deck parapet to the ledge.
+
+    The other half of the rule is the word **through** in this function's own
+    first sentence: a reveal reaches both faces of the wall the opening is cut
+    through, and comes through the union flanked by an opposed pair of them. A
+    return at an inner corner is flanked by the two faces turning that corner,
+    a quarter turn apart, and by nothing opposed at all.
+    """
+    from build import _opening
+
+    ring = trimesh.boolean.difference([
+        substrate.prism((0.0, 0.0, 0.0), (4.0, 3.0, 1.0)),
+        substrate.prism((0.4, 0.4, -0.1), (3.6, 2.6, 1.1)),
+    ])
+    ring.vertices = substrate.snapped(ring.vertices)
+    cheeks, floor = _opening(_faces([ring]))
+    assert not cheeks.any(), "the court read as an opening cut through the wall"
+    assert not floor.any(), "...and its wall tops as that opening's sill"
+
+    # ...and the same body with a slot actually cut through one side still has
+    # its cheeks, so what separates them is the geometry and not the shape of
+    # the test
+    slotted = trimesh.boolean.difference([
+        ring, substrate.prism((1.6, -0.1, 0.7), (2.0, 0.5, 1.1)),
+    ])
+    slotted.vertices = substrate.snapped(slotted.vertices)
+    faces = _faces([slotted])
+    cheeks, floor = _opening(faces)
+    assert cheeks.any() and floor.any(), "the slot's own cheeks went missing"
+    for f in np.flatnonzero(cheeks):
+        assert abs(abs(faces.normals[f][0]) - 1) < 1e-6, "a cheek faces along x"
+        assert faces.centres[f][1] < 0.4, "a cheek outside the slotted wall"
+    for f in np.flatnonzero(floor):
+        assert faces.centres[f][2] == pytest.approx(0.7, abs=1e-6), "not the sill"
+
+
+def _stepped_parapet_over_a_roof():
+    """A parapet thicker below the roof than above it, and the roof it stops.
+
+    `Parapet-Deck9-S` in miniature: 420 mm to the finished roof level and 248 mm
+    above it, so the build-up butts into the thick part and what it meets at its
+    own level is a 172 mm ledge — an upward face of the wall, continuous with
+    the roof. Two bodies of one object, which is how a bake arrives; the real
+    parapet is one part and the step is a notch in it.
+    """
+    from build import FACADE, RAINSCREEN
+
+    lift = substrate.prism((0.0, 0.0, 0.0), (0.42, 6.0, 1.0))
+    parapet = _stacked_box(0.0, 0.248, 0.0, 6.0, 1.0, 2.0, ztop=1.97)
+    roof = substrate.prism((0.42, 0.0, 0.8), (4.0, 6.0, 1.0))
+    for part, name, obj in (
+        (lift, "lift", "Parapet"), (parapet, "parapet", "Parapet"), (roof, "roof", "Roof"),
+    ):
+        part.metadata.update({"name": name, "object": obj, FACADE: RAINSCREEN})
+    return [lift, parapet, roof]
+
+
+def test_a_wall_top_the_roof_runs_into_is_not_a_coping():
+    """"Every wall top" meant every upward face of a wall, and a ledge is one.
+
+    So the rainscreen came down the inside of the parapet and out across the
+    ledge, under the membrane — which is not somewhere a rainscreen goes. The
+    ledge is the roof's own datum: it is at the finished roof level, continuous
+    with the build-up, and it is the very face that elects this wall to be
+    climbed. The membrane covers it on that election and this skin stops at the
+    drip above it. Duncan, 2026-08-27.
+
+    Both halves of the test are needed. *The roof runs in* is what makes it roof
+    rather than coping. *The wall carries on above it* is what makes it a step
+    rather than a top — a coping with an ungrouped cornice beside it shares an
+    edge with the cornice's top, and a lone cornice classifies `ROOF`.
+    """
+    from build import cladding_faces, cladding_laps, membrane_faces, _upward
+
+    parts = _stepped_parapet_over_a_roof()
+    faces = _faces(parts, body=substrate.union(parts))
+    up = _upward(faces.normals)
+    ledge = up & (np.abs(faces.centres[:, 2] - 1.0) < 1e-6) & (faces.centres[:, 0] < 0.42)
+    coping = up & (faces.centres[:, 2] > 1.9)
+    assert ledge.any() and coping.any(), "the fixture poses neither"
+
+    clad, membrane = cladding_faces(faces, FALL), membrane_faces(faces, FALL)
+    assert not (ledge & ~membrane).any(), "the membrane left the ledge bare"
+    assert not (ledge & clad).any(), "the rainscreen ran out across the ledge"
+    assert not (coping & ~clad).any() and not (coping & ~membrane).any(), (
+        "both skins cap a wall, and that has not changed"
+    )
+    # the inside of the parapet is what the cladding does reach, and only as the
+    # lap hanging off that coping
+    inside = (faces.normals[:, 0] > 1 - 1e-6) & (faces.centres[:, 2] > 1.0)
+    assert inside.any() and not (inside & clad).any()
+    assert not (inside & ~cladding_laps(faces, FALL)).any()
+
+
+def test_a_face_with_no_area_states_no_plane():
+    """A degenerate face must not reach the solve as a constraint row of zeros.
+
+    `abs(n_z) < tol` reads a zero-length normal as level, so the row is held
+    **hard** at `0 . t = distance` — an equation nothing satisfies. The solve
+    still places every vertex correctly, but `offset_residual` is pinned at
+    `distance` and can never fall below it, and since it is a max, a genuine
+    violation anywhere else in the body is masked by it. That matters because
+    the residual is the build's primary readout: above ~1e-9 means something
+    broke. `_opposed` already drops these normals for the same reason — a face
+    with no area states no plane.
+
+    manifold3d's float32 output is where they come from; no substrate here poses
+    one today, which is why this is stated on a cube rather than measured on a
+    bake. Found by `/code-review high`, 2026-08-27.
+    """
+    base = substrate.cube(2.0)
+    degenerate = trimesh.Trimesh(
+        vertices=base.vertices,
+        faces=np.vstack([base.faces, [[0, 0, 1]]]),  # two corners repeated
+        process=False,
+    )
+
+    clean, spoiled = planar_offset(base, D), planar_offset(degenerate, D)
+
+    assert spoiled.metadata["offset_residual"] < 1e-9
+    assert spoiled.metadata["offset_residual"] == clean.metadata["offset_residual"]
+    # ...and the surface is where it always was: the row is dropped, not
+    # traded off against the ones that state a plane
+    assert np.allclose(spoiled.vertices[: len(clean.vertices)], clean.vertices, rtol=0.0)
