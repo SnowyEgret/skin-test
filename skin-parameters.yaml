@@ -31,6 +31,25 @@ classify:
 # along the fall of that wall's own top, and as an end when it lies across it.
 fall: 0.707
 
+# The second allowance. A cladding skin stands `distance` off the wall it clads,
+# and `reveal` off a substrate feature it dies against instead of covers: the
+# soffit and ends of a cornice, and the cheeks of an opening it lines. Duncan,
+# 2026-08-27: *"The top of the masonry cladding should be offset by this value
+# under a cornice. The cladding should be offset from bottom, and sides of the
+# two scuppers by this value."*
+#
+# One number, top-level rather than per skin, because it is a property of how a
+# cladding system meets a substrate feature and not of any one system — both the
+# masonry and the rainscreen want the same 18 mm, and two skins each authoring it
+# would collide in `check_seeds` as equal seeds.
+#
+# It **is** a seed and `check_seeds` reads it: it is a distance between two
+# surfaces, which is exactly what a bug can swap for another, where `base` is a
+# datum and `close` a bound on a cleanup. 0.016 was asked for first and is
+# refused — it is 2x `Membrane.distance` — so 0.018 was authored instead
+# (Duncan, 2026-08-27, choosing that over moving the membrane off 8 mm).
+reveal: 0.018
+
 # The skin distances. NON-DEGENERATE SEEDS (student-house CLAUDE.md, hard
 # rule, enforced by `parameters.check_seeds`): no two are equal and none is an
 # integer multiple of another. `Membrane.drop` and `Cladding.distance` were both

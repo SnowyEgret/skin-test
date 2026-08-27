@@ -4,7 +4,7 @@
   "description": "Every tunable number in the rig. STRICT-COMPLETE: every property is required and additionalProperties is false everywhere, so a missing knob and a misspelt one both fail at the load seam rather than silently taking a default. Per-field validity (types, ranges, required, no strays) is enforced here; the cross-field residue a schema cannot express — non-degenerate seeds, a lapping skin having a direction to lap in, names matching the rule table — lives in Python (skin/parameters.py and build.py).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["classify", "fall", "skins"],
+  "required": ["classify", "fall", "reveal", "skins"],
   "properties": {
     "classify": {
       "description": "substrate.classify's two thresholds — WALL or ROOF from geometry alone.",
@@ -31,6 +31,11 @@
       "type": "number",
       "exclusiveMinimum": 0,
       "exclusiveMaximum": 1
+    },
+    "reveal": {
+      "description": "The second allowance, metres. Where a cladding skin dies against a cornice it does not cover, or lines the cheeks of an opening cut through a wall, it stands this far off that surface instead of its own distance. One number shared by every skin that clads a facade, because it is a property of how a cladding system meets a substrate feature rather than of any one system. Strictly positive — see build.reveal_faces for which faces take it and build.skin_offsets for how it is applied.",
+      "type": "number",
+      "exclusiveMinimum": 0
     },
     "skins": {
       "description": "One entry per skin, in build order. Each name must match a rule set in build.py's RULES exactly — no defaults, either way.",

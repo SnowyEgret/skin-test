@@ -1196,6 +1196,108 @@ def facade_offsets(faces, fall, mine, keep, others):
     return offsets
 
 
+def reveal_faces(faces, fall, covers):
+    """The substrate faces a cladding skin stops `reveal` off, not its own allowance.
+
+    Duncan, 2026-08-27: *"The top of the masonry cladding should be offset by
+    this value under a cornice. The cladding should be offset from bottom, and
+    sides of the two scuppers by this value."* Two sets, and they are the same
+    thing said of two features — a surface the skin **dies against** rather than
+    covers, where dying `distance` away leaves a gap the size of the cavity
+    instead of a joint:
+
+    * **a cornice's soffit and its ends**, where this skin reaches them. Never an
+      upward face, and that exclusion is the whole of the second half of Duncan's
+      sentence — *"maintain its original offset from the top of the scuppers"*.
+      A scupper cornice's top is the sill, which is the roof surface running out
+      through the outlet, and a wall cornice's top is flush with the coping. Both
+      are surfaces the water crosses, not edges the cladding stops beside, and
+      both are shared with something the skin does hold at `distance`: at
+      `v93 [8.5, 4.985, 14.495]` the headhouse taper lands on the sill plane
+      exactly, so moving it asked one continuous surface to be 18 mm and 85 mm
+      from the skin at one vertex. Measured before the exclusion existed: 68.703
+      mm of slope absorption — `slope_deviation` is a max, so that pinned the
+      build's second diagnostic at a value it could not fall below — and the
+      cladding's turn-down band crossing the membrane over the roof by 0.1 mm.
+    * **the cheeks of an opening this skin lines.** These it *covers*, so this is
+      the one place a covered face moves by something other than `distance` —
+      see `planar_offset`. A rainscreen returning into a reveal closes its cavity
+      down to a sheet rather than carrying 85 mm of it into the opening.
+
+    Only a skin that clads a facade takes a reveal, which is the gate
+    `facade_offsets` already uses and is derived rather than listed. It is what
+    keeps the **membrane** out: it lines the same cheeks and dies against the
+    same cornices, at its own 8 mm, and it should — the reveal is where a
+    cladding system stops, not where the waterproofing does.
+    """
+    target = np.zeros(len(covers), dtype=bool)
+    exterior, _ = wall_faces(faces, fall)
+    if not (exterior & covers).any():
+        return target                   # clads no facade, so it meets no cornice
+    cheeks, _ = _opening(faces)
+    return (
+        faces.tagged(CORNICE, True) & ~_upward(faces.normals) & faces.touching(covers)
+    ) | (cheeks & covers)
+
+
+def skin_offsets(faces, fall, mine, reveal, keep, others):
+    """How far each face's plane moves when this skin is solved: the whole rule.
+
+    `facade_offsets` first — the miter onto a neighbouring cladding system — and
+    then `reveal_faces` over the top of it. The two are composed here rather than
+    written as one function because they answer different questions: one is about
+    where this skin **meets another skin**, the other about where it **stops
+    against the substrate**, and only the first needs to know the siblings exist.
+
+    Both are applied **per plane**, for the reason `facade_offsets` gives at
+    length: a plane is one surface to the solve, and `_vertex_planes` refuses a
+    vertex asked for two distances on one normal. Per face is not an option and
+    was measured — `two offsets on one plane at vertex 83 [8.08, 4.785, 14.495]`,
+    where the scupper's sill and the drip cornice's top share the plane they are
+    coplanar on.
+
+    A plane is taken **only if it carries no face this skin covers that is not
+    itself a reveal face**, and that clause is doing real work rather than
+    guarding a hypothetical. A *scupper* cornice's ends carry nothing but the
+    cornice — two faces, nothing clad — where a *wall* cornice's ends lie in the
+    neighbouring elevation: `Cornice-Deck9-N` puts one on the `x = 8.5` court
+    plane, which carries 21 faces of which 15 are the cladding's own. Taking that
+    plane raised at `v90`, rightly; leaving it to `facade_offsets` is correct,
+    because there the cornice's end is one face on an elevation this skin clads
+    and the elevation owns the plane. The exception is a cheek, which this skin
+    covers *and* holds at `reveal`: there the whole plane is reveal and the test
+    passes on its own, with no special case to write.
+
+    Where the two rules want the same plane it **raises** rather than picking.
+    That is two systems and a substrate feature claiming one surface, and it is
+    the same decision `facade_offsets` refuses to take by default. No substrate
+    here poses it — every reveal plane is left at `mine` by the miter.
+    """
+    offsets = facade_offsets(faces, fall, mine, keep, others)
+    covers = keep(faces)
+    target = reveal_faces(faces, fall, covers)
+    if not target.any():
+        return offsets
+
+    ids, _ = _plane_ids(faces.body)
+    for plane in np.unique(ids[target]):
+        on = ids == plane
+        if (on & covers & ~target).any():
+            continue        # a facade this skin clads; `facade_offsets` owns it
+        moved = offsets[on] != mine
+        if moved.any():
+            raise ValueError(
+                f"plane {np.round(faces.normals[on][0], 6).tolist()} at "
+                f"{np.round(faces.centres[on][0], 4).tolist()} is claimed both by a "
+                f"neighbouring cladding system (moving it {sorted(set(offsets[on][moved].tolist()))} m) "
+                f"and by this skin's reveal ({reveal} m). One surface cannot be "
+                f"finished by two systems and stopped short of at once — decide which, "
+                f"rather than letting the order of these two rules decide it"
+            )
+        offsets[on] = float(reveal)
+    return offsets
+
+
 def check_facades(faces, fall, systems=CLADDING_SYSTEMS):
     """Every facade claimed by exactly one cladding system, or raise.
 
@@ -1368,29 +1470,25 @@ def cladding_laps(faces, fall):
     `np.abs(faces.normals[:, 2]) < TOL` is the shape of the change when that
     conversation happens.
 
-    It is **no longer the whole of it**, and that is worth knowing before the
-    conversation rather than after. `skin/offset._lap` reads a receiving face's
-    offset plane as `plane + distance`, the skin's own scalar — which was true
-    of every receiver until `facade_offsets` began moving a neighbouring
-    facade's plane by somebody else's allowance, or by zero. Widen this to every
-    vertical face and the cladding may lap onto a facade the masonry dresses,
-    where that assumption is 85 mm out: the run-on and fold tests then compare
-    against a level that is not the surface, and silently place nothing or start
-    a probe out in space. Measured on the live bake by doing it — `clearance`
-    74.89 → 8.62 mm. `_lap` has to take the per-face offsets first. Found on
-    review, 2026-08-26.
+    The hazard this used to carry is **gone at source**, and the shape of it is
+    worth keeping because it is what a widening has to not reintroduce. `_lap`
+    read a receiving face's offset plane as `plane + distance`, the skin's own
+    scalar — true of every receiver until `facade_offsets` began moving a
+    neighbouring facade's plane by somebody else's allowance, or by zero. Widen
+    this to every vertical face on that footing and the cladding could lap onto a
+    facade the masonry dresses, where the assumption is 85 mm out: the run-on and
+    fold tests would compare against a level that is not the surface, and
+    silently place nothing or start a probe out in space. Measured on the live
+    bake by doing it — `clearance` 74.89 → 8.62 mm.
 
-    What keeps it unreachable is now a **measurement, not a guarantee**, and the
-    difference is worth stating. It used to be that an interior face was never in
-    the exterior set `facade_offsets` moved; that stopped being true the same day,
-    when the miter widened from the neighbour's facade *faces* to the neighbour's
-    facade **plane** — one plane is one surface to the solve, and a face on it
-    that is nobody's facade cannot be left behind. So an interior face on a
-    neighbour's facade plane, facing the same way, is now moved. What is measured
-    across all four substrates here is that **no** face any skin may lap onto is
-    a face `facade_offsets` moves: 0 of 2, 0 of 12, 0 of 102, 0 of 138. Masonry
-    is safe by construction — `lap: None` — and this skin is safe by that count.
-    Check it again if either predicate widens. Found on review, 2026-08-26.
+    `_lap` now takes the per-face offsets, so every place it reasons about a
+    named face reads that face's own. It moved no geometry when it landed
+    (2026-08-27, with `reveal`): the four sites are `drip_at`'s miter, the fold's
+    receiving level, the fold probe's step back onto the arris and the turned
+    band's level, and on all four substrates each already had the scalar right.
+    It is a backstop rather than a repair — but it is the backstop that makes
+    widening this predicate a question about *what the cladding should do*
+    rather than one about whether the machinery can express the answer.
     """
     exterior, interior, roof, climbed = _rules(faces, fall)
     return interior
@@ -1473,7 +1571,9 @@ def skins(params: dict | None = None) -> tuple[dict, ...]:
     # every skin's own `keep`, bound, so each spec can be handed the *others* --
     # `facade_offsets` needs them to know which system dresses the facade it
     # ends against. This is the only place one skin learns of another, and it
-    # learns nothing but a predicate and a distance
+    # learns nothing but a predicate and a distance. `reveal` rides alongside it
+    # into `skin_offsets`, which composes the two: a reveal is about the
+    # substrate and needs no sibling at all
     bound = {
         spec["name"]: (partial(RULES[spec["name"]]["keep"], fall=fall), spec["distance"])
         for spec in params["skins"]
@@ -1503,9 +1603,10 @@ def skins(params: dict | None = None) -> tuple[dict, ...]:
                 "display": spec["display"],
                 "keep": bound[spec["name"]][0],
                 "offsets": partial(
-                    facade_offsets,
+                    skin_offsets,
                     fall=fall,
                     mine=spec["distance"],
+                    reveal=params["reveal"],
                     keep=bound[spec["name"]][0],
                     others=tuple(
                         pair for name, pair in bound.items() if name != spec["name"]
@@ -1700,9 +1801,14 @@ def build(
         # millionth of a square millimetre, orders below any real overlap
         if tidy.metadata["overlap_removed"] > 1e-12 or len(tidy.faces) != len(skin.faces):
             thinned = tidy.metadata["vertices_dissolved"]
+            # clamped at the same floor the guard uses, because a sum of triangle
+            # areas that cancels lands either side of zero and `-0 mm2 of overlap
+            # removed` reads as a defect. The masonry prints this line on the
+            # triangle count alone, having no overlap at all
+            removed = max(tidy.metadata["overlap_removed"], 0.0)
             print(
                 f"           cleaned:"
-                f" {tidy.metadata['overlap_removed'] * 1e6:.0f} mm2 of coplanar"
+                f" {removed * 1e6:.0f} mm2 of coplanar"
                 f" overlap removed,"
                 + (f" {thinned} collinear vertices dissolved," if thinned else "")
                 + f" {len(skin.faces)} -> {len(tidy.faces)} triangles,"

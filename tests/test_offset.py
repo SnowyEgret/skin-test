@@ -467,10 +467,14 @@ def test_the_masonry_runs_the_whole_face_below_a_cornice_not_one_lift():
     masonry_skin = _skin_from(
         next(s for s in skins(params) if s["name"] == "Masonry"), parts
     )
-    # the whole facade, ground to cornice underside, at the masonry allowance
+    # the whole facade, ground to cornice underside, at the masonry allowance --
+    # and its top stops `reveal` under the soffit rather than its own 150 mm,
+    # which is the second allowance and not the offset the panel stands at
     assert np.abs(masonry_skin.vertices[:, 0] + 0.15).max() < 1e-6
     assert masonry_skin.vertices[:, 2].min() == pytest.approx(0.0, abs=1e-6)
-    assert masonry_skin.vertices[:, 2].max() == pytest.approx(3.9 - 0.15, abs=1e-6)
+    assert masonry_skin.vertices[:, 2].max() == pytest.approx(
+        3.9 - params["reveal"], abs=1e-6
+    )
 
 
 def test_a_wall_corniced_on_two_faces_is_refused():

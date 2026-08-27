@@ -9,9 +9,29 @@ Last worked: 2026-08-27.
 rationale. This file is the running log: what the geometry currently is, what was tried
 and rejected, and what is still open.
 
-## Start here (picking up after 2026-08-26)
+## Start here (picking up after 2026-08-27)
 
 ### Where to pick up
+
+**The reveal landed on 2026-08-27 — a second authored allowance, `reveal: 0.018`.** A cladding
+skin stands `distance` off the wall it clads and `reveal` off a substrate feature it dies against.
+All four substrates build warning-free and the suite is 138 → 147.
+
+    Membrane   offset   8 mm | residual 9.89e-17 | clearance  7.3149 mm | 215 -> 163 triangles
+    Cladding   offset  85 mm | residual 9.44e-16 | clearance 17.9999 mm | 193 -> 121 triangles
+    Masonry    offset 150 mm | residual 1.69e-15 | clearance  18.0000 mm |  12 ->   2 triangles
+
+Separations are 10.000 / 55.973 / 88.000 mm. **Slope absorption is bit-identical to before on
+every substrate** — 0.685/7.279/7.400 here, 0.158/1.717/2.969 on unit8, 0.158/1.717 on the
+headhouse, 0.655/6.963/12.287 on the three-part deck — which is the check that says the reveal
+moves the planes it names and disturbs nothing else in the solve. See *"The reveal, and the sill
+that is a roof"* below for what it cost to get there.
+
+The cladding's clearance is now **the authored reveal**, and will be on any substrate with a lined
+opening: the lining stands 18 mm off its cheek by construction, so `distance` is no longer the
+floor. That is the fourth reason `clearance` is printed rather than asserted, and the first one
+that is a design intent rather than an artefact.
+
 
 **The fourth substrate arrived on 2026-08-26 and now builds, warning-free.**
 `deck9-parapets-caps-cornices-clt-insulation-unit7-walls-headhouse.obj` — 35 objects, the
@@ -20,13 +40,16 @@ a second corniced wall. Duncan: *"The geometry is familiar, I am hoping this wil
 incident. A real test for our program."* It was not without incident: **seven** defects, all in
 this module, all fixed and pinned. See *"The deck 9 bake: what it found"* below.
 
+As it stood **that day** — the current figures are the block above, and the cladding and masonry
+readings have since moved with the reveal:
+
     Membrane   offset   8 mm | residual 9.89e-17 | clearance  7.3149 mm | 215 -> 163 triangles
     Cladding   offset  85 mm | residual 1.10e-15 | clearance 74.8901 mm | 215 -> 126 triangles
     Masonry    offset 150 mm | residual 1.78e-15 | clearance 150.0000 mm |  12 ->   2 triangles
 
 No self-crossing, nothing crossing into the substrate, nothing buried, no pair of skins crossing.
-The three earlier substrates are unchanged to the figure — 173172 mm², 3304 mm², 145 → 115,
-142 → 86, clearance 7.8808 and 74.8903, separation 66.889 — and the suite is 131 → 138.
+The three earlier substrates were unchanged to the figure — 173172 mm², 3304 mm², 145 → 115,
+142 → 86, clearance 7.8808 and 74.8903, separation 66.889 — and the suite was 131 → 138.
 
 **`Headhouse-N`'s nib needs no re-modelling after all.** Duncan chose on 2026-08-26 to cut it and
 re-export rather than build a vertex split, and that is now moot: the fold at `v53` was the
@@ -42,6 +65,9 @@ went 0.0006 → 74.8901 mm. Nothing was tolerated in the end.
 
 ### Open, and first thing tomorrow
 
+**The reveal is done and nothing about it is open** — see the entry below. The one thing it
+declined to decide is what a *turning upstand* should be priced at, and no substrate poses it.
+
 **The cladding skirt around the deck is fixed** — Duncan described the two errors on 2026-08-27
 and both are closed. See *"The skirt around the deck, and the two rules under it"* below for the
 diagnosis, the fixes and what they moved.
@@ -52,6 +78,99 @@ corner return as a facade, and the cladding puts an 87 x 250 mm panel on it at `
 It was there before this session and was hidden inside a panel the false cheek pair drew over it;
 removing that panel is what left it standing alone. Nothing else on this substrate is open, and
 all four builds are warning-free.
+
+### The reveal, and the sill that is a roof (2026-08-27)
+
+Duncan: *"The offset of the cladding edge from the cornice is currently the same as the offset
+from the wall. Formulate a plan for creating a second offset seeded to 16 mm. The top of the
+masonry cladding should be offset by this value under a cornice. The cladding should be offset
+from bottom, and sides of the two scuppers by this value."*
+
+**The number is 18 mm, not 16.** `reveal` is a distance between two surfaces, so `check_seeds`
+reads it — `base` and `close` are exempt for being a datum and a bound on a cleanup, and neither
+reason transfers. 0.016 is exactly 2x `Membrane.distance`, which the seeding rule refuses. Duncan
+chose to author 0.018 rather than move the membrane off 8 mm. 0.017 and 0.015 are refused too (5x
+the cladding's 0.085 and 10x the masonry's 0.150); 0.014 and 0.018 are the nearest values that
+clear all six.
+
+**The rule is two sets and one exclusion**, and the exclusion is the whole of the difficulty. A
+cornice's soffit and ends, and the cheeks of an opening the skin lines — but **never an upward
+face**. The reason is in Duncan's second message, and it is the sentence that unblocked this:
+*"The cladding should maintain its original offset from the top of the scuppers."*
+
+I had read *"bottom of the scupper"* as the sill and built it that way. It is the drip cornice's
+soffit; the sill is the **top** edge of the hole. Read in elevation the hole is bounded by the
+cornice's soffit below, the cornice's ends and the cheeks at the sides, and the sill plane above —
+and **neither slot has a head at all**, because the cap plate is split in two (`CapPlate-Deck9-S`
+/ `S2`, `CapPlate-Headhouse-E` / `E2`) and the mouth runs open to the coping. That was the tell I
+missed: a face called "the top of the scupper" does not exist, so the phrase had to mean an edge
+of the hole.
+
+**What moving the sill cost, measured before the clarification arrived.** The headhouse taper
+falls to the outlet and lands on `z = 14.495` exactly, so the sill and the roof are one continuous
+surface arriving at `v93 [8.5, 4.985, 14.495]`:
+
+    f298 plane  9 [-1, 0, 0, -8.5]              0.085  Roof_Headhouse_InsulationTaper.1
+    f297 plane 55 [0, 0.0431, 0.9991, 14.6962]  0.085  Roof_Headhouse_InsulationTaper.1
+    f296 plane 54 [-0.02, 0, 0.9998, 14.3221]   0.085  Roof_Headhouse_InsulationTaper.2
+    f294 plane 53 [0, -0.0431, 0.9991, 14.2669] 0.085  Roof_Headhouse_InsulationTaper.3
+    f261 plane 27 [0, 0, 1, 14.495]             0.018  Parapet-Headhouse-E
+    f242 plane 27 [0, 0, 1, 14.495]             0.018  Parapet-Headhouse-E
+
+Plane 27 is level and hard; the three tapers are 1.1–2.5° off level and soft, so they absorbed
+`85 - 18` — **68.703 mm**, and `slope_deviation` is a max, so that pinned the build's second
+diagnostic at a floor it could not fall below. And the cladding's turn-down band, hanging on
+`x = 8.585` out over the roof, came down to `sill + 18 = 14.513` where the membrane at that point
+has already climbed to `14.5131`: the band's corner sat **0.1 mm below it**, 3 crossing pairs raw
+and 2 written, separation 0.049 mm.
+
+Two things ruled out on the way, both worth not re-trying. **Per face instead of per plane**
+raises — `two offsets on one plane at vertex 83 [8.08, 4.785, 14.495]`, where the sill and the
+drip cornice's top share the plane they are coplanar on. And **a trim at `sill + reveal`** cannot
+work in either direction: a cut only takes away, and the bottom edge at `14.580` is already above
+the datum, so it would remove nothing and move nothing. Lowering that edge *requires* moving the
+sill plane, so the 68.703 mm and the 0.1 mm were one decision, not two.
+
+**The plane-ownership clause.** A scupper cornice's ends carry nothing but the cornice — two faces
+each, nothing clad — so the whole plane is reveal. A wall cornice's ends are not: a band runs past
+the returns at each end, and `Cornice-Deck9-N` puts one on the `x = 8.5` court plane, 21 faces of
+which 15 are the cladding's own. Taking it raised at `v90 [8.5, 4.785, 14.503618]`. So a plane is
+taken only where it carries no face this skin covers that is not itself a reveal face, and
+`facade_offsets` keeps the rest. A cheek passes on its own, being covered *and* held at the reveal.
+
+**Where it all landed**, live bake:
+
+    Masonry top                       z = 12.718   (soffit 12.736 - 0.018)
+    Deck scupper, hole bottom         z = 11.4464  (soffit 11.4644)
+    Deck scupper, hole sides        x = 15.072 / 16.508   (cornice ends 15.09 / 16.49)
+    Deck scupper, cheek lining      x = 15.208 / 16.372   (cheeks 15.19 / 16.39)
+    Deck scupper, hole TOP             z = 11.6194  (sill 11.5344 + 0.085, unchanged)
+    Headhouse, hole bottom             z = 14.407
+    Headhouse, hole sides           y = 4.667 / 5.303
+    Headhouse, cheek lining         y = 4.803 / 5.167
+    Headhouse, hole TOP                z = 14.580   (unchanged)
+
+The turn-down band is now `drop + reveal` = 51 mm wide where it was 118. Nothing in `_lap` decides
+that: a turned band runs from the skin's own edge, so its width followed the lining inboard.
+
+**`_lap` now takes the per-face offsets**, which the `cladding_laps` docstring had been asking for
+since 2026-08-26. Four sites: `drip_at`'s miter, the fold's receiving level, the fold probe's step
+back onto the arris, and the turned band's level. It **moved no geometry**: run both ways on all
+four substrates, every emitted vertex of every skin is bit-identical, worst delta 0.0. So it is a
+backstop rather than a repair. The 12 vertices of the
+live bake that carry both a lined cheek at 18 mm and a face the skin laps onto at 85 mm are the
+reason it should not be left as a coincidence.
+
+One reading moved and is fully accounted for: unit8's masonry clearance `150.0002 → 86.8849`,
+which is the panel's own top corner 85 mm past the end of `Cornice-Unit8-E` (it mitres onto the
+rainscreen there) and 18 mm under its soffit — `sqrt(85^2 + 18^2)`. And that bake's
+masonry/rainscreen separation went `150.000 → 88.0001`: the brick's top rose 132 mm and what is now
+nearest to it is the rainscreen's own return coming over the parapet at `z = 13.0766`, straight
+above it. Both are the geometry doing what it should.
+
+**Still open, and deliberately not decided:** whether a *turning upstand* should take the reveal.
+Every turn on all four substrates today is a drip, so nothing poses it — the same gap the lap rule
+already records.
 
 ### The skirt around the deck, and the two rules under it (2026-08-27)
 

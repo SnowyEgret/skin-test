@@ -405,24 +405,30 @@ def test_the_baked_headhouse_reads_and_skins():
 
     membrane, cladding = built["Membrane"], built["Cladding"]
 
-    # Both read wrong until 2026-08-25 -- 3.6593 mm and 4.337 mm -- for one
-    # reason, the scupper knife, and both came right together when `_knife_side`
-    # landed, at 79.9703 and 71.973. They moved once more on 2026-08-26, when
-    # the skirt's turn-down ran down to the sill's offset at Duncan's *"E84, 86
-    # should be 5 mm lower"*: the sample taking the low reading is now the
-    # turn-down's own bottom-outer corner, which stands over the headhouse roof
-    # taper where the lining's corner 115 mm inboard stands 79.9703. Both
-    # figures are the same geometry read at two points, and neither is a defect
-    # -- this is the documented `clearance` exception, which is why it is
-    # printed and asserts nothing in `build.py`. The corner is at
-    # `(8.585, 4.752, 14.580)` and reads 74.8902 mm; it was at 4.755 reading
-    # 75.0194 until `Cladding.drop` went 0.030 -> 0.033 on 2026-08-26, when the
-    # masonry allowance arrived at 0.150 and `check_seeds` refused an exact 5x.
-    # The 3 mm is the seed moving, not the geometry changing shape
-    assert clearance(parts, cladding) == pytest.approx(0.0748902, abs=1e-6)
-    # 0.0670180 until the same 3 mm seed change; the closest approach is at the
-    # scupper, where the cladding's turn-down runs past the membrane's
-    assert separation(membrane, cladding) == pytest.approx(0.0668889, abs=1e-6)
+    # This reading has a history, and all of it was the scupper. It was 3.6593 mm
+    # until 2026-08-25, when `_knife_side` fixed the cause and it went to
+    # 79.9703; then 74.8902 on 2026-08-26, when the skirt's turn-down ran down to
+    # the sill at Duncan's *"E84, 86 should be 5 mm lower"* and its bottom-outer
+    # corner became the low sample. None of those was a defect -- this is the
+    # documented `clearance` exception, which is why it is printed and asserts
+    # nothing in `build.py`.
+    #
+    # It is now the **reveal**, and for the first time the low reading is the
+    # number the file authors rather than an accident of where a sample fell:
+    # the sample sits at `(8.3883, 4.803, 14.5826)`, on the lining 18 mm off the
+    # cheek at `y = 4.785`. A rainscreen returning into an opening closes its
+    # cavity down to a sheet, so the closest the cladding comes to this
+    # substrate is `reveal` by construction, and `distance` is no longer the
+    # floor anywhere an opening is lined
+    assert clearance(parts, cladding) == pytest.approx(params["reveal"], abs=1e-6)
+    # 66.8889 mm until the reveal landed. The closest approach is still at the
+    # scupper and is now the two linings on one cheek: the membrane at its 8 mm
+    # and the cladding at 18, so the gap is exactly the difference. That it is
+    # `reveal - Membrane.distance` to the micron is the thing worth pinning --
+    # both skins line the same reveal, and only the cladding holds off at the joint
+    assert separation(membrane, cladding) == pytest.approx(
+        params["reveal"] - 0.008, abs=1e-6
+    )
 
     # both skins cap the coping, as they did when the plates lived inside their
     # parapets. The cladding wraps over the plate; the membrane goes under it
@@ -603,6 +609,13 @@ def test_the_cheek_lining_reaches_the_coping_on_the_live_bake():
     the roof taper's end plane from the parapet's side because the cladding
     dresses no part of the taper. Until then it kinked at `x = 8.415` and dived
     to `z = 14.5036` over the last 170 mm.
+
+    The lining moved inboard on 2026-08-27 and its outline did not: it now stands
+    `reveal` off the cheek rather than the skin's own `distance`, which is the
+    one place a face a skin **covers** moves by something other than `distance`.
+    Its head, its bottom edge and its depth are unchanged, because none of the
+    planes that set those is a plane the reveal touches — so this test still pins
+    the same four corrections and additionally pins that.
     """
     from build import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins, _skin_from
     from skin import parameters, substrate
@@ -617,7 +630,14 @@ def test_the_cheek_lining_reaches_the_coping_on_the_live_bake():
     # the coping is laid to fall, so the reveal's head is sloped: west corner
     # high, east corner 21 mm lower. Both are the offset of the cap plate's own
     # top, and both are what Duncan named
-    for cheek in (4.87, 5.10):
+    #
+    # The lining stands `reveal` off its cheek, not `distance` -- 2026-08-27, and
+    # the planes are written as the substrate's own cheeks plus the authored
+    # allowance so the relationship is visible rather than two magic numbers.
+    # They were 4.87 and 5.10 while the lining stood 85 mm off. Nothing else here
+    # moved: the head and the bottom edge are set by the cap plate's top and the
+    # sill's offset, and neither is a plane the reveal touches
+    for cheek in (4.785 + params["reveal"], 5.185 - params["reveal"]):
         on = np.abs(cladding.vertices[:, 1] - cheek) < 1e-6
         assert on.any(), f"nothing on the cheek plane y = {cheek}"
         corners = np.unique(np.round(cladding.vertices[on][:, [0, 2]], 6), axis=0)
@@ -719,11 +739,16 @@ def test_a_wall_a_cornice_finishes_is_clad_in_masonry_at_its_own_allowance():
     corners = {
         (round(v[1], 4), round(v[2], 4)) for v in skin.vertices
     }
+    # the top edge stops `reveal` under the soffit, not `distance` -- 12.8566
+    # until 2026-08-27, which set the brick 150 mm below a cornice that
+    # oversails it by 20. Two allowances on one panel: it stands `distance` off
+    # the wall and dies `reveal` under the band. See `build.reveal_faces`
+    top = round(13.0066 - params["reveal"], 4)
     assert corners == {
-        (2.345, 12.2), (2.345, 12.8566), (11.385, 12.2), (11.385, 12.8566)
+        (2.345, 12.2), (2.345, top), (11.385, 12.2), (11.385, top)
     }
     z = skin.triangles[:, :, 2]
-    assert z.max() == pytest.approx(13.0066 - spec["distance"], abs=1e-6)
+    assert z.max() == pytest.approx(13.0066 - params["reveal"], abs=1e-6)
     # ...and the cornice, modelled 170 mm deep, oversails it by the 20 mm the
     # student-house authors as `cornice.projection.street-front`
     cornice = named["Cornice-Unit8-E"].bounds
@@ -747,12 +772,25 @@ def test_a_wall_a_cornice_finishes_is_clad_in_masonry_at_its_own_allowance():
         assert drop.min() == pytest.approx(12.265, abs=1e-6)
         assert drop.max() == pytest.approx(13.0766, abs=1e-6)
 
-    # ...which leaves the two exactly the masonry's allowance apart at the
-    # corner: the rainscreen at the wall face and the brick 150 mm off it. That
+    # ...which leaves the two exactly the masonry's allowance apart **at the
+    # corner**: the rainscreen at the wall face and the brick 150 mm off it. That
     # gap is the brick and its cavity, and it is left open until the masonry is
     # thickened -- Duncan, 2026-08-26, *"the ends of the bricks will be exposed
-    # on both ends and not covered by metal cladding"*
-    assert separation(cladding, skin) == pytest.approx(spec["distance"], abs=1e-6)
+    # on both ends and not covered by metal cladding"*. The assertions above are
+    # what pin it: the panel at x = -0.15 for its whole height, the rainscreen's
+    # end dropping at x = 0, and nothing at x = -0.085
+    for corner in (2.345, 11.385):
+        here = skin.vertices[np.abs(skin.vertices[:, 1] - corner) < 1e-6]
+        assert here.size and np.abs(here[:, 0] + spec["distance"]).max() < 1e-6
+
+    # The **closest approach** of the two skins is no longer that corner, and the
+    # point where it moved to is worth pinning rather than the old number. Since
+    # 2026-08-27 the brick's top stops `reveal` under the cornice instead of
+    # `distance`, 132 mm higher, and what is now nearest to it is the rainscreen's
+    # own return coming over the parapet at `z = 13.0766` -- straight above the
+    # masonry's top edge, 88 mm clear. Two systems finishing one corner, neither
+    # touching the other
+    assert separation(cladding, skin) == pytest.approx(0.0880001, abs=1e-6)
 
 
 def test_a_skin_mitres_onto_the_plane_of_the_system_that_dresses_it():
@@ -766,10 +804,10 @@ def test_a_skin_mitres_onto_the_plane_of_the_system_that_dresses_it():
     """
     from build import (
         FACADE, RAINSCREEN, TOP_CORNICE, classifier, group_caps, group_cornices,
-        masonry_faces, skins, wall_faces, _owner,
+        masonry_faces, reveal_faces, skins, wall_faces, _opening, _owner,
     )
     from skin import parameters, substrate
-    from skin.offset import Faces
+    from skin.offset import Faces, _plane_ids
 
     parts = substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN})
     params = parameters.load_validated()
@@ -791,7 +829,34 @@ def test_a_skin_mitres_onto_the_plane_of_the_system_that_dresses_it():
     # mitre onto that face at all: it dies on the wall behind it, offset zero
     cladding = spec["Cladding"]["offsets"](faces)
     assert (cladding[masonry] == 0.0).all()
-    assert (cladding[~masonry] == spec["Cladding"]["distance"]).all()
+
+    # ...and every other plane is at this skin's own distance or at the reveal,
+    # with nothing in between. Three values and no fourth: `mine` on what it
+    # clads, zero where the outer system owns the corner, `reveal` where it dies
+    # against a cornice or lines a cheek. It was two until 2026-08-27
+    assert set(np.round(cladding[~masonry], 9).tolist()) == {
+        spec["Cladding"]["distance"], params["reveal"]
+    }
+
+    # the reveal is read per **plane**, like the miter and for the same reason,
+    # so every face standing at it shares a plane with a face the rule named
+    ids, _ = _plane_ids(body)
+    held = reveal_faces(faces, params["fall"], spec["Cladding"]["keep"](faces))
+    assert held.any()
+    assert set(ids[cladding == params["reveal"]].tolist()) <= set(ids[held].tolist())
+
+    # ...and the cheeks are all of them at the reveal. This is the one place a
+    # face a skin **covers** moves by something other than `distance`: a
+    # rainscreen returning into an opening closes its cavity down to a sheet
+    cheeks, _ = _opening(faces)
+    assert cheeks.any()
+    assert (cladding[cheeks] == params["reveal"]).all()
+
+    # the membrane lines the same cheeks and does **not** take the reveal, at
+    # its own 8 mm, which the blanket assertion above already says of every
+    # plane it touches. Said again here because it is the gate that keeps a
+    # waterproofing layer out of a cladding rule, not an accident of this bake
+    assert (membrane[cheeks] == spec["Membrane"]["distance"]).all()
 
     # ...and the masonry, being the outer system, runs through the corner and
     # lands in the rainscreen's own plane
@@ -856,12 +921,17 @@ def test_the_skirt_turns_down_to_the_sill_on_the_live_bake():
     assert on.any(), "no skirt at all on the parapet's inner face"
     y, z = skin.triangles[on][:, :, 1], skin.triangles[on][:, :, 2]
 
-    # the cheek at 4.785 less the drip, out to the cheek's own lining at 4.870
-    # -- and mirrored on the far side. Read off the authored `drop` rather than
-    # written out, because these are seeds and a seed moves: `Cladding.drop` went
-    # 0.030 -> 0.033 on 2026-08-26 when the masonry allowance arrived at 0.150
-    # and `check_seeds` refused an exact 5x
-    drop, out = spec["drop"], spec["distance"]
+    # the cheek at 4.785 less the drip, out to the cheek's own lining -- and
+    # mirrored on the far side. Read off the authored seeds rather than written
+    # out, because a seed moves: `Cladding.drop` went 0.030 -> 0.033 on
+    # 2026-08-26 when the masonry allowance arrived at 0.150 and `check_seeds`
+    # refused an exact 5x.
+    #
+    # The band is `drop + reveal` wide, and was `drop + distance` until
+    # 2026-08-27 -- 51 mm where it was 118. A turned band runs from the skin's
+    # own edge, so its width follows the lining inboard with nothing in `_lap`
+    # deciding it: the lining moved from 4.870 to 4.803 and the band with it
+    drop, out = spec["drop"], params["reveal"]
     for lo, hi in (
         (4.785 - drop, 4.785 + out),   # the near cheek, drip to lining
         (5.185 - out, 5.185 + drop),   # ...and the far one, mirrored
@@ -1204,3 +1274,145 @@ def test_the_deck_s_inner_corners_are_the_enclosure_continuing():
             "the deck: the membrane laps onto it instead of covering it"
         )
         assert not (corner & exterior).any(), "...and it is not a facade either"
+
+
+def test_the_scupper_hole_holds_the_reveal_at_bottom_and_sides_and_not_at_the_top():
+    """Duncan, 2026-08-27: *"The cladding should be offset from bottom, and sides
+    of the two scuppers by this value. The cladding should maintain its original
+    offset from the top of the scuppers."*
+
+    Read in elevation, which is how the sentence is meant. Neither slot has a
+    head — the cap plate is split in two and the mouth runs open to the coping —
+    so the hole the cladding leaves is bounded by the drip cornice's **soffit**
+    below, the cornice's **ends** and the reveal's **cheeks** at the sides, and
+    the **sill plane** above. Three of those four take `reveal`; the fourth is
+    the second half of Duncan's sentence and is the whole reason this test says
+    what it does not do as loudly as what it does.
+
+    The top has to stay at `distance`, and not as a preference. A scupper's sill
+    is the roof running out through the outlet: at `v93 [8.5, 4.985, 14.495]` the
+    headhouse taper lands on the sill plane exactly, so holding the cladding
+    `reveal` off it asks one continuous surface to be 18 mm and 85 mm from the
+    skin at one vertex. Measured on 2026-08-27 by doing it — 68.703 mm of slope
+    absorption, which is a max and so pinned the build's second diagnostic at a
+    floor it could not fall below, and the turn-down band crossing the membrane
+    over the roof by 0.1 mm. Both scuppers here are drawn this way; a rule that
+    moved the sill would be wrong on both.
+
+    Both scuppers, because they are one detail mirrored and defects here have
+    read correctly on one and not the other before.
+    """
+    from build import (
+        FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins,
+        _opening, _owner, _skin_from,
+    )
+    from skin import parameters, substrate
+    from skin.offset import Faces
+
+    parts = substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN})
+    params = parameters.load_validated()
+    group_cornices(parts)
+    group_caps(parts, classifier(params))
+    spec = next(s for s in skins(params) if s["name"] == "Cladding")
+    skin = _skin_from(spec, parts)
+    reveal, out = params["reveal"], spec["distance"]
+
+    # (facade plane, the axis the hole's sides run in, cornice soffit, sill,
+    #  the cornice's two ends, the two cheeks)
+    scuppers = (
+        # the deck: facade at y = 7.54, hole read in x and z
+        ((1, 7.54 + out), 0, 11.4644, 11.5344, (15.09, 16.49), (15.19, 16.39)),
+        # the headhouse: facade at x = 8.08 facing -x, hole read in y and z
+        ((0, 8.08 - out), 1, 14.425, 14.495, (4.685, 5.285), (4.785, 5.185)),
+    )
+    for (axis, plane), across, soffit, sill, ends, cheeks in scuppers:
+        on = np.abs(skin.vertices[:, axis] - plane) < 1e-6
+        assert on.any(), f"nothing on the facade plane {plane}"
+        here = np.unique(np.round(skin.vertices[on][:, [across, 2]], 6), axis=0)
+
+        def has(a, z):
+            return np.isclose(here, [a, z], atol=1e-6).all(axis=1).any()
+
+        # the bottom: `reveal` under the drip cornice's soffit, was `out` under it
+        low = round(soffit - reveal, 6)
+        # ...and the sides below the sill: `reveal` outside the cornice's ends
+        for end, sign in zip(ends, (-1.0, 1.0)):
+            side = round(end + sign * reveal, 6)
+            assert has(side, low), (
+                f"the hole's bottom corner at {side}, {low} is missing: the "
+                f"cladding is not holding the reveal off the cornice"
+            )
+        # the top: the sill's own plane at this skin's `distance`, untouched
+        high = round(sill + out, 6)
+        for cheek, sign in zip(cheeks, (1.0, -1.0)):
+            lining = round(cheek + sign * reveal, 6)
+            assert has(lining, high), (
+                f"the mouth's bottom corner at {lining}, {high} is missing"
+            )
+        # ...and nothing anywhere near `sill + reveal`, which is what moving the
+        # sill plane would have produced
+        assert not has(ends[0] + reveal, round(sill + reveal, 6))
+        assert min(abs(z - round(sill + reveal, 6)) for _, z in here) > 1e-3
+
+    # said directly as well as in the geometry: the floor of an opening keeps
+    # this skin's own distance, where its cheeks do not
+    body = substrate.union(parts)
+    faces = Faces(body, parts, _owner(body, parts), classifier(params))
+    cheeks, floor = _opening(faces)
+    offsets = spec["offsets"](faces)
+    assert floor.any() and cheeks.any()
+    assert (offsets[floor] == out).all(), "the sill took the reveal"
+    assert (offsets[cheeks] == reveal).all(), "the cheeks did not"
+
+
+def test_a_wall_cornices_end_is_left_to_the_elevation_it_lies_in():
+    """The reveal is per plane, and a plane the skin clads is not its to claim.
+
+    A scupper cornice's ends carry nothing but the cornice — two faces, nothing
+    clad — so the whole plane is reveal and moving it is unambiguous. A **wall**
+    cornice's ends are not like that: a band runs past the returns at each end,
+    so its end lies in the neighbouring elevation. `Cornice-Deck9-N` puts one on
+    the `x = 8.5` court plane, which carries 21 faces of which 15 are the
+    cladding's own, and taking that plane raised at
+    `v90 [8.5, 4.785, 14.503618]` — rightly, because one plane cannot move 18 mm
+    and 85 mm at one vertex.
+
+    So `skin_offsets` takes a plane only where it carries no face this skin
+    covers that is not itself a reveal face, and `facade_offsets` keeps the rest.
+    A cheek passes that test on its own: the skin covers it *and* holds it at
+    the reveal, so the whole plane is reveal with no special case written.
+    """
+    from build import (
+        CORNICE, FACADE, RAINSCREEN, classifier, group_caps, group_cornices,
+        reveal_faces, skins, _owner,
+    )
+    from skin import parameters, substrate
+    from skin.offset import Faces, _plane_ids
+
+    parts = substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN})
+    params = parameters.load_validated()
+    group_cornices(parts)
+    group_caps(parts, classifier(params))
+    body = substrate.union(parts)
+    faces = Faces(body, parts, _owner(body, parts), classifier(params))
+    spec = next(s for s in skins(params) if s["name"] == "Cladding")
+    offsets = spec["offsets"](faces)
+    covers = spec["keep"](faces)
+    ids, _ = _plane_ids(body)
+
+    named = np.array([p.metadata.get("name") for p in parts])[faces.owner]
+    ends = (named == "Cornice-Deck9-N") & (np.abs(faces.normals[:, 2]) < 1e-6)
+    assert ends.any(), "the wall cornice has no end faces on this bake"
+    # the rule names them — they are cornice faces, not upward, and the cladding
+    # reaches them — and the plane test is what declines them
+    held = reveal_faces(faces, params["fall"], covers)
+    assert (held & ends).any()
+    assert not (offsets[ends] == params["reveal"]).any(), (
+        "a wall cornice's end took the reveal, which claims the elevation it "
+        "lies in for a band that merely runs past it"
+    )
+    for plane in np.unique(ids[ends]):
+        on = ids == plane
+        assert (on & covers).any(), "this bake no longer poses the condition"
+        # one offset on the plane, whatever it is: that is the whole property
+        assert len(set(np.round(offsets[on], 9).tolist())) == 1

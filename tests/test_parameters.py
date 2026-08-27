@@ -16,7 +16,7 @@ def _params():
 def test_the_committed_file_is_valid_and_non_degenerate():
     """The regression check on the file itself, not on a fixture."""
     params = _params()
-    assert {"classify", "fall", "skins"} == set(params)
+    assert {"classify", "fall", "reveal", "skins"} == set(params)
     assert [s["name"] for s in params["skins"]] == ["Membrane", "Cladding", "Masonry"]
 
 
@@ -215,3 +215,31 @@ def test_skin_over_needs_no_classifier_when_nothing_asks_for_a_role():
     """A plain closed-shell offset selects no faces, so no predicate runs."""
     parts = [substrate.cube(2.0)]
     assert skin_over(parts, 0.1).is_watertight
+
+
+def test_the_reveal_is_a_seed_and_a_degenerate_one_is_refused():
+    """`reveal` is a distance between two surfaces, so `check_seeds` reads it.
+
+    Duncan asked for 0.016 on 2026-08-27; it is exactly twice `Membrane.distance`
+    and the seeding rule refuses it, which is what sent the authored value to
+    0.018 rather than moving the membrane off 8 mm. This pins the refusal, not
+    the arithmetic that happens to produce it — the point of the rule is that a
+    bug scaling one distance into another stays visible.
+    """
+    params = _params()
+    params["reveal"] = 0.016
+    with pytest.raises(parameters.ParameterError) as raised:
+        parameters.check_seeds(params)
+    assert "reveal" in str(raised.value) and "Membrane.distance" in str(raised.value)
+
+
+def test_the_reveal_is_validated_and_required():
+    """Per-field validity is the schema's job, and STRICT-COMPLETE means required."""
+    params = _params()
+    del params["reveal"]
+    with pytest.raises(parameters.ParameterError, match="reveal"):
+        parameters.validate(params)
+    params = _params()
+    params["reveal"] = -0.018
+    with pytest.raises(parameters.ParameterError, match="reveal"):
+        parameters.validate(params)

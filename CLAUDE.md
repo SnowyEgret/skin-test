@@ -61,8 +61,11 @@ stops short of something standing proud of the wall from one folded through itse
 vertices and centroids against every part — and worse, its answer depends on how the surface
 happens to be triangulated: cleaning the cladding once moved it 63.9999 → 84.1503 mm with no
 surface moved. What forced the change is that it would have warned **forever**: the cheek lining
-Duncan asked for reads 79.97 mm against an 85 mm offset inherently, because the reveal's mouth
-sits on the headhouse roof. It was never a crier of wolf — the warning it printed on the cornices
+Duncan asked for read 79.97 mm against an 85 mm offset inherently, because the reveal's mouth
+sits on the headhouse roof. That reading is now **18 mm and correct** — the lining stands at
+`reveal`, so on any substrate with a lined opening the cladding's clearance *is* the authored
+reveal and `distance` is not the floor anywhere. The demotion was right for a further reason than
+the one it was made for. It was never a crier of wolf — the warning it printed on the cornices
 bake for weeks was **right**, and named a real defect four other checks missed — but a verdict
 that fires on correct geometry stops being read. It stays printed because a low reading is still
 worth seeing. See NOTES, *"The clearance verdict"*.
@@ -148,7 +151,8 @@ Key invariants, each of which spans several files:
   Volume-over-area against the 1 µm lattice separates them with nothing to tune: 197 mm of mean
   thickness for the body against 1.8 and 12.6 **nm** for the flaps. Leaving them in is not
   cosmetic — a flap is a knife, and once the deck's parapets are climbed the membrane covers both
-  its sides and `_reconcile` refuses the vertex. `metadata["flaps_dropped"]` says how many.
+  its sides and `_reconcile` refuses the vertex. `metadata["flaps_dropped"]` says how many, on every body `union` returns —
+  zero included, so it never has to be guarded with `in`.
 - **The union is a throwaway.** `skin_over` unions the parts solely to find the outer surface
   (faces where parts touch vanish, so no skin is generated between them), then discards it.
   `parts` is never mutated and stays the substrate. Tests assert this.
@@ -159,9 +163,14 @@ Key invariants, each of which spans several files:
   a selection therefore sit on the miter they would have had if the neighbours were skinned too.
   ...and where a neighbour genuinely **is** skinned, at a different allowance, the honest miter is
   onto *that* plane. `planar_offset`'s `offsets` is a per-face distance for exactly that, `None`
-  everywhere else; every face a skin *covers* still moves by one `distance`, so this is not the
-  per-face freedom in a cladding mesh that was deleted in 2026-08-15's list. `build.facade_offsets`
-  is its only caller and holds the rule — see **A cornice that finishes a wall**.
+  everywhere else. `build.skin_offsets` is its only caller and composes the two rules that fill it
+  in — `facade_offsets`, where this skin meets **another skin** (see **Where two cladding systems
+  meet**), and `reveal_faces`, where it stops against a **substrate feature** (see **The reveal**).
+  It is applied per **plane**, never per face. This is still not the per-face freedom in a cladding
+  mesh that was deleted in 2026-08-15's list, but the line that used to say so — *every face a skin
+  covers still moves by one `distance`* — stopped being true on 2026-08-27: a reveal lining
+  **covers** its cheek and stands `reveal` off it, because a rainscreen returning into an opening
+  closes its cavity down to a sheet.
 - **A runaway vertex is refused.** `planar_offset` places each vertex where its offset planes
   intersect; if that lands further out than the body's own diagonal, those planes are effectively
   parallel and the intersection means nothing. It raises, naming the vertex. Not a tolerance to
@@ -215,8 +224,8 @@ Key invariants, each of which spans several files:
 
 ## Parameters
 
-`skin-parameters.yaml` holds every tunable number: `classify`'s two thresholds, `fall`, and the
-skin distances. `skin/parameters.py` is the **only** module that imports `yaml` or
+`skin-parameters.yaml` holds every tunable number: `classify`'s two thresholds, `fall`, `reveal`,
+and the skin distances. `skin/parameters.py` is the **only** module that imports `yaml` or
 `jsonschema`, and nothing else takes a path — the core takes a params *dict*. That is the
 student-house seam exactly: `skin_pipeline.run(manifest, props, topo)` takes plain data and its
 sub-modules read `topo["cladding"]["allowance"]` without parsing anything. Keep it that way, or
@@ -238,13 +247,17 @@ Three rules carried over from student-house `bim/phase1/parameters.py`:
 an integer multiple of another. A zero distance is exempt, whichever of the three it is — it
 means that feature is off, and zero is an integer multiple of everything. (This said "a zero
 `out`" until 2026-08-26; the loop never distinguished the three, and `Masonry.drop` is authored
-`0.0` beside `Cladding.out`.) It is a named function the caller opts into, not part of
+`0.0` beside `Cladding.out`.) The top-level **`reveal` is a seed and is read**, because it is a
+distance between two surfaces exactly as a skin distance is; `base` and `close` are exempt for
+being a datum and a bound on a cleanup, which is a reason `reveal` cannot borrow. It cost
+something to keep: Duncan asked for 16 mm on 2026-08-27, which is 2x `Membrane.distance`, and
+authored **0.018** rather than move the membrane off 8 mm. It is a named function the caller opts into, not part of
 `validate`, because it is a discipline for a test rig rather than a code requirement.
 
 Blender's python needs neither PyYAML nor jsonschema: `blender/display.py` imports only `bpy`,
 `json` and `pathlib`, and never touches `skin/`.
 
-**On migration** the `classify` / `fall` / `skins` block moves into
+**On migration** the `classify` / `fall` / `reveal` / `skins` block moves into
 `student-house-parameters.yaml` under a `skin:` key, its schema is pasted into that repo's
 schema, and the caller passes `topo["skin"]` where `build.py` passes `load_validated()`.
 `skin/parameters.py` is then dead code there and should be deleted rather than ported — the
@@ -282,6 +295,9 @@ skin that laps at all. `base` pairs with no rule — it is a datum rather than a
 is **not** `0.0`: zero is a real height to cut at, where a zero `drop` or `out` is that direction
 switched off. It is also not a seed, so `check_seeds` ignores it. Nor is `close`, which bounds a
 cleanup rather than any surface — see **Cleaning a mesh**.
+
+`reveal` is deliberately **not** in this list: it is one top-level number, not a per-skin knob, and
+a new skin gets it or not from what it clads rather than from what it authors — see **The reveal**.
 The rules take `(Faces, fall)`; `skins()` binds `fall` from the file, so what `skin/` receives
 still has the `Faces -> bool[nfaces]` signature it expects. A built spec is *exactly*
 `skin_over`'s argument list plus `name`, `display` and `close` — the last two are read by
@@ -550,11 +566,67 @@ between two rainscreen-clad walls, and leaving it out asked that plane for 0.085
 once, at the vertex it shares with the parapet above it. Faces this skin covers stay excluded,
 which is the split described above and still raises.
 
-So the masonry comes out as one panel, `x = −0.150`, `y 2.345…11.385`, `z 12.200…12.8566`. The two
+So the masonry comes out as one panel, `x = −0.150`, `y 2.345…11.385`, `z 12.200…12.9886` — its
+top stopping `reveal` under the cornice soffit at 13.0066 rather than `distance` under it, which
+is **The reveal** below and is what moved this figure off 12.8566 on 2026-08-27. The two
 systems stand the masonry's own allowance apart at the corner, and that 150 mm is left open on
 purpose: masonry is thick where a rainscreen is thin enough to abstract as a surface, and the
 brick will be extruded back towards the wall over a cavity, its ends exposed at both corners
 (Duncan, 2026-08-26). The thickness gets drawn when window openings are punched.
+
+## The reveal
+
+A cladding skin stands `distance` off the wall it clads and **`reveal`** off a substrate feature
+it *dies against* rather than covers. One authored number, top-level beside `fall` rather than
+per skin, because it is a property of how a cladding system meets a substrate feature and not of
+any one system — and because two skins each authoring it would collide in `check_seeds` as equal
+seeds. `build.reveal_faces` names the faces, `build.skin_offsets` applies it. Duncan, 2026-08-27:
+*"The top of the masonry cladding should be offset by this value under a cornice. The cladding
+should be offset from bottom, and sides of the two scuppers by this value."*
+
+Two sets, and they are one thing said of two features:
+
+- **a cornice's soffit and its ends**, where this skin reaches them. The masonry stops 18 mm
+  under the band that finishes its wall instead of 150 mm under it, and the hole the rainscreen
+  leaves round a scupper holds 18 mm off the drip cornice below and beside it.
+- **the cheeks of an opening this skin lines.** These it *covers*, and this is the one place a
+  covered face moves by something other than `distance` — see the offset invariant above.
+
+**Never an upward face**, and that exclusion carries the second half of Duncan's sentence —
+*"maintain its original offset from the top of the scuppers"*. Read in elevation, the hole a
+scupper leaves in the cladding is bounded by the cornice's soffit below, the cornice's ends and
+the reveal's cheeks at the sides, and the **sill plane** above; neither slot here has a head at
+all, because the cap plate is split in two and the mouth runs open to the coping. The sill is the
+roof running out through the outlet: at `v93 [8.5, 4.985, 14.495]` the headhouse taper lands on
+the sill plane exactly, so holding the cladding `reveal` off it asks one continuous surface to be
+18 mm and 85 mm from the skin at one vertex. Measured by doing it: **68.703 mm** of slope
+absorption — a max, so it pinned `slope_deviation` at a floor it could not fall below — and the
+turn-down band crossing the membrane over the roof by 0.1 mm. A wall cornice's top is excluded by
+the same clause and for the same kind of reason: it is flush with the coping.
+
+**Only a skin that clads a facade takes a reveal**, which is the gate `facade_offsets` already
+uses. It is what keeps the **membrane** out: it lines the same cheeks and dies against the same
+cornices, at its own 8 mm, and it should — a reveal is where a cladding system stops, not where
+the waterproofing does. Measured: the two skins sit exactly `reveal - 0.008` apart at every lined
+cheek.
+
+**Applied per plane, and only where the plane carries no face this skin covers that is not itself
+a reveal face.** A scupper cornice's ends carry nothing but the cornice, so the whole plane is
+reveal. A **wall** cornice's ends are not like that — a band runs past the returns at each end, so
+its end lies in the neighbouring elevation, and `Cornice-Deck9-N` puts one on the `x = 8.5` court
+plane, which carries 21 faces of which 15 are the cladding's own. Taking it raised at
+`v90 [8.5, 4.785, 14.503618]`, rightly; `facade_offsets` keeps those planes, because there the
+cornice's end is one face on an elevation this skin clads and the elevation owns the plane. A
+cheek passes the test on its own, being covered *and* held at the reveal, so there is no special
+case written for it. Where the two rules want one plane, `skin_offsets` **raises** rather than
+picking — no substrate here poses it.
+
+`_lap` takes the per-face offsets as of the same day, so every place it reasons about a named face
+— `drip_at`'s miter, the fold's receiving level, the fold probe's step back onto the arris, the
+turned band's level — reads that face's own rather than the skin's scalar. It moved no geometry
+when it landed, bit-identical on all four substrates run both ways; it is the backstop that makes
+widening `cladding_laps` a question about what the cladding should do rather than about what the
+machinery can express.
 
 What the cornice does **not** say is *which* masonry. Brick on a street front and block on a
 firewall are two allowances and therefore two skins, and which one a wall takes is a material —
@@ -619,12 +691,14 @@ longer existed. A verdict that changes with the triangulation is not a verdict a
 — and the low reading was real, see the `_tiling` invariant above.
 
 That figure is **dated because it no longer reproduces**, and what replaced it makes the same
-point. `_tiling` fixed the inversion at source and the cheeks are now clad, so on the live bake
-the cladding reads 74.8903 mm raw and 74.8903 mm cleaned (measured 2026-08-26) — `clean` moves it
-not at all, because the point finding the low reading is the turn-down's bottom-outer corner over
-the headhouse roof and no pass touches it. The **membrane** is where the split still shows: 7.8808 mm
-raw against 5.8793 mm cleaned, the gusset being a chord across a fold. Re-measure before quoting
-either.
+point twice over. `_tiling` fixed the inversion at source and the cheeks are now clad, so the
+cladding reads the same raw and cleaned — 74.8903 mm both ways on 2026-08-26, and **17.9999 mm
+both ways** since the reveal landed on 2026-08-27, the low sample having moved from the
+turn-down's bottom-outer corner to the reveal lining itself. `clean` moves it not at all either
+time, and the reason is the same: no pass touches the point that finds the low reading. The
+**membrane** is where the split still shows: 7.8808 mm raw against 5.8793 mm cleaned, the gusset
+being a chord across a fold. Re-measure before quoting any of them — this paragraph has now been
+overtaken twice.
 
 The split survives `clearance` being demoted, with one deliberate exception. Everything *printed*
 stays a property of the offset and so is measured raw. The **verdict** is taken on both meshes:

@@ -522,13 +522,21 @@ def union(parts: list[trimesh.Trimesh], grid: float = 1e-6) -> trimesh.Trimesh:
     and `planar_offset`'s own runaway guard names "a fragment a boolean left
     behind" as the cause it exists for. Measured 2026-08-26; the two headhouse
     bakes return one body and are untouched.
+
+    `metadata["flaps_dropped"]` says how many, on **every** body this returns and
+    not only on one that lost something — a count a reader has to guard with `in`
+    is not a count. It was conditional until 2026-08-27, which made CLAUDE.md's
+    flat statement of this sentence a `KeyError` on the very bakes the paragraph
+    above says are untouched. Found on review.
     """
     # a **copy**, even though there is nothing to union. `skin_over` treats what
     # comes back as a throwaway and writes plane ids into its metadata, and
     # "`parts` is never mutated and stays the substrate" has to hold for a
     # one-part substrate too — the synthetic rigs in the tests are exactly that
     if len(parts) == 1:
-        return parts[0].copy()
+        only = parts[0].copy()
+        only.metadata["flaps_dropped"] = 0
+        return only
     lo = np.min([p.bounds[0] for p in parts], axis=0)
     hi = np.max([p.bounds[1] for p in parts], axis=0)
     centre = snapped((lo + hi) / 2.0, grid)
@@ -540,6 +548,7 @@ def union(parts: list[trimesh.Trimesh], grid: float = 1e-6) -> trimesh.Trimesh:
         shifted.append(moved)
 
     body = trimesh.boolean.union(shifted)
+    dropped = 0
     if body.body_count > 1:
         pieces = body.split(only_watertight=False)
         solid = [p for p in pieces if p.area > 0 and abs(p.volume) / p.area > grid]
@@ -548,7 +557,8 @@ def union(parts: list[trimesh.Trimesh], grid: float = 1e-6) -> trimesh.Trimesh:
         if solid and len(solid) < len(pieces):
             dropped = len(pieces) - len(solid)
             body = solid[0] if len(solid) == 1 else trimesh.util.concatenate(solid)
-            body.metadata["flaps_dropped"] = dropped
+    # assigned last and unconditionally, after any reassignment of `body` above
+    body.metadata["flaps_dropped"] = dropped
     body.vertices = body.vertices + centre
     return body
 

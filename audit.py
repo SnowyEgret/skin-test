@@ -2,9 +2,11 @@
 the area actually covered, border edges, T-junctions, non-manifold edges, and
 self-crossing n-gons, before and after `clean`.
 
-Scratch, not part of the build. **Untracked on purpose** — added at the end of
-2026-08-21 so it survives the session, for Duncan to `git add` or delete. It
-reads `build`'s internals, so it will bit-rot the moment those move.
+Scratch, not part of the build — added at the end of 2026-08-21 and committed on
+2026-08-26. It reads `build`'s internals, so it will bit-rot the moment those
+move. (This said "**Untracked on purpose** … for Duncan to `git add` or delete"
+until 2026-08-27, by which time it had been added and the sentence described a
+file that no longer existed. Found on review.)
 
     python3 audit.py        # from the repo root
 
@@ -13,9 +15,17 @@ self-crossing loops for a raw skin and they re-triangulate differently on the wa
 back in, which reads as 132.9 m2 against the true 126.2.
 """
 import sys
+from pathlib import Path
+
 import numpy as np
 import trimesh
-sys.path.insert(0, "/home/duncan/skin-test")
+
+# this script's **own** directory, not a hard-coded checkout. An absolute path
+# here shadows the copy it is run from, so `python3 audit.py` in a worktree, a
+# scratch copy or a bisect checkout silently measured `/home/duncan/skin-test`
+# and reported numbers for code that was not under test. Found on review,
+# 2026-08-27, by a reader who hit exactly that
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build as B
 from skin import substrate, parameters
 from skin.export import faces_as_ngons

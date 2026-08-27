@@ -291,15 +291,24 @@ def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6, cov
     that offset a bare solid pass neither.
 
     `offsets` is a per-face distance overriding `distance`, and is `None` for
-    every ordinary offset. It exists for one condition: a skin ending against a
-    facade the **neighbouring cladding system** dresses. The invariant above
-    says a vertex on the edge of a selection sits on the miter it would have had
-    if its neighbours were skinned too — and where a neighbour genuinely is
-    skinned, at a different allowance, the honest miter is onto *that* plane
-    rather than onto a copy of this skin's own. It is not an authored knob and
-    it is not per-face freedom in a cladding mesh: every face a skin *covers*
-    still moves by one `distance`, and `metadata["offset_distance"]` still
-    reports it. See `build.facade_offsets` for the rule that fills it in.
+    every ordinary offset. It exists for two conditions, both of them a skin
+    stopping against something it does not cover. A skin ending against a facade
+    the **neighbouring cladding system** dresses: the invariant above says a
+    vertex on the edge of a selection sits on the miter it would have had if its
+    neighbours were skinned too, and where a neighbour genuinely is skinned, at a
+    different allowance, the honest miter is onto *that* plane rather than onto a
+    copy of this skin's own. And a skin dying against a **cornice or the cheeks
+    of an opening**, where the authored `reveal` is the joint it stops at rather
+    than the cavity it stands off the wall by.
+
+    The second of those is why this no longer says *"every face a skin covers
+    still moves by one `distance`"*, which was true until 2026-08-27. A reveal
+    lining **covers** its cheek and stands `reveal` off it, because a rainscreen
+    returning into an opening closes its cavity down to a sheet. That is still
+    not per-face freedom in a cladding mesh — the freedom is per **plane**, it is
+    derived rather than authored per face, and `metadata["offset_distance"]`
+    still reports the skin's own. See `build.skin_offsets` for both rules and for
+    why they are applied per plane.
     """
     width = 3 * len(mesh.vertices)
     hard: list = []
@@ -1004,7 +1013,8 @@ def _room(body, here, direction, on_plane, normal, want) -> float:
     return min(reached, want)
 
 
-def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out, rounds=3):
+def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out,
+         offsets=None, rounds=3):
     """Continue the skin onto every substrate face it runs into.
 
     Where a covered face meets a face this skin does not cover, the skin does
@@ -1057,6 +1067,19 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
     drips at a wall corner need no miter anyway: `drip_at` already solves their
     shared arris vertex on both planes at once.
     """
+    # Every `distance` a lap reasons with is about one **named face** -- the plane
+    # a band lands on, or a plane a drip miters onto -- so each reads the per-face
+    # offset rather than the skin's own scalar. It stopped being the same number
+    # on 2026-08-26, when `build.facade_offsets` began moving a neighbouring
+    # system's facade by somebody else's allowance, and again on 2026-08-27, when
+    # `build.reveal_faces` began holding a lined cheek at `reveal`: 12 vertices of
+    # the live bake carry both a cheek this skin covers at 18 mm and a face it
+    # laps onto at 85 mm, and `drip_at` miters across exactly those.
+    moves = (
+        np.full(len(body.faces), float(distance))
+        if offsets is None
+        else np.asarray(offsets, dtype=float)
+    )
     mitered: dict[int, np.ndarray] = {}
 
     def drip_at(v: int) -> np.ndarray:
@@ -1084,9 +1107,16 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
                     f"that is not vertical. Either narrow this skin's `lap` "
                     f"predicate to vertical faces, or give it `drop: 0.0`"
                 )
-            normals = np.unique(np.round(body.face_normals[at] / PLANE_TOL), axis=0)
+            # one row per distinct plane, each asked for **that plane's** offset.
+            # Taking the first face of each group is safe rather than arbitrary:
+            # two faces of one plane at one vertex carrying different offsets is
+            # what `_vertex_planes` raises on, and it has already run over every
+            # vertex of this body by the time a lap is placed.
+            normals, first = np.unique(
+                np.round(body.face_normals[at] / PLANE_TOL), axis=0, return_index=True
+            )
             t = np.linalg.lstsq(
-                normals * PLANE_TOL, np.full(len(normals), distance), rcond=None
+                normals * PLANE_TOL, moves[np.asarray(at)][first], rcond=None
             )[0]
             mitered[v] = body.vertices[v] + t
         return mitered[v]
@@ -1367,7 +1397,7 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
             # mitered across other planes than this one -- the band would float
             # off the face by the offset, so leave it rather than place it wrong
             facing = body.face_normals[far]
-            level = planes[far, 3] + distance
+            level = planes[far, 3] + moves[far]
             if max(abs(side @ facing - level), abs(rim @ facing - level)) > PLANE_TOL:
                 continue
             # ...and it has to land on the face from **both** ends of that edge.
@@ -1384,8 +1414,8 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
             # onto `Headhouse-N`. `tip` is on the arris, so it supplies the slide.
             on_plane = coplanar[int(ids[far])]
 
-            def at_arris(end, into=into, facing=facing, stand=stand):
-                base = end - facing * distance
+            def at_arris(end, into=into, facing=facing, stand=stand, off=moves[far]):
+                base = end - facing * off
                 return base + ((stand - base) @ into) * into
 
             if any(
@@ -1508,7 +1538,7 @@ def _lap(body, verts, distance, covered, lappable, onto, skinned_wall, drop, out
         # the other side of the knife, they would be 170 mm away and nothing is
         # placed.
         if one["turn"]:
-            level = planes[one["far"], 3] + distance
+            level = planes[one["far"], 3] + moves[one["far"]]
             facing = body.face_normals[one["far"]]
             for a, b in beyond.get(tip, ()):
                 w = b if a == tip else a
@@ -1886,13 +1916,18 @@ def skin_over(
     )
     receivers = _receivers(body, kept, allowed)
 
+    # evaluated **once**, because the solve and the laps have to reason with the
+    # same numbers: a band lands on the offset plane of the face it laps onto,
+    # and that plane is where this array put it
+    per_face = None if offsets is None else offsets(surface)
+
     # everything this skin puts a surface on. Only a fold consults it
     skin = planar_offset(
         body,
         distance,
         covered=kept | receivers,
         owner=surface.owner,
-        offsets=None if offsets is None else offsets(surface),
+        offsets=per_face,
     )
 
     verts = list(skin.vertices)
@@ -1918,6 +1953,7 @@ def skin_over(
             skinned_wall=(kept | receivers) & (height < PLANE_TOL),
             drop=drop,
             out=out,
+            offsets=per_face,
         )
 
     if base is not None:

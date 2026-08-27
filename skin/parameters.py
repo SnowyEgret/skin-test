@@ -93,12 +93,29 @@ def check_seeds(params: dict) -> dict:
     and `close` a bound on a cleanup, so neither is a distance between two
     surfaces that a bug could swap for another.
 
+    The top-level `reveal` **is** one and is read, because it is exactly that: a
+    distance between the skin and a substrate face it dies against. It is what
+    the rule above cost something to keep — 0.016 was asked for on 2026-08-27 and
+    is refused as 2x `Membrane.distance`, and Duncan authored 0.018 rather than
+    move the membrane off 8 mm. Do not exempt it to make a round number fit; the
+    exemptions here are for values that are not distances between two surfaces,
+    and this one is.
+
     This is a seeding discipline for a test rig, not a code requirement, so it is
     a named function the caller opts into rather than part of `validate`. A
     production what-if that genuinely wants two skins 100 mm apart calls
     `validate` alone and says so.
     """
-    seeds = {}
+    if "reveal" not in params:
+        raise ParameterError(
+            "parameter reveal: missing — it is a seed like a skin distance, so "
+            "`check_seeds` reads it. Add it to the file, or call `validate` alone"
+        )
+    # no zero exemption, unlike the per-skin distances: `reveal` has no "off"
+    # state to mean. A skin either dies against a cornice or an opening cheek at
+    # the authored joint or it does not reach one, and the schema's
+    # `exclusiveMinimum: 0` keeps a zero out of a validated file either way
+    seeds = {float(params["reveal"]): "reveal"}
     for skin in params["skins"]:
         for key in ("distance", "drop", "out"):
             value = float(skin[key])
