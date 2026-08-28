@@ -95,7 +95,7 @@ def test_a_base_is_a_datum_and_not_a_seed():
 
 
 def test_a_skin_with_no_rule_set_cannot_be_built():
-    from build import skins
+    from rules import skins
 
     params = _params()
     params["skins"][0]["name"] = "Parapet"
@@ -105,7 +105,7 @@ def test_a_skin_with_no_rule_set_cannot_be_built():
 
 def test_a_rule_set_no_skin_names_is_refused():
     """Otherwise it sits there looking maintained while emitting nothing."""
-    from build import skins
+    from rules import skins
 
     params = _params()
     params["skins"] = params["skins"][:1]
@@ -123,7 +123,7 @@ def test_a_skin_that_cannot_lap_in_any_direction_is_refused():
     the direction off the substrate, so a skin no longer declares which way it
     continues -- only how far, and a distance of zero switches that way off.
     """
-    from build import skins
+    from rules import skins
 
     params = _params()
     params["skins"][0]["drop"] = 0.0
@@ -145,7 +145,8 @@ def test_a_supplied_params_dict_is_validated_too():
     558.849 mm. `check_facades` missed it as well, because `fall > 1` empties the
     exterior set and "every facade is claimed" then holds vacuously.
     """
-    from build import build, current_substrate, skins
+    from build import build, current_substrate
+    from rules import skins
 
     params = _params()
     params["fall"] = 1.4  # rejected by the schema; must be rejected here too
@@ -179,7 +180,9 @@ def test_an_aspect_of_one_cannot_switch_the_block_like_guard_off():
 def test_the_authored_numbers_actually_reach_the_geometry():
     """A parameter file nothing reads is worse than a constant. Change the offset
     in a copy and the built skin has to move by exactly that much."""
-    from build import _skin_from, current_substrate, skins
+    from build import current_substrate
+    from pipeline import _skin_from
+    from rules import skins
 
     parts = current_substrate()
     params = _params()

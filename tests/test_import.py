@@ -179,7 +179,7 @@ def test_a_wall_takes_its_direction_from_the_element_not_the_body():
     hunting for "the cap above": a flat face contributes (0, 0), so the leaf tops
     dilute the magnitude and never the direction.
     """
-    from build import uphill
+    from rules import uphill
 
     inner, outer, cap = _leaved_parapet()
 
@@ -206,7 +206,8 @@ def test_a_wall_takes_its_direction_from_the_element_not_the_body():
 def test_elements_group_by_object_and_fall_back_to_one_part_each():
     """`metadata["object"]` names the element. Absent, every part is its own —
     the identity grouping, which is exactly the transcribed `PART_N` case."""
-    from build import classifier, current_substrate
+    from build import current_substrate
+    from rules import classifier
     from skin.offset import Faces, _owner
     from skin import parameters
 
@@ -335,9 +336,8 @@ def test_the_baked_headhouse_reads_and_skins():
     The face counts are deliberately not pinned. They move whenever the bake
     does, and a test that has to be re-blessed on every export stops being read.
     """
-    from build import (
-        FACADE, RAINSCREEN, classifier, covered, group_caps, rise, skins, _skin_from,
-    )
+    from pipeline import _skin_from, covered
+    from rules import FACADE, RAINSCREEN, classifier, group_caps, rise, skins
     from skin import parameters, substrate
     from skin.measure import buried, clearance, intersects, separation
     from skin.offset import Faces, _owner, elements_of
@@ -481,8 +481,9 @@ def test_the_scupper_comes_out_symmetrical_on_the_live_bake():
     agree point for point, while which diagonal each quad is split on does not
     have to mirror and does not.
     """
-    from build import FACADE, RAINSCREEN, classifier, group_caps, group_cornices
-    from build import skins, _skin_from
+    from rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices
+    from pipeline import _skin_from
+    from rules import skins
     from skin import parameters, substrate
 
     parts = substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN})
@@ -559,9 +560,7 @@ def test_the_bake_s_separately_authored_cap_plates_are_capped_by_both_skins():
     property was pinned on the rig, where a coping is a sloped wall top rather
     than a part of its own.
     """
-    from build import (
-        FACADE, RAINSCREEN, cladding_faces, classifier, group_caps, membrane_faces,
-    )
+    from rules import FACADE, RAINSCREEN, cladding_faces, classifier, group_caps, membrane_faces
     from skin import parameters, substrate
     from skin.offset import Faces, _owner
 
@@ -617,7 +616,8 @@ def test_the_cheek_lining_reaches_the_coping_on_the_live_bake():
     planes that set those is a plane the reveal touches — so this test still pins
     the same four corrections and additionally pins that.
     """
-    from build import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins, _skin_from
+    from pipeline import _skin_from
+    from rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins
     from skin import parameters, substrate
 
     parts = substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN})
@@ -692,9 +692,9 @@ def test_a_wall_a_cornice_finishes_is_clad_in_masonry_at_its_own_allowance():
     proud of the masonry face is the drawing and the seed agreeing about the
     same detail from two directions.
     """
-    from build import (
-        CORNICE, FACADE, RAINSCREEN, TOP_CORNICE, classifier, cladding_faces,
-        covered, group_caps, group_cornices, masonry_faces, skins, _skin_from,
+    from pipeline import _skin_from, covered
+    from rules import (
+        CORNICE, FACADE, RAINSCREEN, TOP_CORNICE, cladding_faces, classifier, group_caps, group_cornices, masonry_faces, skins,
     )
     from skin import parameters, substrate
     from skin.measure import separation
@@ -829,10 +829,10 @@ def test_a_skin_mitres_onto_the_plane_of_the_system_that_dresses_it():
     skin mitres onto a neighbouring facade at that facade's own cladding offset,
     unless the neighbour stands further out, where it stops at the substrate.
     """
-    from build import (
-        FACADE, RAINSCREEN, TOP_CORNICE, classifier, group_caps, group_cornices,
-        masonry_faces, reveal_faces, skins, wall_faces, wrapped, _opening, _owner,
+    from rules import (
+        FACADE, RAINSCREEN, TOP_CORNICE, _opening, classifier, group_caps, group_cornices, masonry_faces, reveal_faces, skins, wall_faces, wrapped,
     )
+    from skin.offset import _owner
     from skin import parameters, substrate
     from skin.offset import Faces, _plane_ids
 
@@ -939,7 +939,8 @@ def test_the_skirt_turns_down_to_the_sill_on_the_live_bake():
     Both sides, because the scupper is mirrored and defects here have read
     correctly on one side and not the other before.
     """
-    from build import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins, _skin_from
+    from pipeline import _skin_from
+    from rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins
     from skin import parameters, substrate
 
     parts = substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN})
@@ -1004,7 +1005,7 @@ def test_a_cornice_at_a_corner_hangs_on_the_wall_it_runs_along():
     the union of that wall with a band four times its own length classified
     `ROOF`: the build stopped in `group_caps` before any skin was tried.
     """
-    from build import TOP_CORNICE, group_cornices
+    from rules import TOP_CORNICE, group_cornices
 
     parts = [
         _slab((0.0, 0.0, 0.0), (0.4, 5.0, 2.0), "Return-W"),   # first in the file
@@ -1032,7 +1033,7 @@ def test_a_cap_plate_joins_the_wall_that_backs_most_of_it():
     has to choose. Assigning inside the loop chose whichever element came last
     in the file, which is not a property of the geometry at all.
     """
-    from build import classifier, group_caps
+    from rules import classifier, group_caps
     from skin import parameters
 
     parts = [
@@ -1062,8 +1063,10 @@ def test_dissolving_collinear_vertices_moves_no_outline(path):
     surface the offset never placed. Neither bake here poses it; this states
     the property so that the next one that does is caught rather than shipped.
     """
-    from build import FACADE, RAINSCREEN, classifier, covered, group_caps, group_cornices
-    from build import skins, _skin_from
+    from pipeline import covered
+    from rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices
+    from pipeline import _skin_from
+    from rules import skins
     from skin import parameters, substrate
     from skin.clean import clean
     from skin.offset import Faces, _owner
@@ -1098,7 +1101,7 @@ def test_a_roof_under_the_building_is_a_floor():
     One part, one role, two surfaces, so nothing about the part can separate
     them.
     """
-    from build import _under_cover, _upward
+    from rules import _under_cover, _upward
     from skin import substrate
     from skin.offset import Faces, _owner
 
@@ -1140,10 +1143,8 @@ def test_the_deck_bake_reads_and_skins():
     back on 2026-08-26 — nothing inside the headhouse, and every parapet's ledge
     and coping carried.
     """
-    from build import (
-        FACADE, RAINSCREEN, classifier, covered, group_caps, group_cornices,
-        skins, _skin_from,
-    )
+    from pipeline import _skin_from, covered
+    from rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins
     from skin import parameters, substrate
     from skin.measure import buried, intersects
 
@@ -1212,7 +1213,8 @@ def test_the_cladding_skirt_stops_at_its_drip_all_round_the_deck():
     cladding below that anywhere on the deck is the two turn-downs at the
     scupper, which are mirrored.
     """
-    from build import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins, _skin_from
+    from pipeline import _skin_from
+    from rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins
     from skin import parameters, substrate
 
     parts = substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN})
@@ -1281,7 +1283,8 @@ def test_the_deck_s_inner_corners_are_the_enclosure_continuing():
     not a fact about an enclosure at all, and which clad the whole of both planes
     on the way past.
     """
-    from build import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, wall_faces, _owner
+    from rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, wall_faces
+    from skin.offset import _owner
     from skin import parameters, substrate
     from skin.offset import Faces
 
@@ -1335,10 +1338,11 @@ def test_the_scupper_hole_holds_the_reveal_at_bottom_and_sides_and_not_at_the_to
     Both scuppers, because they are one detail mirrored and defects here have
     read correctly on one and not the other before.
     """
-    from build import (
-        FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins,
-        _opening, _owner, _skin_from,
+    from pipeline import _skin_from
+    from rules import (
+        FACADE, RAINSCREEN, _opening, classifier, group_caps, group_cornices, skins,
     )
+    from skin.offset import _owner
     from skin import parameters, substrate
     from skin.offset import Faces
 
@@ -1428,13 +1432,13 @@ def test_a_cornice_end_in_a_clad_elevation_is_left_to_that_elevation(monkeypatch
     nothing else: it says "this skin does not run down this cornice", which is
     how every cornice read until the day before this test was written.
     """
-    from build import (
-        FACADE, RAINSCREEN, classifier, group_caps, group_cornices, reveal_faces,
-        skins, _owner,
+    from rules import (
+        FACADE, RAINSCREEN, classifier, group_caps, group_cornices, reveal_faces, skins,
     )
+    from skin.offset import _owner
     from skin import parameters, substrate
     from skin.offset import Faces, _plane_ids
-    import build as B
+    import rules
 
     parts = substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN})
     params = parameters.load_validated()
@@ -1457,7 +1461,7 @@ def test_a_cornice_end_in_a_clad_elevation_is_left_to_that_elevation(monkeypatch
 
     # ...and with the skin not running down it, the ends *are* named, they lie
     # on planes this skin clads, and the clause hands those planes back
-    monkeypatch.setattr(B, "wrapped", lambda faces, covers: np.zeros(len(covers), bool))
+    monkeypatch.setattr(rules, "wrapped", lambda faces, covers: np.zeros(len(covers), bool))
     held = reveal_faces(faces, params["fall"], covers)
     assert (held & ends).any(), "the stub did not pose the condition"
     offsets = spec["offsets"](faces)
@@ -1499,10 +1503,11 @@ def test_the_skirt_over_a_cornice_runs_to_the_cornice_s_bottom():
     still holds its 18 mm under the same soffit, so the two systems meet in the
     joint rather than in each other.
     """
-    from build import (
-        CORNICE, FACADE, RAINSCREEN, classifier, group_caps, group_cornices,
-        skins, wrapped, _owner, _skin_from,
+    from pipeline import _skin_from
+    from rules import (
+        CORNICE, FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins, wrapped,
     )
+    from skin.offset import _owner
     from skin import parameters, substrate
     from skin.offset import Faces
 
@@ -1559,9 +1564,10 @@ def test_one_plane_cannot_be_both_a_joint_and_an_arris(monkeypatch):
     masonry's reveal already claims — which is the shape of the condition and
     nothing more. Found on review, 2026-08-27.
     """
-    from build import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins
+    from rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins
     from skin import parameters, substrate
-    import build as B
+    import pipeline
+    import rules
 
     parts = substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN})
     params = parameters.load_validated()
@@ -1572,8 +1578,8 @@ def test_one_plane_cannot_be_both_a_joint_and_an_arris(monkeypatch):
     # the masonry holds the joint under `Cornice-Deck9-N`; say it also stops
     # flush there, which is the two-cornices-at-one-level condition in miniature
     monkeypatch.setattr(
-        B, "flush_faces",
-        lambda faces, fall, covers: B.reveal_faces(faces, fall, covers),
+        rules, "flush_faces",
+        lambda faces, fall, covers: rules.reveal_faces(faces, fall, covers),
     )
     with pytest.raises(ValueError, match="asked for .* and .* at once"):
-        B._skin_from(spec, parts)
+        pipeline._skin_from(spec, parts)

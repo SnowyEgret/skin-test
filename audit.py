@@ -3,8 +3,10 @@ the area actually covered, border edges, T-junctions, non-manifold edges, and
 self-crossing n-gons, before and after `clean`.
 
 Scratch, not part of the build — added at the end of 2026-08-21 and committed on
-2026-08-26. It reads `build`'s internals, so it will bit-rot the moment those
-move. (This said "**Untracked on purpose** … for Duncan to `git add` or delete"
+2026-08-26. It reads `rules` and `pipeline`, so it will bit-rot the moment those
+move. (It read `build`'s internals until 2026-08-28, when the rules and the
+pipeline seam came out of it into their own modules; `live_skins` had grown its
+own copy of the prologue and now calls `pipeline.prepare` for it.) (This said "**Untracked on purpose** … for Duncan to `git add` or delete"
 until 2026-08-27, by which time it had been added and the sentence described a
 file that no longer existed. Found on review.)
 
@@ -26,18 +28,28 @@ import trimesh
 # and reported numbers for code that was not under test. Found on review,
 # 2026-08-27, by a reader who hit exactly that
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import build as B
+import pipeline
+import rules
 from skin import substrate, parameters
 from skin.export import faces_as_ngons
 
 BAKE = "unit8-parapets-caps-clt-insulation-headhouse-extended-cornices.obj"
 
 def live_skins():
-    parts = substrate.from_obj(BAKE, metadata={B.FACADE: B.RAINSCREEN})
+    parts = substrate.from_obj(BAKE, metadata={rules.FACADE: rules.RAINSCREEN})
     params = parameters.resolve(None)
-    B.group_cornices(parts)
-    B.group_caps(parts, B.classifier(params))
-    return {s["name"]: B._skin_from(s, parts) for s in B.skins(params)}
+    # the name join first, for the reason `pipeline.run` does it in this order:
+    # `prepare` re-stamps `metadata["object"]` on the parts, and a parameter file
+    # that fails the join should not have mutated a substrate on its way to raising
+    specs = rules.skins(params)
+    faces = pipeline.prepare(parts, params)
+    # raw, deliberately: this script measures before and after `clean` itself,
+    # so it wants what `skin_over` emitted rather than what `pipeline.run` ships
+    return {
+        spec["name"]: pipeline._skin_from(spec, parts)
+        for spec in specs
+        if pipeline.covered(spec, faces)
+    }
 
 def borders(m):
     return len(trimesh.grouping.group_rows(m.edges_sorted, require_count=1))

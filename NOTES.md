@@ -3,15 +3,22 @@
 Offsetting a **substrate** (an assembly of solid parts) outward by a fixed distance to
 produce **skins**: open surfaces that cover a chosen subset of faces.
 
-Last worked: 2026-08-27.
+Last worked: 2026-08-28.
 
 `CLAUDE.md` has the commands, the architecture and its invariants, and the tolerance
 rationale. This file is the running log: what the geometry currently is, what was tried
 and rejected, and what is still open.
 
-## Start here (picking up after 2026-08-27)
+## Start here (picking up after 2026-08-28)
 
 ### Where to pick up
+
+**`build.py` split into three on 2026-08-28**, so that the student-house can import the rules
+rather than copy them: `rules.py` (every derivation, `RULES`, `skins`), `pipeline.py` (the seam —
+`prepare` and `run`, plain data in and out), and `build.py` (this rig, 367 lines). No geometry
+moved — the report and every OBJ are byte-identical on all four substrates. The packaging half is
+untouched and still open: no `pyproject.toml`, three generic top-level module names, five
+undeclared dependencies. See *"The module split: rules, pipeline, rig"*.
 
 **The reveal landed on 2026-08-27 — a second authored allowance, `reveal: 0.018`.** A cladding
 skin stands `distance` off the wall it clads and `reveal` off a substrate feature it dies against.
@@ -1292,15 +1299,21 @@ real ground level, and it only starts to bite once walls that reach the ground a
 | `skin/parameters.py` | the parameter layer. `load` / `validate` / `check_seeds` / `load_validated`. The only module that imports yaml or jsonschema |
 | `skin-parameters.yaml` | every tunable number: `classify`'s thresholds, `fall`, the five distances |
 | `skin-parameters.schema.json` | the JSON Schema it is validated against |
-| `build.py` | the substrate as transcribed data, the `RULES` table, `skins()`, and the build |
+| `rules.py` | every derivation: the face rules, the `RULES` table, `skins()`, `classifier`, the two `check_*` guards. Migrates |
+| `pipeline.py` | the seam: `prepare` (group → union → `Faces`) and `run` (substrate in, skins out). Reads no file, writes none, prints nothing. Migrates |
+| `build.py` | this rig: the substrate as transcribed data, the OBJ emission and the printed report. Stays |
 | `blender/display.py` | the only file that imports bpy. Loads, never authors |
 | `tests/test_offset.py` | the geometry suite |
 | `tests/test_parameters.py` | the parameter-layer suite |
 | `tests/test_import.py` | the OBJ import suite |
+| `tests/test_clean.py` | the coplanar-union, dissolve and gusset suite |
+| `tests/test_measure.py` | the verdict suite: `intersects`, `buried`, `separation` |
+| `tests/test_seam.py` | the module seam: `rules`/`pipeline` never import the rig |
+| `audit.py` | scratch: every number in the mesh tables below, measured |
 
 ## The two skins
 
-Numbers in `skin-parameters.yaml`, face rules in `build.py`'s `RULES`, joined by name by
+Numbers in `skin-parameters.yaml`, face rules in `rules.py`'s `RULES`, joined by name by
 `skins()`. Adding a third is a YAML entry plus a rule set, not a code path.
 
 **The numbers are tuned for the student-house substrate now** (2026-08-15). The synthetic
@@ -4318,6 +4331,110 @@ is the limit already recorded at `cladding_laps` on 2026-08-26, with the measure
 unreachable (0 of 2, 0 of 12, 0 of 102, 0 of 138 receivers). Repeated here only because two
 independent readers have now found it: it is the thing that breaks first if `cladding_laps` ever
 widens past `interior`.
+
+## The module split: rules, pipeline, rig (2026-08-28)
+
+Opus 5 over in the student-house asked to leave this code here and import it, rather than copy it
+across when the skinning modules are swapped. Nothing about `skin/` stood in the way — it imports
+trimesh, numpy, manifold3d, shapely, yaml and jsonschema and nothing of ours, so it was already
+portable. `build.py` was the whole of the problem: roughly 1700 of its 2055 lines were the rules
+the student-house actually wants, and they sat in a repo-root script beside the transcribed
+`PART_N` substrate, `BUILD_DIR`, the printed report and a `__main__`. There was no way to import
+the derivations without importing the rig.
+
+So the file is now three, drawn where the migration cuts:
+
+- **`rules.py`** — the domain tags, every face rule, `RULES`, `classifier`, `skins`, the two
+  `check_*` guards, and `TOL`. It is deliberately **not** under `skin/`: the invariant is that
+  `skin/` never learns what a wall or a membrane is, and moving the rules in there to make them
+  importable would have bought portability by spending the one boundary the module has.
+- **`pipeline.py`** — `prepare`, `run`, `_skin_from`, `covered`. This is the seam. `run(parts,
+  params)` takes plain data, reads no file, writes no file and prints nothing.
+- **`build.py`** — the rig, and now only the rig: `PART_N`, `current_substrate`,
+  `separation_check`, `build()` and `__main__`. 367 lines.
+
+**`prepare` is the part that had already been written three times.** `build()`, `separation_check`
+and `audit.live_skins` each carried their own copy of *group_cornices → group_caps → union →
+Faces*, and `build()`'s copy had the two `check_*` calls the others lacked. That duplication is
+what says the seam was in the right place before anyone drew it; all three now call `prepare`, and
+`audit.py` picked up the `covered` guard it never had.
+
+**`run` returns a result per *authored* skin, not per built one.** A skin whose rules select no
+face of this substrate is a real condition — the masonry needs a wall a cornice finishes, and two
+of the four substrates have none — and the caller has to be able to name it. So a skipped skin
+comes back as `{"name", "spec", "raw": None, "mesh": None}` in parameter-file order, and `build()`
+prints the line it always printed. Returning only the successes would have made the skip silent at
+exactly the seam that exists to keep it loud.
+
+Each result carries **both** meshes, `raw` and `mesh`. That is the measured-raw / written-clean
+split from *"Cleaning a mesh"* moved out of `build()` intact rather than re-decided: a measurement
+is a property of the offset, a verdict is a statement about what ships.
+
+**`skins(params)` runs before `prepare`, deliberately.** The name join is where a parameter file
+and `RULES` are checked against each other, and `prepare` re-stamps `metadata["object"]` on the
+caller's parts. Failing the join first keeps a bad parameter file from mutating a substrate on its
+way to raising — which is also the order `build()` had, and preserving it is what kept
+`test_a_supplied_params_dict_is_validated_too` reading the error it was written for.
+
+**The check that it moved nothing.** The printed report and every OBJ and manifest byte-identical
+on all four substrates — rig, both deck bakes, headhouse, unit8 — plus the same 150 tests passing
+as before. `md5sum` over `build/` before and after, five substrates each. That is the check to
+repeat after touching any of the three modules, and it is cheap: five `python3 build.py` runs.
+
+**`tests/test_seam.py` pins the direction of the dependency**, 150 → 154. `rules` and `pipeline`
+may not import `build`, `skin/` may import none of the three, and `run` refuses anything that is
+not a params dict. Read off the AST rather than by importing, because the import that would slip
+through is a deferred one inside a function body: it never runs in the suite, never runs in the
+build, and would still have to be unpicked on the far side of the migration. Nothing else in the
+repo would notice — that is the point of writing it down as a test rather than as a paragraph.
+
+### The review round on the split
+
+`/code-review high`, six findings, five taken. It verified the central claim independently and
+better than I had: an AST-level comparison of every top-level function and assignment between
+`HEAD:build.py` and the three new modules, which came back identical except `build()`,
+`separation_check()` and one docstring.
+
+- **`prepare` had neither guard.** `run` refuses a non-dict and validates through `skins()`;
+  `prepare` read `params["classify"]` and `params["fall"]` with no check at all, and it is an
+  advertised entry point that `audit.py` already calls directly. So an unvalidated `topo["skin"]`
+  with `fall: 1.4` would have gone straight through it — the 64.215 → 558.849 mm failure
+  `parameters.resolve` exists to stop, re-opened at the new seam. Both entries now take
+  `_params`, which validates a dict and refuses a path or a `None`. `parameters.validate` and not
+  `resolve`, because `resolve(None)` reads the file.
+- **`rules.py` claimed "nothing here reads a file".** `skins(params=None)` resolves against
+  `skin-parameters.yaml`, which about fifteen tests rely on. The default is deliberate and
+  documented at the function; the module docstring was the thing that was wrong, and it now says
+  so and names the hazard — `rules.skins()` in a host repo returns *this* repo's numbers and
+  raises nothing.
+- **A raise used to lose every earlier skin's report.** Building the whole set up front meant that
+  when the cladding hit `_reconcile` or the runaway guard, the membrane's residual, clearance and
+  fold lines — already computed — never printed. On a rig whose loudest failures are exactly those
+  raises, that is the diagnostic disappearing when it is wanted. `run` now returns `(faces,
+  iterator)` and yields per skin, with the guard and the name join kept **eager** in `run` itself
+  and the loop in `_each`: a generator function runs no line of its body until it is iterated, so
+  inlining it would have moved a bad-parameter error away from the call. Checked by stubbing a
+  raise into the cladding — the membrane's three lines print, then the raise.
+- **`audit.live_skins` called `prepare` before `skins`**, reversing the order this same change
+  documents as deliberate two files away. Fixed; it costs nothing and it is the ordering that
+  keeps a bad parameter file from mutating the parts on its way to raising.
+- **NOTES' own `## Layout` table was the wrong map** — it still sent readers to `build.py` for the
+  rules, and listed neither new module nor three of the test files. CLAUDE.md tells every reader
+  to open this file first, so that table is load-bearing. Rewritten.
+
+**Not taken: `separation_check` cleans every skin and uses only `raw`.** True, and measured at
+67 ms on the rig, where it is called by one test. The suggested fix is to bypass `run` for
+`prepare` + `_skin_from` the way `audit.py` does — but picking `raw` out of a result is the seam
+being *used correctly*, not misused, and a second path would need its own copy of the ordering
+discipline that the finding above just caught `audit.py` getting wrong. One path through the seam
+is worth 67 ms. Revisit if `separation_check` is ever pointed at a live bake.
+
+What this does **not** do, and what the student-house still needs before it can import any of it:
+there is no `pyproject.toml`, so "import it" is still a `sys.path` insert or a vendored copy; and
+`rules`, `pipeline` and `build` are three generic top-level names that will collide in a host
+repo. `trimesh`, `manifold3d`, `shapely`, `yaml` and `jsonschema` are all still undeclared. That
+is the packaging half, and it is deliberately separate — the import mechanism is Duncan's call and
+naming the modules for a distribution is the same edit as choosing it.
 
 ## Open items
 

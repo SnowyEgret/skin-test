@@ -21,7 +21,9 @@ Every tunable number is in `skin-parameters.yaml`, validated against
 full copy of the file passed as `build(params=parameters.load_validated(path))` — never an
 override of individual knobs. See **Parameters** below.
 
-Run pytest from the repo root — `tests/test_offset.py` imports `build` as a top-level module.
+Run pytest from the repo root — the tests import `build`, `rules` and `pipeline` as top-level
+modules. All three are repo-root modules today; naming them for a distribution is part of
+packaging the repo for import, which has not been done yet.
 
 **Running the tests overwrites `build/`.** `tests/test_offset.py` calls `build(parts)` on the
 synthetic rig, so a pytest run replaces whatever bake was last built — manifest included, which is
@@ -36,7 +38,7 @@ the clean line is measured on the **raw** emission, before cleaning — see **Cl
 A skin whose rules select no face of the substrate is **skipped, and said so** — no OBJ, no
 manifest entry, and last run's file for that skin is swept out of `build/` with the stale
 substrate copies, because it holds geometry offset from a different substrate. That is a real condition rather than a defect: the masonry skin needs a wall a
-cornice finishes, and only one of the three substrates has one. `build.covered` is the test, and
+cornice finishes, and only one of the three substrates has one. `pipeline.covered` is the test, and
 its docstring records what an empty skin does to everything downstream of it if it is let through
 (`clean`, `clearance`, `buried`, `separation` and `write_obj` all raise on a shape of `(0,)`).
 
@@ -123,16 +125,31 @@ Data flows one way:
 ```
 skin-parameters.yaml                    every tunable number, JSON-Schema validated
    → skin/parameters.load_validated()   → dict; the ONLY file that reads it
-   → build.skins(params)                joins the numbers to the RULES by name
+   → rules.skins(params)                joins the numbers to the RULES by name
 
 build.py  PART_N vertex/face literals   (transcribed from Blender, snapped to 1 µm)
    → substrate.polyhedron()             list[Trimesh], one per part
      ...or substrate.from_obj()         a baked export, one part per `o` group
-   → skin_over()                        union → planar_offset → keep() → lap
-   → clean()                            coplanar overlap dissolved, after the fact
+   → pipeline.run(parts, params)        the seam: substrate in, skins out
+       → pipeline.prepare()             group_cornices → group_caps → union → Faces
+       → skin_over()                    planar_offset → keep() → lap
+       → clean()                        coplanar overlap dissolved, after the fact
    → write_obj()                        build/*.obj as n-gons + manifest.json
    → blender/display.py                 imports, tags, displays
 ```
+
+**Four modules, and the split is the migration.** `skin/` is the geometry and knows nothing about
+buildings. `rules.py` is every derivation — what a wall is, which faces each skin covers, and the
+join from the authored numbers to those predicates by name. `pipeline.py` runs the one over the
+other and is the seam a caller integrates against: `run(parts, params)` takes plain data, reads no
+file, writes no file and prints nothing. `build.py` is **this rig** — the transcribed `PART_N`
+substrate, the OBJ emission and the printed report — and is one caller of that seam.
+
+The student-house imports `rules` and `pipeline`, passes its own parts and `topo["skin"]`, and
+leaves `build.py` here. That is why the rules are not in `skin/` and the emission is not in
+`pipeline`: each module is drawn where the migration cuts. Split out 2026-08-28 with no geometry
+moved — the printed report and every OBJ are byte-identical on all four substrates, which is the
+check to repeat after touching any of it.
 
 Key invariants, each of which spans several files:
 
@@ -163,7 +180,7 @@ Key invariants, each of which spans several files:
   a selection therefore sit on the miter they would have had if the neighbours were skinned too.
   ...and where a neighbour genuinely **is** skinned, at a different allowance, the honest miter is
   onto *that* plane. `planar_offset`'s `offsets` is a per-face distance for exactly that, `None`
-  everywhere else. `build.skin_offsets` is its only caller and composes the two rules that fill it
+  everywhere else. `rules.skin_offsets` is its only caller and composes the two rules that fill it
   in — `facade_offsets`, where this skin meets **another skin** (see **Where two cladding systems
   meet**), and `reveal_faces`, where it stops against a **substrate feature** (see **The reveal**).
   It is applied per **plane**, never per face. This is still not the per-face freedom in a cladding
@@ -239,7 +256,7 @@ Three rules carried over from student-house `bim/phase1/parameters.py`:
   raises if none was passed. Do not "fix" any of those by restoring a default.
 - **Schema does per-field, Python does cross-field.** Types, ranges, `required` and
   `additionalProperties: false` are in the JSON Schema. What a schema cannot express stays in
-  Python: `parameters.check_seeds` (non-degenerate distances) and `build.skins`'s name join.
+  Python: `parameters.check_seeds` (non-degenerate distances) and `rules.skins`'s name join.
 - **Fail at the seam, addressed.** Every raise names the field to edit, not the geometry that
   consumed it.
 
@@ -259,14 +276,15 @@ Blender's python needs neither PyYAML nor jsonschema: `blender/display.py` impor
 
 **On migration** the `classify` / `fall` / `reveal` / `skins` block moves into
 `student-house-parameters.yaml` under a `skin:` key, its schema is pasted into that repo's
-schema, and the caller passes `topo["skin"]` where `build.py` passes `load_validated()`.
+schema, and the caller passes `topo["skin"]` where `build.py` passes `load_validated()` into
+`pipeline.run`.
 `skin/parameters.py` is then dead code there and should be deleted rather than ported — the
 student-house already owns the read, via `topology_yaml.load` → `parameters.load_merged`.
 
 ## Adding a skin
 
 A skin is an entry in `skins:` in `skin-parameters.yaml` plus a rule set in `RULES` in
-`build.py`, not a new code path. `build.skins()` joins them by name, and raises if either side
+`rules.py`, not a new code path. `rules.skins()` joins them by name, and raises if either side
 names something the other does not — a skin with no rules cannot be built, and a rule set no
 skin names would sit there looking maintained while emitting nothing.
 
@@ -282,7 +300,7 @@ skin names would sit there looking maintained while emitting nothing.
 ```
 
 ```python
-# build.py RULES — the predicates, keyed by the same name
+# rules.py RULES — the predicates, keyed by the same name
 "...": {"keep": fn, "lap": fn | None}
 ```
 
@@ -312,7 +330,7 @@ read the substrate need to ask what a face *adjoins*, not just where it sits. Co
 **covers**; `lap` selects what it may **continue onto**.
 
 A skin whose `keep` selects nothing on the substrate being built is **skipped and named**, not
-built — see `build.covered`. So a rule set may legitimately describe a condition only some
+built — see `pipeline.covered`. So a rule set may legitimately describe a condition only some
 substrates pose, which is what lets the masonry live in the one parameter file the rig and both
 bakes share.
 
@@ -473,7 +491,7 @@ sloped panel off its offset plane — and the residual is computed before the tr
 would report it. Crossings are cached per edge so the two triangles sharing one get the same
 vertex and the cut does not crack.
 
-**A cornice joins the wall it projects from.** `build.group_cornices` runs before
+**A cornice joins the wall it projects from.** `rules.group_cornices` runs before
 `group_caps` — which classifies every element up front and would raise on a lone cornice first.
 It cannot ask a part's role and does not need to: **a body is a cornice of one it touches when it
 sits within that body's height, is strictly shorter than it, lies wholly outside its plan
@@ -537,7 +555,7 @@ substrate really does put two systems contiguous and coplanar the growth over-cl
 `check_cladding` is what notices, the grown set then spanning two `FACADE` materials.
 
 **Where two cladding systems meet, each mitres onto the plane of whichever system dresses the
-facade it ends against** — `build.facade_offsets`, and Duncan demonstrated both halves by moving
+facade it ends against** — `rules.facade_offsets`, and Duncan demonstrated both halves by moving
 two edges on 2026-08-26. One rule covers them:
 
 - **a neighbour no further out than me: mitre onto its surface.** The masonry at 150 mm meets the
@@ -582,7 +600,7 @@ A cladding skin stands `distance` off the wall it clads and **`reveal`** off a s
 it *dies against* rather than covers. One authored number, top-level beside `fall` rather than
 per skin, because it is a property of how a cladding system meets a substrate feature and not of
 any one system — and because two skins each authoring it would collide in `check_seeds` as equal
-seeds. `build.reveal_faces` names the faces, `build.skin_offsets` applies it. Duncan, 2026-08-27:
+seeds. `rules.reveal_faces` names the faces, `rules.skin_offsets` applies it. Duncan, 2026-08-27:
 *"The top of the masonry cladding should be offset by this value under a cornice. The cladding
 should be offset from bottom, and sides of the two scuppers by this value."*
 
@@ -635,7 +653,7 @@ firewall are two allowances and therefore two skins, and which one a wall takes 
 authored on the part like every other cladding system, never derived. Only one is posed by any
 substrate here.
 
-**A separately-authored cap plate joins the wall it caps.** `build.group_caps` runs before
+**A separately-authored cap plate joins the wall it caps.** `rules.group_caps` runs before
 anything reads a role, and re-stamps `metadata["object"]` so the plate and its parapet are one
 element. The rule is derived, not a name match: **a lift that classifies `ROOF` while the element
 it rests on classifies `WALL` is that wall's cap** — `_next_lift` already computes "rests on and
@@ -674,7 +692,7 @@ on each cornice-bearing substrate, the wall cornice's fascia and its two returns
 either scupper cornice**, which project proud of their wall and are coplanar with nothing clad.
 
 **A skin that wraps a cornice stops flush with its underside, not `reveal` short of it** —
-`build.flush_faces`, offset **zero**, the same arithmetic as `facade_offsets`' "the outer system
+`rules.flush_faces`, offset **zero**, the same arithmetic as `facade_offsets`' "the outer system
 owns the corner". Once the skin runs down the band it is no longer stopping *against* it, so there
 is no joint to hold; a flashing ends at the arris. Without this the band overshot to `12.718`, the
 reveal held below a cornice the skin had stopped stopping at. The two rules are disjoint by
@@ -876,7 +894,7 @@ a verdict is about what ships — see **Cleaning a mesh**.
 
 `substrate.classify(part, margin, aspect)` returns `WALL` or `ROOF` **from geometry alone** — no
 IFC, no part indices — so the rules survive a substrate with hundreds of parts. The two thresholds
-are authored (`classify` in the parameter file) and **required**; `build.classifier(params)` binds
+are authored (`classify` in the parameter file) and **required**; `rules.classifier(params)` binds
 them once and the bound callable is what `Faces` and `skin_over` are handed. It is deliberately not
 derived from bounds: an axis-aligned box around a wall running diagonally in plan inflates both
 horizontal extents until the height is the smallest of the three, and the wall reads as a slab.
@@ -898,7 +916,8 @@ there is deliberately no fallback pair of thresholds.
 
 ## The face rules
 
-`build.py` holds them; `skin/` never learns what a wall or a membrane is. They are derived, not
+`rules.py` holds them; `skin/` never learns what a wall or a membrane is, and that is what keeps
+them out of it rather than any shortage of room. They are derived, not
 listed — there are no plane coordinates and no part indices in them:
 
 - **exterior / interior** — a wall's top falls toward its interior, so the face under the high
@@ -934,7 +953,7 @@ listed — there are no plane coordinates and no part indices in them:
 - **a roof is a roof where it has the sky over it.** One slab is both: `Roof_Deck9_CLT` is the
   deck 9 roof where the insulation and the membrane sit on it, and the **headhouse floor** where it
   runs on under the headhouse and the insulation is cut away around it. One part, one role, two
-  surfaces — so no test on the part can tell them apart and `build._under_cover` asks it of the
+  surfaces — so no test on the part can tell them apart and `rules._under_cover` asks it of the
   face, by casting straight up and reading whether the substrate is hit. Nothing is authored but
   the reading of a hit: one rising less than `TOL` is the face catching its own ray, or a
   neighbour in its own plane clipped at the shared edge. Filtering the *hit* rather than nudging
@@ -964,7 +983,7 @@ listed — there are no plane coordinates and no part indices in them:
   a climbed wall" and so is the coping, the cap plate being one body of the element. A wall a roof
   merely **bears on** is not caught by it: what is tested is the roof's *upward* face, and a deck
   resting on a wall top touches it with its underside, at another level and sharing no edge.
-- **an opening cut through a wall.** `build._opening` reads a slot's **cheeks** — two vertical
+- **an opening cut through a wall.** `rules._opening` reads a slot's **cheeks** — two vertical
   faces of one *body* looking **at** each other, where a wall's thickness and a wall's two ends
   look away, **and each cut through its wall**: flanked by an opposed pair looking *away*, which
   is the wall's own thickness by the same sign the pairing uses. Both halves are needed and the
@@ -1015,7 +1034,7 @@ listed — there are no plane coordinates and no part indices in them:
   2026-08-16 after the alternatives (give the top to one skin or the other) were rejected, and
   reaffirmed 2026-08-19 when a bake that authored its cap plates as **separate objects** reversed
   it by accident: each plate became its own element, a 29 mm plate classifies `ROOF` alone, and
-  "every wall top" stopped reaching any coping. `build.group_caps` restores it — see below. They
+  "every wall top" stopped reaching any coping. `rules.group_caps` restores it — see below. They
   stack rather than collide: the cladding sits outboard by the difference of the two offsets, to
   within what the sloped planes absorbed, and a test pins that ordering. **Do not narrow either
   predicate to make the skins disjoint** — an overlap here is the design, not a bug.
@@ -1115,7 +1134,7 @@ enough to matter, and the headhouse taper's top already does in the shipping bak
 matches each face against the representatives already found instead, and `_lap`, `_knives` and the
 run chaining all key on its id. A run that silently fails to chain is a lap that silently does not
 happen. That is the accuracy floor for everything downstream: `TOL = 1e-6`
-(`build.py`), `PLANE_TOL = 1e-6` (`skin/offset.py`) and `SURFACE_TOL = 1e-6` (`skin/measure.py`,
+(`rules.py`), `PLANE_TOL = 1e-6` (`skin/offset.py`) and `SURFACE_TOL = 1e-6` (`skin/measure.py`,
 how near a part's surface a sample has to be to count as *on* it) exist for it. Do not tighten
 them — an
 earlier 1 nm threshold produced a bogus self-intersection warning, and a 1e-12 test for *parallel*

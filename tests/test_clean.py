@@ -215,10 +215,10 @@ def _rig_skins():
     """Every skin the rig actually poses. The masonry needs a wall a cornice
     finishes and the rig has no cornice at all, so it is skipped here the way
     `build()` skips it — see `build.covered`."""
-    from build import (
-        _owner, _skin_from, classifier, covered, current_substrate, group_caps,
-        group_cornices, skins,
-    )
+    from build import current_substrate
+    from pipeline import _skin_from, covered
+    from rules import classifier, group_caps, group_cornices, skins
+    from skin.offset import _owner
     from skin import parameters, substrate
     from skin.offset import Faces
 
@@ -475,7 +475,8 @@ def test_the_baked_scupper_tear_closes_and_the_perimeters_do_not():
     and 18.016 mm across, while the narrowest free edge that must stay open is
     248.268 mm and stands 94 mm off its own best-fit plane.
     """
-    from build import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins, _skin_from
+    from pipeline import _skin_from
+    from rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins
     from skin import parameters, substrate
     from tests.test_import import BAKE
 
@@ -503,7 +504,8 @@ def test_the_cladding_has_nothing_to_gusset_at_the_membranes_bound():
     is a 9 m trough only 248 mm across — the closest thing in any skin here to a
     tear — and neither test lets it through: it is 94 mm off its own plane, and
     it is wider than any bound that catches the membrane's 18 mm."""
-    from build import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins, _skin_from
+    from pipeline import _skin_from
+    from rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins
     from skin import parameters, substrate
     from tests.test_import import LIVE
 

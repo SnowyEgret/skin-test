@@ -14,7 +14,7 @@ FALL = PARAMS["fall"]
 
 def _faces(parts, body=None):
     """`Faces` over the union of `parts`, with the authored classifier bound."""
-    from build import classifier
+    from rules import classifier
     from skin.offset import Faces, _owner
 
     body = trimesh.boolean.union(parts) if body is None else body
@@ -79,7 +79,7 @@ def test_upward_finds_flat_tops_and_rejects_sloped_soffits():
     built here on purpose. Both cases are ordinary in the student-house: a wall
     panel with a flat top has another panel stacked on it.
     """
-    from build import _upward
+    from rules import _upward
 
     # flat top at z = 1; underside sloping from z = 0 up to z = 0.5.
     # wound outward throughout: polyhedron() can only re-wind an inconsistent
@@ -168,7 +168,8 @@ def test_exterior_and_interior_are_read_off_each_wall_s_own_slope():
     the facade and the one under the low edge is the interior. Nothing names a
     plane or a part index.
     """
-    from build import current_substrate, uphill, wall_faces
+    from build import current_substrate
+    from rules import uphill, wall_faces
 
     parts = current_substrate()
     body = trimesh.boolean.union(parts)
@@ -211,7 +212,7 @@ def test_uphill_refuses_a_flat_top():
     `uphill` reads one element's own upward faces and stops there. Walking the
     stack to find the slope is `rise`'s job, below.
     """
-    from build import uphill
+    from rules import uphill
 
     with pytest.raises(ValueError, match="flat top"):
         uphill([substrate.prism((0, 0, 0), (4.0, 0.3, 3.0))])
@@ -239,7 +240,7 @@ def test_a_flat_topped_panel_takes_its_direction_from_the_lift_above_it():
     here is three deep, as the headhouse's is, so a rule that only looked one
     element up would still leave the panel undefined.
     """
-    from build import rise, uphill
+    from rules import rise, uphill
 
     parts = [
         _lift("Panel", (0, 0, 0), (6.0, 0.4, 3.0)),
@@ -265,7 +266,7 @@ def test_one_dead_end_lift_does_not_cost_the_wall_its_direction():
     out of the loop and the wall got no direction at all, despite the sloped
     branch having one. The area weighting the docstring promised never ran.
     """
-    from build import rise
+    from rules import rise
 
     parts = [
         _lift("Wall", (0, 0, 0), (6.0, 0.4, 3.0)),
@@ -287,7 +288,7 @@ def test_one_dead_end_lift_does_not_cost_the_wall_its_direction():
 
 
 def _next_lift_names(faces, members):
-    from build import _next_lift
+    from rules import _next_lift
 
     return [
         faces.parts[m[0]].metadata["object"]
@@ -305,7 +306,7 @@ def test_a_lift_must_be_flush_on_both_sides_not_merely_bear_on_the_top():
     single plane. Weighting the strays down by area instead leaves the answer
     tilted by a few degrees and dependent on how long the wall happens to be.
     """
-    from build import rise
+    from rules import rise
 
     wall = _lift("Wall", (0, 0, 0), (6.0, 0.4, 3.0))
     cap = _lift("Cap", (0, 0, 3.0), (6.0, 0.4, 3.03), tilt=0.01)
@@ -346,7 +347,7 @@ def test_a_facade_s_cladding_system_comes_from_the_part_not_its_position():
     nor "the frontmost plane" separates these two: only the material does, and no
     property of a wall's shape implies brick.
     """
-    from build import BRICK, FACADE, RAINSCREEN, check_facades, facades_of, uphill
+    from rules import BRICK, FACADE, RAINSCREEN, check_facades, facades_of, uphill
 
     front = _facing_wall(0.0, 0.4, 0.0, 6.0, 3.0, 2.99)  # brick, at x = 0
     headhouse = _facing_wall(3.0, 3.4, 1.0, 4.0, 4.0, 3.99)  # rainscreen, set back
@@ -383,7 +384,7 @@ def test_a_cornice_is_stamped_whether_or_not_there_is_an_element_to_join():
     here — `cladding_faces` would have wrapped the cornice instead of stopping
     below it. Found on review, 2026-08-26.
     """
-    from build import CORNICE, TOP_CORNICE, group_cornices
+    from rules import CORNICE, TOP_CORNICE, group_cornices
 
     def band(x0, x1, z0, z1):
         return substrate.polyhedron(
@@ -431,10 +432,11 @@ def test_the_masonry_runs_the_whole_face_below_a_cornice_not_one_lift():
     review, 2026-08-26 — the live bake cannot pose it, because its wall is one
     lift and its cap plate is coplanar with the cornice rather than the wall.
     """
-    from build import (
-        FACADE, RAINSCREEN, TOP_CORNICE, classifier, cladding_faces, group_caps,
-        group_cornices, masonry_faces, skins, _owner, _skin_from,
+    from pipeline import _skin_from
+    from rules import (
+        FACADE, RAINSCREEN, TOP_CORNICE, cladding_faces, classifier, group_caps, group_cornices, masonry_faces, skins,
     )
+    from skin.offset import _owner
     from skin import parameters, substrate
     from skin.offset import Faces
 
@@ -483,7 +485,7 @@ def test_a_wall_corniced_on_two_faces_is_refused():
     Assigning in a loop kept whichever cornice came last and left the other
     face rainscreen with no warning — found on review, 2026-08-26.
     """
-    from build import TOP_CORNICE, group_cornices
+    from rules import TOP_CORNICE, group_cornices
 
     wall = _stacked_box(0.0, 0.4, 0.0, 6.0, 0.0, 3.0)
     front = _stacked_box(-0.17, 0.0, 0.0, 6.0, 2.93, 3.0)
@@ -501,7 +503,7 @@ def test_two_masonry_systems_on_one_substrate_are_refused():
     cornice alone, so both would land in one skin at one offset while
     `check_facades` kept passing, neither tag being wrong. Name the condition
     that makes the cornice insufficient rather than meet it as geometry."""
-    from build import BRICK, FACADE, RAINSCREEN, TOP_CORNICE, check_cladding
+    from rules import BRICK, FACADE, RAINSCREEN, TOP_CORNICE, check_cladding
 
     one = _facing_wall(0.0, 0.4, 0.0, 6.0, 3.0, 2.99)
     two = _facing_wall(3.0, 3.4, 1.0, 4.0, 4.0, 3.99)
@@ -530,7 +532,7 @@ def test_a_facade_no_cladding_skin_covers_is_refused():
     Stamping the wall the way `group_cornices` stamps one a cornice finishes is
     what puts it back in a skin — the same fixture, read by the other check.
     """
-    from build import BRICK, FACADE, TOP_CORNICE, check_cladding, check_facades
+    from rules import BRICK, FACADE, TOP_CORNICE, check_cladding, check_facades
 
     front = _facing_wall(0.0, 0.4, 0.0, 6.0, 3.0, 2.99)
     front.metadata[FACADE] = BRICK
@@ -549,7 +551,7 @@ def test_a_facade_no_cladding_skin_covers_is_refused():
 
 def test_an_unclaimed_facade_is_refused():
     """A facade no cladding system claims is a silently bare wall. Fail instead."""
-    from build import BRICK, FACADE, RAINSCREEN, check_facades
+    from rules import BRICK, FACADE, RAINSCREEN, check_facades
 
     front = _facing_wall(0.0, 0.4, 0.0, 6.0, 3.0, 2.99)
     front.metadata[FACADE] = BRICK  # but only rainscreen is declared below
@@ -568,7 +570,8 @@ def test_build_does_not_emit_the_substrate_unless_asked():
     scene beside the original. Opting in has to be deliberate.
     """
     import build as build_module
-    from build import build, current_substrate, skins
+    from build import build, current_substrate
+    from rules import skins
 
     parts = current_substrate()
     before = [(p.vertices.copy(), p.faces.copy()) for p in parts]
@@ -637,7 +640,9 @@ def test_sloped_substrate_keeps_axis_planes_and_horizontals_exact():
 def test_partial_skin_is_an_open_surface_with_constraints_intact():
     import trimesh
 
-    from build import current_substrate, skins
+    from build import current_substrate
+
+    from rules import skins
 
     parts = current_substrate()
     body = trimesh.boolean.union(parts)
@@ -673,7 +678,9 @@ def test_a_drip_hangs_the_right_walls_to_the_right_depth():
     """
     import trimesh
 
-    from build import current_substrate, skins, wall_faces
+    from build import current_substrate
+
+    from rules import skins, wall_faces
     from skin.offset import _owner, _receivers
 
     membrane = skins()[0]
@@ -716,7 +723,9 @@ def test_a_drip_hangs_the_right_walls_to_the_right_depth():
 def test_cladding_and_membrane_cover_complementary_walls_and_never_meet():
     import trimesh
 
-    from build import current_substrate, separation_check, skins
+    from build import current_substrate, separation_check
+
+    from rules import skins
 
     parts = current_substrate()
     faces = _faces(parts)
@@ -751,7 +760,8 @@ def test_both_skins_cover_the_coping_and_stack_rather_than_collide():
     the gap is the offset difference only to within each skin's slope deviation
     — checked against the deviations the skins themselves report, not a constant.
     """
-    from build import _upward, cladding_faces, current_substrate, membrane_faces, skins
+    from build import current_substrate
+    from rules import _upward, cladding_faces, membrane_faces, skins
 
     parts = current_substrate()
     faces = _faces(parts)
@@ -808,7 +818,9 @@ def test_the_cladding_is_cut_at_its_datum_rather_than_clamped_to_it():
     geometry is untouched and its planes are unmoved, not merely that nothing is
     below zero.
     """
-    from build import _skin_from, current_substrate, skins
+    from build import current_substrate
+    from pipeline import _skin_from
+    from rules import skins
 
     parts = current_substrate()
     cladding = skins()[1]
@@ -875,7 +887,9 @@ def test_a_datum_above_the_whole_skin_is_refused_at_the_seam():
     """Authoring `base` in the wrong datum — site elevation for building-local —
     trims everything away. Before this raised, the empty mesh reached trimesh and
     came back as `IndexError: too many indices`, which names nothing."""
-    from build import _skin_from, current_substrate, skins
+    from build import current_substrate
+    from pipeline import _skin_from
+    from rules import skins
 
     parts = current_substrate()
     with pytest.raises(ValueError, match=r"base=100.0 leaves nothing"):
@@ -886,7 +900,9 @@ def test_a_skin_with_no_datum_is_not_trimmed():
     """`base: null` is not `base: 0.0`. The membrane authors null — it never
     reaches the ground — and the two must not be the same code path, or a skin
     that legitimately goes below zero would be silently cut."""
-    from build import _skin_from, current_substrate, skins
+    from build import current_substrate
+    from pipeline import _skin_from
+    from rules import skins
 
     parts = current_substrate()
     membrane = skins()[0]
@@ -981,7 +997,7 @@ def test_a_cornice_joins_the_wall_it_projects_from():
     neighbouring parapet butting a taller wall is outside its footprint and
     shorter than it, but stands metres proud of a 420 mm wall.
     """
-    from build import CORNICE, group_cornices
+    from rules import CORNICE, group_cornices
 
     def box(name, extents, centre):
         part = substrate._box(extents, centre)
@@ -1262,7 +1278,7 @@ def test_wall_planes_are_not_snapped_onto_the_tolerance_lattice():
     pins. Found by `/code-review high` 2026-08-21; latent on all three
     substrates, every one of which is axis-aligned.
     """
-    from build import TOL, _wall_planes
+    from rules import TOL, _wall_planes
 
     wedge = substrate.polyhedron(
         [(0, 0, 0), (1, 0, 0), (0.4, 0.7, 0),
@@ -1364,7 +1380,7 @@ def test_a_rainscreen_stops_at_an_opening_rather_than_lining_it():
     because the slot cuts through the cap plates too and per element their two
     reveals would read as cheeks and take the coping with them.
     """
-    from build import _opening, _upward
+    from rules import _opening, _upward
     from skin.substrate import WALL
 
     parts = _slotted_wall()
@@ -1695,7 +1711,7 @@ def test_a_courtyard_is_not_an_opening_cut_through_a_wall():
     return at an inner corner is flanked by the two faces turning that corner,
     a quarter turn apart, and by nothing opposed at all.
     """
-    from build import _opening
+    from rules import _opening
 
     ring = trimesh.boolean.difference([
         substrate.prism((0.0, 0.0, 0.0), (4.0, 3.0, 1.0)),
@@ -1732,7 +1748,7 @@ def _stepped_parapet_over_a_roof():
     the roof. Two bodies of one object, which is how a bake arrives; the real
     parapet is one part and the step is a notch in it.
     """
-    from build import FACADE, RAINSCREEN
+    from rules import FACADE, RAINSCREEN
 
     lift = substrate.prism((0.0, 0.0, 0.0), (0.42, 6.0, 1.0))
     parapet = _stacked_box(0.0, 0.248, 0.0, 6.0, 1.0, 2.0, ztop=1.97)
@@ -1759,7 +1775,7 @@ def test_a_wall_top_the_roof_runs_into_is_not_a_coping():
     rather than a top — a coping with an ungrouped cornice beside it shares an
     edge with the cornice's top, and a lone cornice classifies `ROOF`.
     """
-    from build import cladding_faces, cladding_laps, membrane_faces, _upward
+    from rules import _upward, cladding_faces, cladding_laps, membrane_faces
 
     parts = _stepped_parapet_over_a_roof()
     faces = _faces(parts, body=substrate.union(parts))
