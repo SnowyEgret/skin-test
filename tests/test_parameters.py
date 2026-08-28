@@ -243,3 +243,20 @@ def test_the_reveal_is_validated_and_required():
     params["reveal"] = -0.018
     with pytest.raises(parameters.ParameterError, match="reveal"):
         parameters.validate(params)
+
+
+def test_a_zero_reveal_is_refused_by_name_rather_than_dividing_by_it():
+    """`reveal` has no off state, and `check_seeds` is where that is said.
+
+    Unlike a skin's `drop` or `out`, zero does not mean "this feature is
+    switched off" — a skin either stops at the joint or does not reach one. The
+    schema refuses it too, but this function is documented as a standalone
+    opt-in a caller may run without `validate`, so it cannot lean on that: a
+    zero previously reached the integer-multiple loop as a divisor and came back
+    `ZeroDivisionError`. Found on review, 2026-08-27.
+    """
+    for bad in (0.0, -0.018):
+        params = _params()
+        params["reveal"] = bad
+        with pytest.raises(parameters.ParameterError, match="reveal"):
+            parameters.check_seeds(params)

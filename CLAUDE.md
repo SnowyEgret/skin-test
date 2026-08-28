@@ -501,7 +501,9 @@ picked up by "every upward face of a climbed wall", and the lap then hangs a dri
 below it, which is the scupper drip exactly. At `Cornice-Unit8-E` neither happens, because its top
 is buried under the cap plate and its face is coplanar with the cap's. **The cladding stops below a cornice** rather than wrapping
 it (Duncan, 2026-08-19) — `cladding_faces` excludes `tagged(CORNICE, True)`, and since the facade
-face below already ends at the cornice, that exclusion is the whole of it. The coping above is a
+face below already ends at the cornice, that exclusion is the whole of it. It is about a skin
+running *into* a band from the wall face, and not about one already level with it: see **The skirt
+over a cornice** below, where the coping's fascia continues down a cornice on its own plane. The coping above is a
 separate face and is still claimed by both skins.
 
 **A cornice that *finishes* a wall makes that wall's facade masonry.** `group_cornices` stamps the
@@ -654,6 +656,48 @@ in the file, which is not a property of the geometry at all — and the plate it
 return took that wall's element to horizontality 0.204, `ROOF` by the thin-side measure and `WALL`
 by area, which `Faces.roles` refuses. Contested on exactly one plate of the substrates here;
 everywhere else there is a single claimant and the answer is what it always was.
+
+## The skirt over a cornice
+
+**Where a cornice's face continues a plane the cladding is already on, the skin runs down the band
+to its bottom.** Duncan, 2026-08-27: *"In the cladding, the skirt covering a cornice should extend
+to the bottom of the cornice. This rule applies only to skirts over cornices."*
+
+It is not a skirt in `_lap`'s sense and no lap places it. `CapPlate-Deck9-N` oversails its wall and
+its north face is **flush with the cornice's outer face** at `y = -0.16`, so the cladding covers the
+plate's fascia and stopped dead at the arris with the cornice below — which is on that same plane
+and excluded as a cornice face. So the fix is a face selection, not a distance: `cladding_faces`
+grows along the surface into the cornice, the same move `masonry_faces` and `_opening` make, and the
+band runs to the cornice's bottom because that is where the coplanar run ends. Nothing is authored —
+Duncan's 0.184719 is `12.920719 - 12.736`, and both numbers come off the geometry. Measured: 6 faces
+on each cornice-bearing substrate, the wall cornice's fascia and its two returns, and **nothing on
+either scupper cornice**, which project proud of their wall and are coplanar with nothing clad.
+
+**A skin that wraps a cornice stops flush with its underside, not `reveal` short of it** —
+`build.flush_faces`, offset **zero**, the same arithmetic as `facade_offsets`' "the outer system
+owns the corner". Once the skin runs down the band it is no longer stopping *against* it, so there
+is no joint to hold; a flashing ends at the arris. Without this the band overshot to `12.718`, the
+reveal held below a cornice the skin had stopped stopping at. The two rules are disjoint by
+**face** — `reveal_faces` excludes what `wrapped` names — and that is *not* the same as disjoint by
+plane: two cornices whose soffits sit at one level, one wrapped and one not, put a face of each on
+the one plane. So `skin_offsets` collects `{plane: distance}` before writing anything and raises on
+a genuine conflict. Writing as it went made the second pass read the first's own value back and
+raise the **facade miter** error, naming a cause that was not there. No substrate here poses it —
+the three soffits are at 11.4644, 12.736 and 14.425 — so the guard is structural rather than
+measured, and a test poses the condition itself. Found on review, 2026-08-27.
+
+**Wrapping is running down the band's *face*, never covering its top**, and it is read per body.
+A cornice joined to a climbed parapet has its top picked up by the membrane's "every upward face of
+a climbed wall", so on a test that did not say *down* every such cornice read as wrapped and the
+**membrane** set its soffit to zero — a waterproofing layer holding a cladding detail. Per body
+rather than per face because a band is one thing: per face gives its fascia one answer and the
+soffit sharing its bottom arris another, which is one vertex asked two things.
+
+One consequence, and it is the design rather than a collision: the metal and the brick now meet in
+the joint. On both cornice-bearing deck bakes `Cladding/Masonry separation` is **exactly `reveal`** —
+the cladding's return stops flush with the soffit at `z = 13.0066` and the masonry's top stops
+`reveal` under the same soffit at `12.9886`, looking straight up at it. One plane, two skins, two
+answers, because they are two systems.
 
 ## Cleaning a mesh
 
@@ -988,8 +1032,11 @@ listed — there are no plane coordinates and no part indices in them:
   overlap is the design. Because that set is **derived** and not tagged, `check_facades` passes
   whatever the carve-out does, and **`check_cladding`** exists for what it cannot see: no facade
   in both skins, and none in neither. The one exterior thing no cladding skin claims is a
-  cornice's own faces, which is the 2026-08-19 decision and not an omission — measured on the live
-  bake, exactly 8 faces, both cornices, and nothing else on either baked substrate.
+  cornice's own faces, which is the 2026-08-19 decision and not an omission. Since 2026-08-27 that
+  is only the cornices that stand **proud** of their wall, since nothing clad is then coplanar with
+  them — the scupper drips, 4 faces on the live deck bake and 2 on each of the others, and nothing
+  else on any of them. A wall cornice's exterior faces are all claimed now: see **The skirt over a
+  cornice**.
   `check_cladding` also raises where the corniced walls of one substrate carry **more than one**
   `FACADE` value, which is the exact moment the cornice stops being enough to select a masonry
   skin: one skin is one allowance, and two systems need a skin each, chosen on the tag as well as

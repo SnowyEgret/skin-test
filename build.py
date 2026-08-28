@@ -1235,9 +1235,67 @@ def reveal_faces(faces, fall, covers):
     if not (exterior & covers).any():
         return target                   # clads no facade, so it meets no cornice
     cheeks, _ = _opening(faces)
+    cornice = faces.tagged(CORNICE, True)
     return (
-        faces.tagged(CORNICE, True) & ~_upward(faces.normals) & faces.touching(covers)
+        cornice & ~_upward(faces.normals) & ~wrapped(faces, covers)
+        & faces.touching(covers)
     ) | (cheeks & covers)
+
+
+def wrapped(faces, covers) -> np.ndarray:
+    """Faces of a cornice this skin **wraps** rather than stops against.
+
+    Duncan, 2026-08-27: *"the skirt covering a cornice should extend to the
+    bottom of the cornice."* Where a cornice's face continues a plane the skin
+    is already on — the coping's fascia and the cornice's outer face flush with
+    each other, which is how the band is drawn — `cladding_faces` grows onto it
+    and the skin runs down the band. Such a cornice is not a thing this skin
+    dies against, so it takes no `reveal`: there is no joint to hold when the
+    surface simply carries on over it.
+
+    Read per **body**, not per face. Being wrapped is a fact about the cornice —
+    it is one band, and the skin either runs down it or stops above it — where
+    per face would give its fascia one answer and the soffit sharing its bottom
+    arris another, which is the same vertex asked two things.
+
+    The covered face has to be one the skin runs **down**, which is why an
+    upward one does not count. A cornice joined to a climbed parapet has its
+    exposed top picked up by the membrane's "every upward face of a climbed
+    wall", so on that test alone every such cornice read as wrapped and the
+    membrane set its soffit to zero — a waterproofing layer holding a cladding
+    detail. Covering a band's top is not running down its face.
+    """
+    cornice = faces.tagged(CORNICE, True)
+    down = cornice & covers & ~_upward(faces.normals)
+    return np.isin(faces.owner, np.unique(faces.owner[down])) & cornice
+
+
+def flush_faces(faces, fall, covers) -> np.ndarray:
+    """The soffit of a cornice this skin wraps — the plane it stops **flush** with.
+
+    A flashing running down a cornice's face stops at its bottom arris. It does
+    not hang `distance` below it into thin air, and it does not stop `reveal`
+    short of it and leave the arris bare: it ends exactly where the substrate
+    does, which is the offset-**zero** case `facade_offsets` already has a use
+    for. Duncan's own arithmetic says so — the band drops 0.184719 off the
+    coping's edge at `z = 12.920719`, and `12.920719 - 0.184719` is `12.736`,
+    the cornice's underside to the micron.
+
+    Only the underside, and only of a cornice this skin wraps. A cornice it
+    merely reaches is `reveal_faces`' business and holds the joint instead.
+
+    Gated on cladding a facade, the same test `reveal_faces` makes and for the
+    same reason: both are where a *cladding* system finishes, and the membrane
+    should hold neither. Today `wrapped`'s "runs down its face" clause already
+    keeps it out — measured 0 on all four substrates — but only because no
+    cornice here presents a return that reads as an interior face of a climbed
+    parapet, which `membrane_faces` would cover. That is a fact about these
+    bakes, where this is a fact about what a reveal is for. Found on review.
+    """
+    exterior, _ = wall_faces(faces, fall)
+    if not (exterior & covers).any():
+        return np.zeros(len(covers), dtype=bool)
+    return wrapped(faces, covers) & (faces.normals[:, 2] < -TOL)
 
 
 def skin_offsets(faces, fall, mine, reveal, keep, others):
@@ -1275,26 +1333,58 @@ def skin_offsets(faces, fall, mine, reveal, keep, others):
     """
     offsets = facade_offsets(faces, fall, mine, keep, others)
     covers = keep(faces)
-    target = reveal_faces(faces, fall, covers)
-    if not target.any():
+    # the joint, and the arris the skin stops flush with. Disjoint by
+    # construction -- `reveal_faces` excludes a cornice `wrapped` names -- so
+    # the two lists below can never ask one plane for two distances
+    held = reveal_faces(faces, fall, covers)
+    flush = flush_faces(faces, fall, covers)
+    if not (held.any() or flush.any()):
         return offsets
 
     ids, _ = _plane_ids(faces.body)
-    for plane in np.unique(ids[target]):
+
+    def where(on) -> str:
+        return (f"plane {np.round(faces.normals[on][0], 6).tolist()} at "
+                f"{np.round(faces.centres[on][0], 4).tolist()}")
+
+    # collected per plane **before** anything is written, because the two masks
+    # are disjoint by face and that is not the same as disjoint by plane: two
+    # cornices whose soffits sit at one level, one this skin wraps and one it
+    # stops against, put a `held` face and a `flush` face on one plane. Writing
+    # as we went made the second pass read the first's own value back and raise
+    # the *facade* miter error, naming a cause that was not there. No substrate
+    # here poses it -- the three soffits are at 11.4644, 12.736 and 14.425 --
+    # and the guard is structural rather than measured for that reason. Found
+    # on review, 2026-08-27
+    want: dict[int, float] = {}
+    for mask, distance in ((held, float(reveal)), (flush, 0.0)):
+        for plane in np.unique(ids[mask]):
+            plane = int(plane)
+            if want.get(plane, distance) != distance:
+                on = ids == plane
+                raise ValueError(
+                    f"{where(on)} is asked for {want[plane]} m and {distance} m at "
+                    f"once: this skin wraps one cornice on it and stops against "
+                    f"another. One surface cannot be both the arris a skirt ends on "
+                    f"and the joint it holds — the two cornices want separating, or "
+                    f"one of them is not what it looks like"
+                )
+            want[plane] = distance
+
+    for plane, distance in want.items():
         on = ids == plane
-        if (on & covers & ~target).any():
+        if (on & covers & ~(held | flush)).any():
             continue        # a facade this skin clads; `facade_offsets` owns it
         moved = offsets[on] != mine
         if moved.any():
             raise ValueError(
-                f"plane {np.round(faces.normals[on][0], 6).tolist()} at "
-                f"{np.round(faces.centres[on][0], 4).tolist()} is claimed both by a "
-                f"neighbouring cladding system (moving it {sorted(set(offsets[on][moved].tolist()))} m) "
-                f"and by this skin's reveal ({reveal} m). One surface cannot be "
-                f"finished by two systems and stopped short of at once — decide which, "
-                f"rather than letting the order of these two rules decide it"
+                f"{where(on)} is claimed both by a neighbouring cladding system "
+                f"(moving it {sorted(set(offsets[on][moved].tolist()))} m) and by "
+                f"this skin at {distance} m. One surface cannot be finished by two "
+                f"systems and stopped short of at once — decide which, rather than "
+                f"letting the order of these two rules decide it"
             )
-        offsets[on] = float(reveal)
+        offsets[on] = distance
     return offsets
 
 
@@ -1335,12 +1425,15 @@ def check_cladding(faces, fall):
     only way to notice, so it is done here rather than left to whoever edits
     either of them next.
 
-    A **cornice's own faces** are the one exterior thing no cladding skin
-    claims, and that is the 2026-08-19 decision rather than an omission: the
-    cladding stops at a cornice's underside and the masonry stops there too, so
-    the band itself is dressed by neither. Measured on the live bake, it is also
-    the *only* such thing — 8 faces, both cornices, and nothing else on either
-    baked substrate.
+    A **cornice's own faces** are the one exterior thing a cladding skin may
+    leave unclaimed, and that is the 2026-08-19 decision rather than an
+    omission: the band is dressed by neither where both stop at it. Since
+    2026-08-27 that is no longer all cornices — where a cornice's face continues
+    a plane the cladding is already on, `cladding_faces` grows onto it and the
+    skirt runs down the band. What is left unclaimed is exactly the cornices
+    that stand proud of their wall, so that nothing clad is coplanar with them:
+    the **scupper** drips, 4 faces on the live deck bake and 2 on each of the
+    others, and nothing else on any of them.
 
     Kept separate from `check_facades` because they are separate claims. The
     two-facade fixture in the tests poses a facade tagged for a system no skin
@@ -1397,10 +1490,16 @@ def cladding_faces(faces, fall):
     by the difference of the offsets, and a test pins that ordering. Do not
     narrow either predicate to make the skins disjoint.
     """
-    # ...but never a cornice. It stands proud of the facade, and the cladding
-    # stops at its underside rather than wrapping it -- Duncan, 2026-08-19. The
-    # face below it already ends there, so excluding the cornice's own faces is
-    # the whole of it; the coping above is a separate face and is still claimed.
+    # ...but never a cornice, where the cladding runs *into* one: it stands
+    # proud of the facade and the skin stops at its underside rather than
+    # wrapping round from the wall face -- Duncan, 2026-08-19. The face below it
+    # already ends there, so excluding the cornice's own faces is the whole of
+    # that; the coping above is a separate face and is still claimed. What this
+    # exclusion is **not** about is a cornice the skin is already level with --
+    # see the growth at the end of this function, and note the two are not in
+    # tension: one is the rainscreen declining to wrap a band from the wall
+    # face, the other is the coping's fascia continuing down a plane it is
+    # already on.
     # ...and never the floor of an opening cut through a wall. The scupper sill
     # is a wall top, so "every wall top" claimed it and the cladding lined the
     # inside of a 400 mm outlet -- which is not what a rainscreen does, and which
@@ -1431,6 +1530,7 @@ def cladding_faces(faces, fall):
     # every upward face of a wall, so the rainscreen came down the inside of the
     # parapet and out across the ledge, under the membrane -- which is not
     # somewhere a rainscreen goes. Duncan, 2026-08-27; the test is below
+    cornice = faces.tagged(CORNICE, True)
     _, _, roof, _ = _rules(faces, fall)
     tops = _upward(faces.normals) & faces.of_role(substrate.WALL)
     # a ledge is `_rules`' own sentence read the other way round: an upward face
@@ -1453,11 +1553,19 @@ def cladding_faces(faces, fall):
     # elects a whole wall off the one triangle that meets the roof
     ledges = _grow_coplanar(faces, tops & under & faces.touching(roof), tops)
     cheeks, floor = _opening(faces)
-    return (
+    base = (
         (facades_of(faces, RAINSCREEN, fall) & ~masonry_faces(faces, fall))
         | (tops & ~ledges)
         | (cheeks & faces.of_role(substrate.WALL))
-    ) & ~faces.tagged(CORNICE, True) & ~floor
+    ) & ~cornice & ~floor
+    # ...except where a cornice's own face continues a plane this skin is
+    # already on, which is the coping's fascia running down over the band --
+    # Duncan, 2026-08-27: *"the skirt covering a cornice should extend to the
+    # bottom of the cornice."* Grown along the surface rather than named, the
+    # same move `masonry_faces` and `_opening` make, so the extent is derived
+    # from the cornice's own depth and nothing is authored: it runs to the
+    # bottom because that is where the coplanar run ends
+    return base | (_grow_coplanar(faces, base, base | cornice) & cornice)
 
 
 def cladding_laps(faces, fall):

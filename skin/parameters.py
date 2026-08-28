@@ -111,11 +111,22 @@ def check_seeds(params: dict) -> dict:
             "parameter reveal: missing — it is a seed like a skin distance, so "
             "`check_seeds` reads it. Add it to the file, or call `validate` alone"
         )
-    # no zero exemption, unlike the per-skin distances: `reveal` has no "off"
-    # state to mean. A skin either dies against a cornice or an opening cheek at
-    # the authored joint or it does not reach one, and the schema's
-    # `exclusiveMinimum: 0` keeps a zero out of a validated file either way
-    seeds = {float(params["reveal"]): "reveal"}
+    # No zero exemption, unlike the per-skin distances: `reveal` has no "off"
+    # state to mean. A skin either stops at the joint or does not reach one, so
+    # zero is a malformed file rather than a feature switched off — and it is
+    # refused *here*, by name, rather than left to the schema's
+    # `exclusiveMinimum: 0`. This function is documented as a standalone opt-in
+    # a caller may run without `validate`, so the schema is not the guard on
+    # this path: before the raise, a zero reached the multiples loop below as a
+    # divisor and came back `ZeroDivisionError`. Found on review, 2026-08-27
+    reveal = float(params["reveal"])
+    if reveal <= 0.0:
+        raise ParameterError(
+            f"parameter reveal={reveal} is not a distance — unlike a skin's `drop` "
+            f"or `out` it has no off state, so zero is a malformed file rather "
+            f"than a feature switched off"
+        )
+    seeds = {reveal: "reveal"}
     for skin in params["skins"]:
         for key in ("distance", "drop", "out"):
             value = float(skin[key])

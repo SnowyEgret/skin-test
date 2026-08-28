@@ -15,13 +15,16 @@ and rejected, and what is still open.
 
 **The reveal landed on 2026-08-27 — a second authored allowance, `reveal: 0.018`.** A cladding
 skin stands `distance` off the wall it clads and `reveal` off a substrate feature it dies against.
-All four substrates build warning-free and the suite is 138 → 147.
+The same day the skirt over a cornice was told to run to the cornice's bottom. All four substrates
+build warning-free and the suite is 138 → 148.
 
     Membrane   offset   8 mm | residual 9.89e-17 | clearance  7.3149 mm | 215 -> 163 triangles
-    Cladding   offset  85 mm | residual 9.44e-16 | clearance 17.9999 mm | 193 -> 121 triangles
+    Cladding   offset  85 mm | residual 9.44e-16 | clearance 17.9999 mm | 199 -> 119 triangles
     Masonry    offset 150 mm | residual 1.69e-15 | clearance  18.0000 mm |  12 ->   2 triangles
 
-Separations are 10.000 / 55.973 / 88.000 mm. **Slope absorption is bit-identical to before on
+Separations are 10.000 / 55.973 / **18.000** mm. That last one is the design and not a collision:
+the cladding's return wraps down the cornice and stops flush with its underside, the masonry's top
+stops `reveal` under the same soffit, and the two look straight at each other across the joint. **Slope absorption is bit-identical to before on
 every substrate** — 0.685/7.279/7.400 here, 0.158/1.717/2.969 on unit8, 0.158/1.717 on the
 headhouse, 0.655/6.963/12.287 on the three-part deck — which is the check that says the reveal
 moves the planes it names and disturbs nothing else in the solve. See *"The reveal, and the sill
@@ -78,6 +81,87 @@ corner return as a facade, and the cladding puts an 87 x 250 mm panel on it at `
 It was there before this session and was hidden inside a panel the false cheek pair drew over it;
 removing that panel is what left it standing alone. Nothing else on this substrate is open, and
 all four builds are warning-free.
+
+### What the second review round found (2026-08-27)
+
+`/code-review high` over the reveal and the skirt-over-a-cornice work. Six findings, all verified
+against the code before acting; four were code and two were figures in this file.
+
+- **The reveal and the flush stop are disjoint by face, not by plane.** `reveal_faces` excludes what
+  `wrapped` names, so no *face* is in both — but two cornices whose soffits sit at one level, one
+  wrapped and one not, put a face of each on the one plane. `skin_offsets` was writing as it walked,
+  so the second pass read the first's own value back and raised the **facade miter** error, naming a
+  cause that was not there. It now collects `{plane: distance}` first and raises on a real conflict
+  with an accurate message. No substrate poses it — the three soffits are at 11.4644, 12.736 and
+  14.425 — so a test poses it instead.
+- **`check_seeds` divided by a zero `reveal`.** It is documented as a standalone opt-in a caller may
+  run without `validate`, so the schema's `exclusiveMinimum: 0` is not the guard on that path, and a
+  zero reached the integer-multiple loop as a divisor: `ZeroDivisionError` instead of a named field.
+  Refused by name now, with the reason zero is malformed here where it is an off switch for `drop`.
+- **`flush_faces` had no facade gate**, so a skin that clads no facade could still force a plane to
+  zero. Only `wrapped`'s "runs down its face" clause was keeping the membrane out, and that is a fact
+  about these bakes rather than about what a reveal is for. It now makes the same test
+  `reveal_faces` does.
+- **Two `np.isclose` calls without `rtol=0.0`** in the new tests — CLAUDE.md's own named hazard, and
+  it was live: at 1e-5 relative the real tolerance was ~0.15 mm. Fixing it **failed two tests**,
+  which is the finding earning its keep. Both were asserting tighter than the arithmetic supports:
+  the scupper's lining lands at `16.371998975` against an exact `16.372`, 1.025 µm out, which is the
+  float32 union floor `TOL` exists for. Now `rtol=0.0, atol=2e-6`, and the `np.round` for `unique`
+  moved from 6 dp to 9 so a coordinate no longer lands exactly on the comparison boundary.
+- **Two figures in this file were wrong.** The headline Membrane residual read `9.71e-17` against a
+  deterministic `9.89e-17` — a right value replaced with one taken from a mid-iteration build — and
+  the Cladding triangle counts read `193 -> 121` against `199 -> 119`. Both corrected. The lesson is
+  the dull one: re-run before quoting, including the lines you are not editing.
+
+The review also confirmed, independently and by measurement, that the `_lap` per-face-offset wiring
+is inert (OBJs byte-identical with `offsets` forced to `None` on all four bakes), that the growth
+claims exactly 6 cornice faces per cornice-bearing bake and none on either scupper cornice, and that
+slope absorption is bit-identical on all four.
+
+### The skirt over a cornice (2026-08-27)
+
+Duncan, reading the built bake: *"In the cladding, the skirt covering a cornice should extend to the
+bottom of the cornice. This rule applies only to skirts over cornices. Currently it is dropping
+0.115. It should be derived from the bottom of the cornice - .184719 in this case."*
+
+**It is not a skirt, and that is the whole of the diagnosis.** No lap places it: built with
+`lap=None` the band is still there. `CapPlate-Deck9-N` oversails its wall and its north face is
+flush with the cornice's outer face at `y = -0.16`, so the cladding *covers* the plate's fascia —
+`z 12.806…12.833` on the substrate, offsetting to `y = -0.245`, `z 12.806…12.920719` — and stopped
+at the arris with the cornice below, which is on that same plane and excluded as a cornice face.
+Duncan's 0.115 is `12.920719 - 12.806`, the drop to the cornice's *top*; his 0.184719 is
+`12.920719 - 12.736`, the drop to its bottom.
+
+So the fix is a face selection. `cladding_faces` grows along the surface into the cornice — the move
+`masonry_faces` and `_opening` already make — and the band runs to the cornice's bottom because that
+is where the coplanar run ends. Measured: 6 faces on each cornice-bearing substrate, the wall
+cornice's fascia and its two returns, and **none at all** on either scupper cornice, which stand
+proud of their wall and so are coplanar with nothing clad. That is what makes *"only skirts over
+cornices"* fall out rather than be tested for.
+
+**The last 18 mm needed a second rule.** With the fascia covered, the band overshot to `12.718`:
+the cornice's soffit was still a `reveal` plane, so the skin held the joint under a cornice it had
+stopped stopping at. `flush_faces` gives the soffit of a cornice this skin **wraps** an offset of
+**zero** — a flashing ends at the arris, neither hanging `distance` below it nor leaving it bare by
+`reveal`. Same arithmetic as `facade_offsets`' "the outer system owns the corner".
+
+**Two things this got wrong first, both caught by the suite.** `wrapped` read any covered cornice
+face, and a cornice joined to a climbed parapet has its top picked up by the membrane's "every
+upward face of a climbed wall" — so every such cornice read as wrapped and the **membrane** set its
+soffit to zero, a waterproofing layer holding a cladding detail. It now reads only a face the skin
+runs *down*. And a test pinned `drop.max() == 13.0766` on the unit8 return elevation, which by then
+was reading a **tiling** artefact: with the cornice's end covered, that patch is continuous through
+`(0, 13.0766)`, so the point is interior and whether it survives as a triangle corner is `_tiling`'s
+business — it does at one end of the wall and not the other. Re-pinned on the outline instead.
+
+**The plane-ownership clause is now inert**, and that is worth knowing before someone deletes it.
+It exists because a wall cornice's ends lie in the neighbouring elevation — `Cornice-Deck9-N` puts
+one on the `x = 8.5` court plane, 21 faces of which 15 are the cladding's own — and taking that
+plane raised at `v90`. Those ends are now *covered*, so they never reach `reveal_faces`; removing
+the clause leaves all four substrates building. What would bite it is a cornice whose fascia is not
+flush with the cap plate over it, so the skin does not run down the band, while its ends still lie
+in clad elevations. `test_a_cornice_end_in_a_clad_elevation_is_left_to_that_elevation` poses exactly
+that by stubbing `wrapped`, which is how every cornice read the day before.
 
 ### The reveal, and the sill that is a roof (2026-08-27)
 
