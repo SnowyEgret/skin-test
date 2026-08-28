@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Substrate in, skins out — the seam a caller integrates against.
 
-Three layers meet here. `skin/` offsets a body and knows nothing about
-buildings; `rules.py` says what a wall is and which faces each skin covers;
-this module runs the one over the other. It reads no file, writes no file and
-prints nothing, so what a caller does with the result — write OBJ, report on
-it, hand it to Blender — stays the caller's business. `build.py` is this rig's
-caller; in the student-house it is `skin_pipeline.run`.
+Three layers meet here. `skinning.skin` offsets a body and knows nothing about
+buildings; `skinning.rules` says what a wall is and which faces each skin
+covers; this module runs the one over the other. It reads no file, writes no
+file and prints nothing, so what a caller does with the result — write OBJ,
+report on it, hand it to Blender — stays the caller's business. `build.py` at
+the root of this repo is one such caller and is not part of the package; in the
+student-house the caller is `skin_pipeline.run`.
 
 `prepare` is the half that has to happen before any role is read: the grouping,
 the union, and the `Faces` view over it. It is exposed on its own because three
@@ -32,10 +33,10 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from rules import check_cladding, check_facades, classifier, group_caps, group_cornices, skins
-from skin import parameters, skin_over, substrate
-from skin.clean import clean
-from skin.offset import Faces, _owner
+from .rules import check_cladding, check_facades, classifier, group_caps, group_cornices, skins
+from .skin import parameters, skin_over, substrate
+from .skin.clean import clean
+from .skin.offset import Faces, _owner
 
 
 def _params(params) -> dict:
@@ -56,7 +57,7 @@ def _params(params) -> dict:
     if not isinstance(params, dict):
         raise TypeError(
             f"pipeline needs a validated parameter dict, not {type(params).__name__} "
-            f"— call skin.parameters.load_validated() (or resolve()) and pass the result"
+            f"— call skinning.skin.parameters.load_validated() (or resolve()) and pass the result"
         )
     return parameters.validate(params)
 

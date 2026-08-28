@@ -1,4 +1,4 @@
-"""`skin.clean` — coplanar overlap dissolved, and nothing else touched.
+"""`skinning.skin.clean` — coplanar overlap dissolved, and nothing else touched.
 
 Mesh in, mesh out, so most of this is hand-made geometry with no substrate
 behind it. The two rig tests are there because the condition the pass exists for
@@ -10,8 +10,8 @@ import numpy as np
 import pytest
 import trimesh
 
-from skin import substrate
-from skin.clean import clean
+from skinning.skin import substrate
+from skinning.skin.clean import clean
 
 
 def _sheet(corners, flip=False):
@@ -216,11 +216,11 @@ def _rig_skins():
     finishes and the rig has no cornice at all, so it is skipped here the way
     `build()` skips it — see `build.covered`."""
     from build import current_substrate
-    from pipeline import _skin_from, covered
-    from rules import classifier, group_caps, group_cornices, skins
-    from skin.offset import _owner
-    from skin import parameters, substrate
-    from skin.offset import Faces
+    from skinning.pipeline import _skin_from, covered
+    from skinning.rules import classifier, group_caps, group_cornices, skins
+    from skinning.skin.offset import _owner
+    from skinning.skin import parameters, substrate
+    from skinning.skin.offset import Faces
 
     params = parameters.load_validated()
     parts = current_substrate()
@@ -236,7 +236,7 @@ def _rig_skins():
 def test_the_rig_membrane_overlaps_itself_and_the_pass_dissolves_it():
     """The real condition, on the substrate the tests own: the membrane's laps
     cover 53.6 cm2 of it twice, so its summed area is not the area it covers."""
-    from skin.clean import _basis, _groups
+    from skinning.skin.clean import _basis, _groups
     from shapely.geometry import Polygon
     from shapely.ops import unary_union
 
@@ -263,8 +263,8 @@ def test_the_rig_membrane_overlaps_itself_and_the_pass_dissolves_it():
 def test_cleaning_a_skin_leaves_it_where_the_offset_put_it():
     """The pass moves nothing off its plane and nothing towards the substrate:
     it only decides which parts of each plane are covered."""
-    from skin import clearance
-    from skin.offset import _plane_rows
+    from skinning.skin import clearance
+    from skinning.skin.offset import _plane_rows
 
     parts, built = _rig_skins()
     for name, skin in built.items():
@@ -308,7 +308,7 @@ def test_dissolve_is_off_unless_asked():
 
 
 def test_dissolve_keeps_a_vertex_the_facet_next_to_it_turns_at():
-    """The whole reason `skin/export.py` keeps collinear vertices: drop one that
+    """The whole reason `skinning/skin/export.py` keeps collinear vertices: drop one that
     a neighbouring facet corners on and the join becomes a T-junction. So the
     question is asked over every ring of the mesh at once, not per plane."""
     flat = _split_quad()
@@ -475,9 +475,9 @@ def test_the_baked_scupper_tear_closes_and_the_perimeters_do_not():
     and 18.016 mm across, while the narrowest free edge that must stay open is
     248.268 mm and stands 94 mm off its own best-fit plane.
     """
-    from pipeline import _skin_from
-    from rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins
-    from skin import parameters, substrate
+    from skinning.pipeline import _skin_from
+    from skinning.rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins
+    from skinning.skin import parameters, substrate
     from tests.test_import import BAKE
 
     params = parameters.load_validated()
@@ -504,9 +504,9 @@ def test_the_cladding_has_nothing_to_gusset_at_the_membranes_bound():
     is a 9 m trough only 248 mm across — the closest thing in any skin here to a
     tear — and neither test lets it through: it is 94 mm off its own plane, and
     it is wider than any bound that catches the membrane's 18 mm."""
-    from pipeline import _skin_from
-    from rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins
-    from skin import parameters, substrate
+    from skinning.pipeline import _skin_from
+    from skinning.rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins
+    from skinning.skin import parameters, substrate
     from tests.test_import import LIVE
 
     params = parameters.load_validated()

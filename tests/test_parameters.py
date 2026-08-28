@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import trimesh
 
-from skin import parameters, skin_over, substrate
+from skinning.skin import parameters, skin_over, substrate
 
 
 def _params():
@@ -95,7 +95,7 @@ def test_a_base_is_a_datum_and_not_a_seed():
 
 
 def test_a_skin_with_no_rule_set_cannot_be_built():
-    from rules import skins
+    from skinning.rules import skins
 
     params = _params()
     params["skins"][0]["name"] = "Parapet"
@@ -105,7 +105,7 @@ def test_a_skin_with_no_rule_set_cannot_be_built():
 
 def test_a_rule_set_no_skin_names_is_refused():
     """Otherwise it sits there looking maintained while emitting nothing."""
-    from rules import skins
+    from skinning.rules import skins
 
     params = _params()
     params["skins"] = params["skins"][:1]
@@ -123,7 +123,7 @@ def test_a_skin_that_cannot_lap_in_any_direction_is_refused():
     the direction off the substrate, so a skin no longer declares which way it
     continues -- only how far, and a distance of zero switches that way off.
     """
-    from rules import skins
+    from skinning.rules import skins
 
     params = _params()
     params["skins"][0]["drop"] = 0.0
@@ -146,7 +146,7 @@ def test_a_supplied_params_dict_is_validated_too():
     exterior set and "every facade is claimed" then holds vacuously.
     """
     from build import build, current_substrate
-    from rules import skins
+    from skinning.rules import skins
 
     params = _params()
     params["fall"] = 1.4  # rejected by the schema; must be rejected here too
@@ -163,7 +163,7 @@ def test_an_aspect_of_one_cannot_switch_the_block_like_guard_off():
     sorted ascending, so `aspect = 1` makes that test unreachable — a 1x1x1 cube
     classifies as a wall. CLAUDE.md: do not add a fallback that picks a side.
     """
-    from skin.substrate import AmbiguousPart, classify
+    from skinning.skin.substrate import AmbiguousPart, classify
 
     params = _params()
     params["classify"]["aspect"] = 1.0
@@ -181,8 +181,8 @@ def test_the_authored_numbers_actually_reach_the_geometry():
     """A parameter file nothing reads is worse than a constant. Change the offset
     in a copy and the built skin has to move by exactly that much."""
     from build import current_substrate
-    from pipeline import _skin_from
-    from rules import skins
+    from skinning.pipeline import _skin_from
+    from skinning.rules import skins
 
     parts = current_substrate()
     params = _params()
@@ -204,7 +204,7 @@ def test_the_authored_numbers_actually_reach_the_geometry():
 def test_faces_has_no_default_classifier():
     """The thresholds are authored, so `Faces` cannot supply a pair of its own —
     it raises at the first predicate that asks what a part is."""
-    from skin.offset import Faces, _owner
+    from skinning.skin.offset import Faces, _owner
 
     parts = [substrate.cube(2.0)]
     body = trimesh.boolean.union(parts)

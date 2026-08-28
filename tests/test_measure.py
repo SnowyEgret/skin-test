@@ -12,7 +12,7 @@ verdict".
 import numpy as np
 import trimesh
 
-from skin import buried, intersects
+from skinning.skin import buried, intersects
 
 
 def _box(extents, at=(0.0, 0.0, 0.0)):

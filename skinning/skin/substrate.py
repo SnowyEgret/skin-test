@@ -408,7 +408,7 @@ def from_obj(path, metadata: dict | None = None, grid: float = 1e-6) -> list:
     headless — so the handoff is one OBJ export, which trimesh loads without it.
 
     `metadata` is merged into every part. It is a plain dict rather than anything
-    named, because `skin/` does not know what a facade is: `build.py` passes
+    named, because `skinning/skin/` does not know what a facade is: `build.py` passes
     `{FACADE: RAINSCREEN}` the same way `current_substrate()` stamps its four.
     Each part also carries its `o` name as `metadata["name"]`, so a raise
     downstream can say which object it meant.

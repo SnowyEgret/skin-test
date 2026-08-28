@@ -1,7 +1,16 @@
 # Generated output. `python3 build.py` rebuilds build/ from build.py in about a
 # second, and committing it would put a second, stale copy of the geometry beside
 # the code that produces it.
+#
+# It doubles as setuptools' build directory, which drops a `bdist.*` in here on
+# every wheel build. Same line covers both, but do not be surprised to find
+# packaging spoil sitting next to the OBJs.
 build/
+
+# Packaging spoil. A wheel build leaves `skinning.egg-info/` at the root; a
+# broken one leaves `UNKNOWN.egg-info/` beside it.
+*.egg-info/
+dist/
 
 # Blender's save-alongside backup
 *.blend1

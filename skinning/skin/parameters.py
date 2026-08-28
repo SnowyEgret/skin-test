@@ -17,7 +17,7 @@ this module is going back into that repo. Three things are copied from it:
 The file may be JSON or YAML (JSON is valid YAML, so `yaml.safe_load` reads
 either). Pure Python — no Blender, and nothing here imports trimesh.
 
-**Nothing under `skin/` other than this module imports `yaml` or `jsonschema`,
+**Nothing under `skinning/skin/` other than this module imports `yaml` or `jsonschema`,
 and nothing takes a path.** The core takes a params *dict*, the way the
 student-house's `skin_pipeline.run` takes a `topo` dict: sub-modules there read
 `topo["cladding"]["allowance"]` and never parse anything. That is the whole
@@ -36,9 +36,26 @@ from pathlib import Path
 import jsonschema
 import yaml
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+# the repo root, two levels above this package — the one place anything under
+# `skinning/` reaches outside itself, and it is why this module is the one that
+# does not migrate. The file it points at is *this rig's* parameter file; an
+# installed copy of the package has no such file beside it, and a host repo has
+# no business reading skin-test's numbers anyway. On migration this module is
+# deleted rather than ported and the caller passes `topo["skin"]` instead — see
+# the module docstring. Until then the default is what lets `skins()` and
+# `build.py` be called with no argument.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PATH = _REPO_ROOT / "skin-parameters.yaml"
-SCHEMA_PATH = _REPO_ROOT / "skin-parameters.schema.json"
+
+# ...the schema, by contrast, sits **inside** the package and is shipped with it.
+# The two files are not the same kind of thing and only looked alike while both
+# sat at the repo root. The yaml is this rig's authored numbers, which migrate
+# into the host's own parameter file; the schema is the *shape* `rules.py`
+# consumes, which is part of the code contract exactly as the `RULES` table is.
+# Leaving it outside made an installed copy raise `FileNotFoundError` on its
+# first call, because every validation path — `skins()` -> `resolve` ->
+# `validate` -> here — reads it. Found by installing the wheel and running it.
+SCHEMA_PATH = Path(__file__).resolve().parent / "skin-parameters.schema.json"
 
 
 class ParameterError(ValueError):
@@ -47,6 +64,17 @@ class ParameterError(ValueError):
 
 def load(path=DEFAULT_PATH) -> dict:
     """Parse the parameter file (JSON or YAML) into a plain dict. No validation."""
+    if not Path(path).exists():
+        # reachable in one way that is not a typo: an *installed* copy of this
+        # package has no repo root, so `DEFAULT_PATH` names a file that was never
+        # shipped and never should be — a host repo has no business defaulting to
+        # skin-test's numbers. Addressed at the seam rather than left as a bare
+        # FileNotFoundError naming a path inside site-packages
+        raise ParameterError(
+            f"no parameter file at {str(path)!r}. Pass the path to yours, or pass a "
+            f"params dict — the default only exists for this repo's own rig, and an "
+            f"installed copy of this package has no parameter file beside it"
+        )
     with open(path) as handle:
         data = yaml.safe_load(handle)
     if not isinstance(data, dict):

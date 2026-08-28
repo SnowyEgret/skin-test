@@ -12,18 +12,26 @@ This file covers commands and structure; `NOTES.md` covers why the code is the w
 ```bash
 python3 build.py              # headless build: writes build/*.obj + build/manifest.json
 python3 build.py <bake.obj>   # ...over a baked substrate instead of the transcribed rig
-python3 -m pytest tests -q    # ~1.5 s
-python3 -m pytest tests -q -k lap          # single test by name
+pytest -q                     # the suite; `python3 -m pytest` works too
+pytest -q -k lap              # single test by name
+pip install -e .              # make `skinning` importable elsewhere — needs a modern pip
 ```
 
+**That last one needs a recent pip, in a venv.** This machine's system pip is 22.0.2 and
+setuptools 59, and against those `pip install -e .` fails outright (no PEP 660 hook) while
+`pip install .` is worse: it silently writes an `UNKNOWN-0.0.0` dist-info with **no package in
+it** and exits 0. `python3 -m venv .venv && .venv/bin/pip install -U pip` first, or install into
+an environment that already has one. See the comment in `pyproject.toml`.
+
 Every tunable number is in `skin-parameters.yaml`, validated against
-`skin-parameters.schema.json`. `build.py` reads it and prints which file it used. A what-if is a
+`skinning/skin/skin-parameters.schema.json`. `build.py` reads it and prints which file it used. A what-if is a
 full copy of the file passed as `build(params=parameters.load_validated(path))` — never an
 override of individual knobs. See **Parameters** below.
 
-Run pytest from the repo root — the tests import `build`, `rules` and `pipeline` as top-level
-modules. All three are repo-root modules today; naming them for a distribution is part of
-packaging the repo for import, which has not been done yet.
+Run pytest from the repo root. The tests import `build`, the rig, as a top-level module, and
+`pyproject.toml`'s `pythonpath = ["."]` is what puts the root on the path — before that line a
+bare `pytest` failed collection with five errors and only `python3 -m pytest` worked, because
+the `-m` form inserts the working directory and the plain one does not.
 
 **Running the tests overwrites `build/`.** `tests/test_offset.py` calls `build(parts)` on the
 synthetic rig, so a pytest run replaces whatever bake was last built — manifest included, which is
@@ -99,7 +107,7 @@ overwrite geometry it did not itself import.
 Run `/code-review high` before a meaningful chunk of work lands — not per commit, and `high`
 rather than the default because the changes here introduce seams rather than tweak lines. It
 reviews the **current diff** by default, and also takes a path or branch target: use
-`/code-review high skin/` to reach code that is committed and therefore outside any diff.
+`/code-review high skinning/skin/` to reach code that is committed and therefore outside any diff.
 
 `git diff` does not see untracked files, so **`git add -N` any new file first** or it is invisible
 to the review. A whole new module went unreviewed this way once before it was caught.
@@ -118,13 +126,13 @@ point, not a verdict — verify each against the code before acting, because som
 
 The problem: offset a **substrate** (an assembly of solid parts) outward by a fixed distance to
 produce **skins** — open surfaces covering a chosen subset of faces. Nothing in the Python
-geometry stack ships a planar (mitered) offset, so `skin/offset.py` is ours.
+geometry stack ships a planar (mitered) offset, so `skinning/skin/offset.py` is ours.
 
 Data flows one way:
 
 ```
 skin-parameters.yaml                    every tunable number, JSON-Schema validated
-   → skin/parameters.load_validated()   → dict; the ONLY file that reads it
+   → skinning/skin/parameters.load_validated()   → dict; the ONLY file that reads it
    → rules.skins(params)                joins the numbers to the RULES by name
 
 build.py  PART_N vertex/face literals   (transcribed from Blender, snapped to 1 µm)
@@ -138,18 +146,34 @@ build.py  PART_N vertex/face literals   (transcribed from Blender, snapped to 1 
    → blender/display.py                 imports, tags, displays
 ```
 
-**Four modules, and the split is the migration.** `skin/` is the geometry and knows nothing about
-buildings. `rules.py` is every derivation — what a wall is, which faces each skin covers, and the
-join from the authored numbers to those predicates by name. `pipeline.py` runs the one over the
-other and is the seam a caller integrates against: `run(parts, params)` takes plain data, reads no
-file, writes no file and prints nothing. `build.py` is **this rig** — the transcribed `PART_N`
-substrate, the OBJ emission and the printed report — and is one caller of that seam.
+**The package is the migration.** Everything importable lives under `skinning/`, and the rig lives
+outside it:
 
-The student-house imports `rules` and `pipeline`, passes its own parts and `topo["skin"]`, and
-leaves `build.py` here. That is why the rules are not in `skin/` and the emission is not in
-`pipeline`: each module is drawn where the migration cuts. Split out 2026-08-28 with no geometry
-moved — the printed report and every OBJ are byte-identical on all four substrates, which is the
-check to repeat after touching any of it.
+```
+skinning/                  the distribution — `pip install -e .`, or from the git URL
+  skin/                    the geometry. Knows nothing about buildings
+  rules.py                 every derivation: what a wall is, which faces each skin covers
+  pipeline.py              the seam: run(parts, params), plain data in and out
+build.py                   this rig: PART_N substrate, OBJ emission, printed report
+audit.py                   scratch: the mesh tables in NOTES, measured
+skin-parameters.yaml       this rig's authored numbers
+```
+
+The student-house does `from skinning import pipeline, rules`, hands them its own parts and
+`topo["skin"]`, and supplies its own reporting; `build.py` never leaves this repo. That is why the
+rules are not in `skinning/skin/` and the emission is not in `pipeline`: each boundary is drawn
+where the migration cuts, and `tests/test_seam.py` fails if the dependency ever points the other
+way.
+
+The **schema is inside the package and the parameter file is not**, which is the one place the two
+stop looking alike. `skinning/skin/skin-parameters.schema.json` is the shape `rules.py` consumes —
+code, like the `RULES` table, and read by every validation path — so it ships. `skin-parameters.yaml`
+is this rig's numbers and stays at the root; an installed copy has no parameter file beside it and
+`load` says so rather than raising `FileNotFoundError` at a path inside site-packages.
+
+Split out 2026-08-28 and packaged the same day, with no geometry moved — the printed report and
+every OBJ are byte-identical on all four substrates, which is the check to repeat after touching
+any of it.
 
 Key invariants, each of which spans several files:
 
@@ -242,7 +266,7 @@ Key invariants, each of which spans several files:
 ## Parameters
 
 `skin-parameters.yaml` holds every tunable number: `classify`'s two thresholds, `fall`, `reveal`,
-and the skin distances. `skin/parameters.py` is the **only** module that imports `yaml` or
+and the skin distances. `skinning/skin/parameters.py` is the **only** module that imports `yaml` or
 `jsonschema`, and nothing else takes a path — the core takes a params *dict*. That is the
 student-house seam exactly: `skin_pipeline.run(manifest, props, topo)` takes plain data and its
 sub-modules read `topo["cladding"]["allowance"]` without parsing anything. Keep it that way, or
@@ -272,19 +296,21 @@ authored **0.018** rather than move the membrane off 8 mm. It is a named functio
 `validate`, because it is a discipline for a test rig rather than a code requirement.
 
 Blender's python needs neither PyYAML nor jsonschema: `blender/display.py` imports only `bpy`,
-`json` and `pathlib`, and never touches `skin/`.
+`json` and `pathlib`, and never touches `skinning/skin/`.
 
-**On migration** the `classify` / `fall` / `reveal` / `skins` block moves into
+**On migration** the host installs `skinning` (`pip install git+ssh://git@github.com/SnowyEgret/skin-test`,
+or a path, or a submodule on `sys.path` — the wheel is the same either way) and imports
+`skinning.rules` and `skinning.pipeline`. Then the `classify` / `fall` / `reveal` / `skins` block moves into
 `student-house-parameters.yaml` under a `skin:` key, its schema is pasted into that repo's
 schema, and the caller passes `topo["skin"]` where `build.py` passes `load_validated()` into
 `pipeline.run`.
-`skin/parameters.py` is then dead code there and should be deleted rather than ported — the
+`skinning/skin/parameters.py` is then dead code there and should be deleted rather than ported — the
 student-house already owns the read, via `topology_yaml.load` → `parameters.load_merged`.
 
 ## Adding a skin
 
 A skin is an entry in `skins:` in `skin-parameters.yaml` plus a rule set in `RULES` in
-`rules.py`, not a new code path. `rules.skins()` joins them by name, and raises if either side
+`skinning/rules.py`, not a new code path. `rules.skins()` joins them by name, and raises if either side
 names something the other does not — a skin with no rules cannot be built, and a rule set no
 skin names would sit there looking maintained while emitting nothing.
 
@@ -316,14 +342,14 @@ cleanup rather than any surface — see **Cleaning a mesh**.
 
 `reveal` is deliberately **not** in this list: it is one top-level number, not a per-skin knob, and
 a new skin gets it or not from what it clads rather than from what it authors — see **The reveal**.
-The rules take `(Faces, fall)`; `skins()` binds `fall` from the file, so what `skin/` receives
+The rules take `(Faces, fall)`; `skins()` binds `fall` from the file, so what `skinning/skin/` receives
 still has the `Faces -> bool[nfaces]` signature it expects. A built spec is *exactly*
 `skin_over`'s argument list plus `name`, `display` and `close` — the last two are read by
 `build()` and never reach the offset: one says how Blender shows the skin, the other how wide a
-tear `skin/clean.py` may gusset.
+tear `skinning/skin/clean.py` may gusset.
 
 `keep` and `lap` are predicates `Faces -> bool[nfaces]` over the union's faces. `Faces` (in
-`skin/offset.py`) carries `body`, `parts`, `owner`, `normals`, `centres`, plus `roles` (WALL/ROOF
+`skinning/skin/offset.py`) carries `body`, `parts`, `owner`, `normals`, `centres`, plus `roles` (WALL/ROOF
 per part), `of_role(role)` and `touching(mask)`. Predicates get the whole thing because rules that
 read the substrate need to ask what a face *adjoins*, not just where it sits. Compose `_upward`,
 `wall_faces` and `_rules` rather than writing new plane tests. `keep` selects what the surface
@@ -719,7 +745,7 @@ answers, because they are two systems.
 
 ## Cleaning a mesh
 
-`skin/clean.py` is `clean(mesh) -> mesh`, and that is its whole interface. The lap rule
+`skinning/skin/clean.py` is `clean(mesh) -> mesh`, and that is its whole interface. The lap rule
 legitimately emits **whole quads**, so where one band lies inside another on the same plane the
 two overlap: the summed triangle area is not the area covered — 0.180% of the membrane on the
 live bake — and the four bowtie quads left in it are what that looks like from outside. A miter
@@ -735,7 +761,7 @@ end and the quad crosses itself. 3304 mm² on the live bake, dissolved by `clean
 summed area is exactly the area covered. This is the condition the pass exists for, not a defect
 in the turn.
 
-**Nothing in `skin/offset.py` or `RULES` knows it exists**, and it is named for a mesh rather than
+**Nothing in `skinning/skin/offset.py` or `RULES` knows it exists**, and it is named for a mesh rather than
 for a skin because overlapping itself in a plane is a property of a mesh, not of a skin. It is
 testable on a hand-made overlapping pair with no substrate at all, which is most of
 `tests/test_clean.py`.
@@ -772,14 +798,16 @@ check had been added to close — the membrane carries 3459 mm² of gusset on th
 gusset reaching through another skin is reachable surface and not a hypothesis. The **separation**
 stays on the raw pair, because it is a printed number. Found on review.
 
-- **shapely (GEOS) unions, `manifold3d.triangulate` re-triangulates.** Nothing to install here —
-  shapely arrives with `trimesh[easy]`, and it joins yaml and jsonschema on the undeclared-
-  dependency list. Both engines were measured against the alternatives. shapely is bit-exact on every point its union preserves
-  and it **keeps collinear vertices**, which `skin/export.py` keeps on purpose so a neighbouring
+- **shapely (GEOS) unions, `manifold3d.triangulate` re-triangulates.** Both are declared in
+  `pyproject.toml` now, along with yaml and jsonschema — the three of them were an undeclared
+  dependency until 2026-08-28, arriving by way of `trimesh[easy]` and discovered by ImportError.
+  Both engines were measured against the alternatives. shapely is bit-exact on every point its union preserves
+  and it **keeps collinear vertices**, which `skinning/skin/export.py` keeps on purpose so a neighbouring
   facet cornering there leaves no T-junction; `manifold3d.CrossSection` moves preserved points
-  ~4.7 nm and drops those vertices. `skin/clean.py` is the **only** module that imports shapely
-  and it is deliberately not re-exported from `skin/__init__.py`, so `import skin` does not
-  require it — the same containment `skin/parameters.py` gives yaml and jsonschema.
+  ~4.7 nm and drops those vertices. `skinning/skin/clean.py` is the **only** module that imports shapely
+  and it is deliberately not re-exported from `skinning/skin/__init__.py`, so `import skinning.skin`
+  does not require it — the same containment `skinning/skin/parameters.py` gives yaml and jsonschema,
+  and the same reason `skinning/__init__.py` re-exports nothing at all.
 - **Planes are grouped either way up** — `min(|rep - row|, |rep + row|)`, and matched against the
   representatives already found rather than by equality of a rounded key, for the reason
   `_plane_ids` is. A bowtie's two halves face opposite ways, so a group keyed on `(n, d)` alone
@@ -816,7 +844,7 @@ stays on the raw pair, because it is a printed number. Found on review.
 `clean(mesh, dissolve=True)` runs a **second, opted-in operation** on top: it drops every vertex
 that lies straight between its neighbours on every ring holding it **and that no ring turns at**.
 That last clause is the whole of it, and it is asked once over the entire mesh rather than per
-plane — `skin/export.py` keeps collinear vertices precisely because dropping one that a
+plane — `skinning/skin/export.py` keeps collinear vertices precisely because dropping one that a
 neighbouring facet corners on leaves a T-junction, and a vertex can be straight through on one
 facet and a corner on the one beside it. It is a tidy-up, so it is allowed the authored
 `STRAIGHT_TOL` (1e-9 m off the line) where a derivation would not be; it changes no outline, and
@@ -916,7 +944,7 @@ there is deliberately no fallback pair of thresholds.
 
 ## The face rules
 
-`rules.py` holds them; `skin/` never learns what a wall or a membrane is, and that is what keeps
+`skinning/rules.py` holds them; `skinning/skin/` never learns what a wall or a membrane is, and that is what keeps
 them out of it rather than any shortage of room. They are derived, not
 listed — there are no plane coordinates and no part indices in them:
 
@@ -1134,7 +1162,7 @@ enough to matter, and the headhouse taper's top already does in the shipping bak
 matches each face against the representatives already found instead, and `_lap`, `_knives` and the
 run chaining all key on its id. A run that silently fails to chain is a lap that silently does not
 happen. That is the accuracy floor for everything downstream: `TOL = 1e-6`
-(`rules.py`), `PLANE_TOL = 1e-6` (`skin/offset.py`) and `SURFACE_TOL = 1e-6` (`skin/measure.py`,
+(`skinning/rules.py`), `PLANE_TOL = 1e-6` (`skinning/skin/offset.py`) and `SURFACE_TOL = 1e-6` (`skinning/skin/measure.py`,
 how near a part's surface a sample has to be to count as *on* it) exist for it. Do not tighten
 them — an
 earlier 1 nm threshold produced a bogus self-intersection warning, and a 1e-12 test for *parallel*
@@ -1145,9 +1173,9 @@ is not a tolerance to tune.
 **`PLANE_TOL` is a plane-identity tolerance and never a weld radius.** It *is* the 1 µm lattice
 every substrate coordinate is snapped to — two neighbouring lattice points are 9.9999999925e-07
 apart — so welding at that radius merges points the substrate deliberately keeps distinct.
-`skin/clean.py` says this about its own `WELD_TOL = 1e-9`; `offset._cut` was using `PLANE_TOL` to
+`skinning/skin/clean.py` says this about its own `WELD_TOL = 1e-9`; `offset._cut` was using `PLANE_TOL` to
 drop duplicate loop corners until 2026-08-25 and now declares its own `WELD_TOL` of the same
-value. It is declared rather than imported, because `skin/clean.py` is the only module that needs
+value. It is declared rather than imported, because `skinning/skin/clean.py` is the only module that needs
 shapely and nothing in the core may reach into it.
 
 **Three tolerance rules that are easy to get wrong, all found by review:**

@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """The face rules: what a wall is, what a membrane covers, where a skin stops.
 
-`skin/` offsets a substrate and knows nothing about buildings. This module is
-the other half — the predicates over the union's faces, the grouping that runs
-before any role is read, and the join from the authored numbers to those
-predicates by name. It is where every derivation lives, and it is deliberately
-**not** under `skin/`: the invariant is that `skin/` never learns what a wall or
-a membrane is, and putting these here is what holds it.
+`skinning.skin` offsets a substrate and knows nothing about buildings. This
+module is the other half — the predicates over the union's faces, the grouping
+that runs before any role is read, and the join from the authored numbers to
+those predicates by name. It is where every derivation lives, and it sits beside
+`skinning.skin` rather than inside it: the invariant is that the geometry never
+learns what a wall or a membrane is, and keeping these out of it is what holds
+that.
 
 It is separate from `build.py` because `build.py` is this rig — the transcribed
 `PART_N` substrate, the OBJ emission, the printed report — and none of that
-migrates. These rules do. On migration the student-house imports this module and
-`pipeline.py` beside it, passes its own parts and `topo["skin"]`, and leaves
-`build.py` behind; see `skin/parameters.py` for the parameter half of the same
-seam.
+migrates or is even in the package. These rules do. On migration the
+student-house imports this module and `skinning.pipeline` beside it, passes its
+own parts and `topo["skin"]`, and leaves `build.py` behind; see
+`skinning/skin/parameters.py` for the parameter half of the same seam.
 
 `skins()` takes a params **dict**, the way the student-house's `skin_pipeline.run`
 takes a `topo` dict. It is the one function here with a **default**, and the
@@ -32,8 +33,8 @@ from itertools import combinations
 
 import numpy as np
 
-from skin import parameters, substrate
-from skin.offset import _plane_ids, elements_of
+from .skin import parameters, substrate
+from .skin.offset import _plane_ids, elements_of
 
 # manifold3d carries vertices as float32, so a union's faces sit up to ~5e-7 m
 # off their true planes at metre-scale coordinates. Clearance is judged against
@@ -43,7 +44,7 @@ TOL = 1e-6  # 1 um, same grid substrate.prism() snaps to
 
 # Every number these rules used to hold is now authored in `skin-parameters.yaml`
 # and validated against `skin-parameters.schema.json` — the five skin distances,
-# `fall`, and `classify`'s two thresholds. See `skin/parameters.py` for why, and
+# `fall`, and `classify`'s two thresholds. See `skinning/skin/parameters.py` for why, and
 # for how the block migrates into `student-house-parameters.yaml` under `skin:`.
 #
 # What stays here are the RULES, which are code and not numbers: predicates over
@@ -559,7 +560,7 @@ def wall_faces(faces, fall):
 
     `fall` is the authored direction cosine separating the two from an end. It is
     passed rather than read from a module constant so that every rule below can
-    be bound to the parameter file's value by `skins()` — the predicates `skin/`
+    be bound to the parameter file's value by `skins()` — the predicates `skinning/skin/`
     calls still have the `Faces -> bool[nfaces]` signature it expects, because
     `skins()` hands them over already bound.
 
@@ -943,7 +944,7 @@ def membrane_laps(faces, fall):
     flange up the wall a roof runs into are the same move — the surface reaching
     an edge of what it covers and continuing across the face beyond — and which
     way it turns is a fact about that face, not about which list the wall was
-    on. `skin.offset._across` reads the direction off the receiving face and
+    on. `skinning.skin.offset._across` reads the direction off the receiving face and
     `_lap` picks the drip or the upstand distance from it.
 
     So there is nothing left to elect here, and the two predicates that used to
@@ -1551,7 +1552,7 @@ def cladding_laps(faces, fall):
 
 
 # The face rules, keyed by skin name. Code, not numbers — this is the half of a
-# skin spec that cannot go in a parameter file, and the half `skin/` never learns.
+# skin spec that cannot go in a parameter file, and the half `skinning/skin/` never learns.
 # Two predicates, not four: `keep` is what the skin covers and `lap` is what it
 # may continue onto. The skirt/flange pair that used to sit here was one rule
 # split in two by hand — see `membrane_laps`.
@@ -1584,8 +1585,8 @@ def skins(params: dict | None = None) -> tuple[dict, ...]:
     One spec per skin, holding exactly what `skin_over` takes plus `name`,
     `display` and `close` — the last two are read by `build()`, not by the
     offset: one says how Blender shows the skin and the other how wide a tear
-    `skin/clean.py` may gusset. The predicates come out already bound to the authored `fall`, and
-    the classifier to the authored thresholds, so what `skin/` receives still has
+    `skinning/skin/clean.py` may gusset. The predicates come out already bound to the authored `fall`, and
+    the classifier to the authored thresholds, so what `skinning/skin/` receives still has
     the `Faces -> bool[nfaces]` and `part -> role` signatures it expects — the
     parameter layer stops at this function and no geometry code sees a knob.
 

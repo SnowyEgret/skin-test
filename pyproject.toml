@@ -1,0 +1,79 @@
+# Packaging exists for one reason: the student-house imports `skinning` rather
+# than copying it. So what is declared here is the *importable* half — the
+# package — and not this repo's rig. `build.py` and `audit.py` sit at the root
+# outside it on purpose (see `skinning/__init__.py`), the substrate bakes are
+# fixtures, and `blender/display.py` needs `bpy`, which cannot be a dependency
+# of anything headless.
+
+[build-system]
+# setuptools 61 is the first release that reads the [project] table below, and
+# this line is what gets a modern one into pip's isolated build environment.
+#
+# **That is not sufficient on its own: the pip doing the installing has to be
+# modern too.** Measured on this machine, whose system pip is 22.0.2: `pip
+# install .` takes the legacy `setup.py install` path anyway and produces an
+# `UNKNOWN-0.0.0` dist-info **containing no package at all**, exit code 0, no
+# error — and `pip install -e .` fails outright, because setuptools 59 has no
+# PEP 660 `build_editable` hook. Both work under pip 26. So install into a venv,
+# or `pip install -U pip` first. The silent one is the dangerous one.
+#
+# Do not "fix" any of this by dropping back to setup.py.
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skinning"
+version = "0.1.0"
+description = "Planar (mitered) offset of a solid substrate into open skins"
+requires-python = ">=3.10"
+
+# All six are required, deliberately, even though the package is careful about
+# which module imports what: `skin/clean.py` is the only importer of shapely and
+# `skin/parameters.py` the only importer of yaml and jsonschema, so `skinning.skin`
+# alone would run on the first three. But `skinning.pipeline` — the entry point
+# the whole package exists to offer — reaches both, so declaring either as an
+# extra would ship an install whose seam does not import. The containment is a
+# rule about which module may reach for what, not a claim that any of it is
+# optional here.
+dependencies = [
+    "trimesh>=4",       # meshes, ray casts, proximity, grouping
+    "numpy>=1.24",      # the solve
+    # 3.1 is the floor and not 2: `triangulate(..., allow_convex=False)` — which
+    # `offset._tiling` and `clean` both pass, deliberately — first exists there.
+    # Measured against real wheels: 2.5.1 takes `(polygons, precision)`, 3.0.0
+    # takes `(polygons, epsilon)`, and both raise TypeError on the keyword. A
+    # host resolving either would install cleanly and fail on the first cleaned
+    # skin. Found on review, 2026-08-28
+    "manifold3d>=3.1",  # booleans and triangulation (float32; see CLAUDE.md, Tolerances)
+    "shapely>=2",       # skinning/skin/clean.py only — coplanar union
+    "PyYAML>=5.4",      # skinning/skin/parameters.py only
+    "jsonschema>=4",    # skinning/skin/parameters.py only
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[tool.setuptools]
+# Named rather than discovered. Auto-discovery over this repo finds `tests`,
+# `blender` and the gitignored `build/` output directory alongside the package
+# and refuses to guess between them, and it would be wrong about all three.
+packages = ["skinning", "skinning.skin"]
+
+[tool.setuptools.package-data]
+# The JSON Schema ships with the code, because it *is* code: it is the shape
+# `skinning.rules` consumes, and every validation path reads it. Without this
+# line an installed copy raises `FileNotFoundError` on its first call — which is
+# how it was found, by installing the wheel and running it. The parameter *file*
+# is deliberately not here: `skin-parameters.yaml` is this rig's authored
+# numbers and stays at the repo root.
+"skinning.skin" = ["skin-parameters.schema.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `tests/test_offset.py` imports `build` — the rig at the repo root — and
+# `tests/test_import.py` imports `tests.test_import`, so the root has to be on
+# the path. It got there by accident before: `python3 -m pytest` inserts the
+# working directory and a bare `pytest` does not, which is why running the suite
+# used to be documented as "from the repo root" and why bare `pytest` failed
+# collection with five errors. Stating it here makes both spellings work.
+pythonpath = ["."]

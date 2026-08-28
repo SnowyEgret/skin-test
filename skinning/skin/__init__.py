@@ -3,7 +3,8 @@ from .measure import buried, clearance, intersects, separation
 from .offset import planar_offset, skin_over
 
 # `clean` is deliberately not re-exported here: it is the only module that needs
-# shapely, and `import skin` should not require it. Import `skin.clean.clean`.
+# shapely, and `import skinning.skin` should not require it. Import
+# `skinning.skin.clean.clean`.
 __all__ = [
     "planar_offset",
     "skin_over",

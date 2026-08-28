@@ -13,12 +13,12 @@ and rejected, and what is still open.
 
 ### Where to pick up
 
-**`build.py` split into three on 2026-08-28**, so that the student-house can import the rules
-rather than copy them: `rules.py` (every derivation, `RULES`, `skins`), `pipeline.py` (the seam —
-`prepare` and `run`, plain data in and out), and `build.py` (this rig, 367 lines). No geometry
-moved — the report and every OBJ are byte-identical on all four substrates. The packaging half is
-untouched and still open: no `pyproject.toml`, three generic top-level module names, five
-undeclared dependencies. See *"The module split: rules, pipeline, rig"*.
+**`build.py` split into three on 2026-08-28 and the result packaged the same day**, so that the
+student-house can import the rules rather than copy them. Everything importable is now the
+`skinning` package — `skinning.rules`, `skinning.pipeline` over `skinning.skin` — and `build.py`
+and `audit.py` stay outside it at the root as this rig. `pip install -e .`, or install from the git
+URL. No geometry moved through either step: the report and every OBJ are byte-identical on all four
+substrates. See *"The module split: rules, pipeline, rig"* and *"Packaging it"*.
 
 **The reveal landed on 2026-08-27 — a second authored allowance, `reveal: 0.018`.** A cladding
 skin stands `distance` off the wall it clads and `reveal` off a substrate feature it dies against.
@@ -634,7 +634,7 @@ duplicating a parameter-file number in the one file that derives everything else
 centroid is on the cheek panel. Dated, with the membrane's 7.8808 → 5.8793 given as the live
 demonstration of the same point.
 
-**`/code-review high skin/` reached the unreviewed half, and found eight things.** All eight
+**`/code-review high skinning/skin/` reached the unreviewed half, and found eight things.** All eight
 verified against the code; seven fixed, one referred to Duncan (the fourth bake, in Open items).
 Three were in the day-old `measure` code and four in code that had never been in a diff:
 
@@ -689,7 +689,7 @@ it is"* for why that is not enough. Do not treat it as settled work.
 **The gusset — `clean(mesh, close=m)`.** Duncan, asked the standing question, answered *"Yes,
 close it in `clean`."* The membrane's one hole, the scupper outlet, is now gusseted shut: 6 border
 edges and 3459.06 mm² of it, on all three bakes. Built as the third opted-in operation of
-`skin/clean.py`, exactly where the 2026-08-21 costing said it should go if it were ever wanted,
+`skinning/skin/clean.py`, exactly where the 2026-08-21 costing said it should go if it were ever wanted,
 and **not** in the rules. See *"The gusset as built"*.
 
 The second half of that question — *should `clearance` stop being the build's verdict first?* —
@@ -700,9 +700,9 @@ its own merits and blocks nothing. See the same section.
 
 Three things, all on top of `07c3e4d`, all in one commit:
 
-1. **`skin/clean.py`** — the coplanar-overlap pass, built to the spec that stood here and
+1. **`skinning/skin/clean.py`** — the coplanar-overlap pass, built to the spec that stood here and
    measured against it in *"The pass as built"*. `clean(mesh) -> mesh`, its own module, the only
-   one that imports shapely and deliberately not re-exported from `skin/__init__.py`. `build()`
+   one that imports shapely and deliberately not re-exported from `skinning/skin/__init__.py`. `build()`
    **measures the raw emission and writes the cleaned mesh** — Duncan's choice of the three
    offered — so no regression baseline moves and `build/` gets the tidy geometry.
 2. **`clean(mesh, dissolve=True)`** — a second, opted-in operation that drops every vertex no ring
@@ -796,7 +796,7 @@ before touching `_lap`, and 9 before touching the solve.**
    and bounded, the coplanar overlap measured, the engines compared, two source-level fixes tried
    and reverted, and the decision to build the pass and leave the gusset. Everything the next job
    needs is in it.
-8. **`skin/clean.py`** (2026-08-21) — the coplanar-overlap pass built to that spec,
+8. **`skinning/skin/clean.py`** (2026-08-21) — the coplanar-overlap pass built to that spec,
    wired into `build()` as write-cleaned/measure-raw, `dissolve` as a second opted-in
    operation, and 20 tests. Reading it back, Duncan found the cladding's notch at the scupper
    cornice eaten by an inverted triangle — pre-existing, and hidden until the double cover stopped
@@ -857,7 +857,7 @@ tiling was fixed. See *"The notch is fixed at source"*.
 ### After the pass, in the order they became live
 
 - ~~**The gusset, if Duncan wants the outlet closed.**~~ **Built 2026-08-22**, in
-  `skin/clean.py` as the third opted-in operation with an authored bound, exactly where this line
+  `skinning/skin/clean.py` as the third opted-in operation with an authored bound, exactly where this line
   said it should go — and **not** in the rules. See *"The gusset as built"*.
 - **The cladding covers the scupper cheeks, and the lining is wrong.** The `cladding_faces` line
   is right and stays; the geometry it produces is not. Four corrections from Duncan, three causes,
@@ -945,14 +945,14 @@ than merely resemble each other:
 
 What that dictated:
 
-- `skin/parameters.py` mirrors `bim/phase1/parameters.py` (`load` / `validate` /
+- `skinning/skin/parameters.py` mirrors `bim/phase1/parameters.py` (`load` / `validate` /
   `load_validated`, `ParameterError` naming the field). No `merge` — this rig has no
   separate structure file for numbers to be injected into.
 - **The core takes a dict, never a path.** `skins(params)` is where the parameter layer
   stops; below it, nothing has heard of a knob.
 - **On migration**: the `classify` / `fall` / `skins` block moves into
   `student-house-parameters.yaml` under `skin:`, the schema fragment is pasted into that
-  repo's schema, and the caller passes `topo["skin"]`. `skin/parameters.py` is then dead
+  repo's schema, and the caller passes `topo["skin"]`. `skinning/skin/parameters.py` is then dead
   code there and gets deleted, not ported.
 
 Three defaults had to die for STRICT-COMPLETE, all of them the "hidden default masks a
@@ -966,7 +966,7 @@ bug" kind:
   a plain closed-shell offset selects no faces and so runs no predicate — the `None` is
   the *absence* of thresholds, raising at the point of use, not a stand-in pair.
 - the rule predicates read `FALL` from module scope → they take `(Faces, fall)` and
-  `skins()` binds it, so what `skin/` receives still has the `Faces -> bool[nfaces]`
+  `skins()` binds it, so what `skinning/skin/` receives still has the `Faces -> bool[nfaces]`
   signature it expects.
 
 `check_seeds` is separate from `validate` on purpose: non-degenerate seeds are a
@@ -1000,7 +1000,7 @@ Also: the YAML header promised a `--params` CLI that does not exist, and `claddi
 unpacked `_rules` with `meets`/`climbed` bound to `climbed`/`flanged` (pre-existing, harmless
 only because it returns `interior` alone). Both fixed; two regression tests added; 34 tests.
 
-**Still open, Duncan's call:** nothing declares dependencies. `skin/parameters.py` adds `yaml`
+**Still open, Duncan's call:** nothing declares dependencies. `skinning/skin/parameters.py` adds `yaml`
 and `jsonschema`, and `build.py` imports it at module scope, so a fresh checkout now fails at
 test collection rather than at first use. Consistent with the already-undeclared trimesh and
 numpy, so it is a repo-wide gap rather than a fault in this change — a `requirements.txt`
@@ -1013,7 +1013,7 @@ the stack does not.
 
 Blender's python needs neither PyYAML nor jsonschema here — `blender/display.py` imports
 only `bpy`, `json` and `pathlib`. The student-house had to install both into Blender's
-python; this rig does not, because nothing on the bpy side touches `skin/`.
+python; this rig does not, because nothing on the bpy side touches `skinning/skin/`.
 
 ## The OBJ import path (2026-08-15)
 
@@ -1044,7 +1044,7 @@ Decisions made with Duncan before the bake:
 - The four `PART_N` parts **stay**. They are the synthetic worst case the tests run on,
   and the brick condition belongs there where it can be posed deliberately.
 - The bake carries no IFC metadata, and it does not need to: the reader stamps one
-  cladding system across every part, exactly as `current_substrate()` does. `skin/` still
+  cladding system across every part, exactly as `current_substrate()` does. `skinning/skin/` still
   never learns what a facade is — `metadata` is a plain dict the caller fills.
 - Roof layer stacks (`Roof_Deck9_CLT` / `_InsulationFlat` / `_InsulationTaper`) can all
   come across. The union discards the internal faces and skins the composite outer surface.
@@ -1249,7 +1249,7 @@ full offset below it — z = −0.085 on the rig. Correct as offset geometry, wr
 
 It is authored, not hardcoded: a new per-skin `base` in `skin-parameters.yaml` (`0.0` for the
 cladding, `null` for the membrane, which never reaches the ground), a `base` argument on
-`skin_over`, and `_trim_below` in `skin/offset.py`. Three things that were decided while
+`skin_over`, and `_trim_below` in `skinning/skin/offset.py`. Three things that were decided while
 building it, none of them obvious from the outside:
 
 - **A cut, not a clamp.** Pushing the low vertices up to z = 0 gives the same outline and
@@ -1292,15 +1292,16 @@ real ground level, and it only starts to bite once walls that reach the ground a
 
 | file | what |
 |---|---|
-| `skin/offset.py` | the solver. `planar_offset` (one constrained system), `skin_over` (union → offset → select faces → lap → trim), `_lap` / `_across` / `_receivers` (the one continuation rule), `Faces` (what a predicate may ask) |
-| `skin/measure.py` | `clearance` (skin to substrate), `separation` (skin to skin) |
-| `skin/substrate.py` | `polyhedron` (from vertex/face lists), `from_obj` (a baked export, one part per `o` group), `snapped`, `prism`, `cube`, `l_block`, `u_block`, and `classify` / `horizontality` (WALL vs ROOF from shape) |
-| `skin/export.py` | OBJ writer that emits n-gons, not triangles. `write_obj` one per file for `build/`, `write_objs` many as `o` groups for a whole substrate |
-| `skin/parameters.py` | the parameter layer. `load` / `validate` / `check_seeds` / `load_validated`. The only module that imports yaml or jsonschema |
+| `skinning/skin/offset.py` | the solver. `planar_offset` (one constrained system), `skin_over` (union → offset → select faces → lap → trim), `_lap` / `_across` / `_receivers` (the one continuation rule), `Faces` (what a predicate may ask) |
+| `skinning/skin/measure.py` | `clearance` (skin to substrate), `separation` (skin to skin) |
+| `skinning/skin/substrate.py` | `polyhedron` (from vertex/face lists), `from_obj` (a baked export, one part per `o` group), `snapped`, `prism`, `cube`, `l_block`, `u_block`, and `classify` / `horizontality` (WALL vs ROOF from shape) |
+| `skinning/skin/export.py` | OBJ writer that emits n-gons, not triangles. `write_obj` one per file for `build/`, `write_objs` many as `o` groups for a whole substrate |
+| `skinning/skin/parameters.py` | the parameter layer. `load` / `validate` / `check_seeds` / `load_validated`. The only module that imports yaml or jsonschema |
 | `skin-parameters.yaml` | every tunable number: `classify`'s thresholds, `fall`, the five distances |
-| `skin-parameters.schema.json` | the JSON Schema it is validated against |
-| `rules.py` | every derivation: the face rules, the `RULES` table, `skins()`, `classifier`, the two `check_*` guards. Migrates |
-| `pipeline.py` | the seam: `prepare` (group → union → `Faces`) and `run` (substrate in, skins out). Reads no file, writes none, prints nothing. Migrates |
+| `skinning/skin/skin-parameters.schema.json` | the JSON Schema it is validated against. **Inside** the package, because every validation path reads it |
+| `pyproject.toml` | the package: `skinning`, its six dependencies, and `pythonpath = ["."]` so a bare `pytest` works |
+| `skinning/rules.py` | every derivation: the face rules, the `RULES` table, `skins()`, `classifier`, the two `check_*` guards. Migrates |
+| `skinning/pipeline.py` | the seam: `prepare` (group → union → `Faces`) and `run` (substrate in, skins out). Reads no file, writes none, prints nothing. Migrates |
 | `build.py` | this rig: the substrate as transcribed data, the OBJ emission and the printed report. Stays |
 | `blender/display.py` | the only file that imports bpy. Loads, never authors |
 | `tests/test_offset.py` | the geometry suite |
@@ -1313,7 +1314,7 @@ real ground level, and it only starts to bite once walls that reach the ground a
 
 ## The two skins
 
-Numbers in `skin-parameters.yaml`, face rules in `rules.py`'s `RULES`, joined by name by
+Numbers in `skin-parameters.yaml`, face rules in `skinning/rules.py`'s `RULES`, joined by name by
 `skins()`. Adding a third is a YAML entry plus a rule set, not a code path.
 
 **The numbers are tuned for the student-house substrate now** (2026-08-15). The synthetic
@@ -1484,7 +1485,7 @@ keeps it non-singular where the soft equations underdetermine a vertex.
 - **Reflex corners miter exactly.** Three planes always meet at a point; an outward
   offset at a concave corner is sharp and correct. The real failure mode is a concave
   *pocket* narrower than 2× the offset, where opposing walls cross.
-- **trimesh is triangles-only.** `skin/export.py` regroups coplanar triangles via
+- **trimesh is triangles-only.** `skinning/skin/export.py` regroups coplanar triangles via
   `mesh.facets` and writes boundary loops, so Blender shows quads. Collinear vertices
   on a loop are kept deliberately: dropping one that a neighbouring facet corners on
   would leave a T-junction.
@@ -2317,7 +2318,7 @@ degeneracy that has cost four separate workarounds, and Duncan's own reason stan
 
 | | before | after |
 |---|---|---|
-| `skin/offset.py` code lines | 384 | **561** (+46%) |
+| `skinning/skin/offset.py` code lines | 384 | **561** (+46%) |
 | `build.py` code lines | 440 | **425** |
 | removed | `_hem` 25 + `_turn_out` 97 + `_meets_region` 23 = **145** | |
 | added | | **322** |
@@ -2576,7 +2577,7 @@ oriented, silently returns overlapping triangles and *more* area than it was giv
 
 It fixes the area exactly, dissolves the retraced edges Duncan found, resolves the bowties
 implicitly, and *improves* the T-junction count. It costs two non-manifold edges in the membrane
-and it dissolves the facet structure `skin/export.py` regroups into n-gons.
+and it dissolves the facet structure `skinning/skin/export.py` regroups into n-gons.
 
 **It does not close the holes** — measured: the outlet comes through untouched, 6 border edges
 before and after, because its two triangles span the `x = 8.5` knife and are coplanar with
@@ -2584,7 +2585,7 @@ nothing. A coplanar pass has nothing to say about it. The pass would be a natura
 gusset step, but it is a separate mechanism.
 
 **Correction to the line above, measured after it was written:** the pass does *not* dissolve the
-facet structure `skin/export.py` regroups into n-gons — it improves it. The membrane writes 48
+facet structure `skinning/skin/export.py` regroups into n-gons — it improves it. The membrane writes 48
 n-gons before and 47 after, and the **two self-crossing ones go to zero**. The residual cost is
 smaller and different: two non-manifold edges in the cleaned membrane, at
 `(8.072, 5.177, 14.7603)-(8.072, 5.177, 14.737)` and
@@ -2605,7 +2606,7 @@ already here, so nothing needs installing:
 `manifold3d` is already a **hard** dependency — `substrate.union` is built on it — and 4.7 nm is
 far inside `PLANE_TOL` and inside manifold3d's own float32 floor (~500 nm at 15 m out), so it is
 not dangerous. But shapely is bit-exact on every point the union keeps, and it **keeps collinear
-vertices**, which `skin/export.py` preserves deliberately so that a neighbouring facet cornering
+vertices**, which `skinning/skin/export.py` preserves deliberately so that a neighbouring facet cornering
 there does not leave a T-junction. So: shapely for the union, `manifold3d.triangulate` to get back
 to triangles (already a dependency, and it takes holes). Shapely would join yaml and jsonschema on
 the undeclared-dependency list.
@@ -2649,7 +2650,7 @@ worked, and the numbers are recorded so it is not retried blind:
 The lesson is the same one both times: **the lap rule legitimately produces overlapping bands**, and
 a miter between two of them cannot un-overlap them. Resolving coplanar overlap is a 2D boolean
 problem and belongs where a 2D boolean can be run over the whole plane at once, not in a
-pairwise joint rule. `skin/offset.py` is unchanged by this section.
+pairwise joint rule. `skinning/skin/offset.py` is unchanged by this section.
 
 ## Is the gusset worth its complexity? (2026-08-21)
 
@@ -2695,7 +2696,7 @@ true of the skins in general.
 **Against all that: one instance in three substrates.** The other two folds are at `z = 12.35`,
 section cuts no skin reaches.
 
-**The cleanup pass has none of that shape.** Mesh in, mesh out; nothing in `skin/offset.py` or the
+**The cleanup pass has none of that shape.** Mesh in, mesh out; nothing in `skinning/skin/offset.py` or the
 `RULES` learns it exists; it is testable on a hand-made overlapping pair with no substrate at all.
 A *cleanup* is also allowed an authored bound where a *derivation* is not — which is exactly why
 "fill a bounded hole" belongs there if it is ever wanted, and not in the rules.
@@ -2723,7 +2724,7 @@ Four findings, all four real, all four fixed, and **all four latent** — every 
 substrate comes back byte-identical afterwards (six MD5s checked). That is the point of running
 it: none of these was reachable by the tests or the build, and two were introduced the same day.
 
-- **`skin/offset.py` — the `out` gate short-circuited the fold as well as the run-on.** Mine, from
+- **`skinning/skin/offset.py` — the `out` gate short-circuited the fold as well as the run-on.** Mine, from
   the run-on fix earlier in the day: `want = out; if want == 0.0: return False` sits above *both*
   branches of `carry_on`, but only the run-on is priced by `out` — a fold is priced by
   `reach(into)`, which is `drop` for a fold that turns downward. So a skin with `out: 0.0` and a
@@ -2741,12 +2742,12 @@ it: none of these was reachable by the tests or the build, and two were introduc
   return nothing and `rise` raise `flat top` on a wall that plainly has a lift above it. Rows are
   now deduplicated on a rounded key and returned **unrounded**: measured on a diagonal fixture,
   `d` was `0.759257` before, exactly on the lattice, and is `0.759256602` now.
-- **`skin/offset.py` — the `rounds` net had less headroom than it looked.** A band costs up to
+- **`skinning/skin/offset.py` — the `rounds` net had less headroom than it looked.** A band costs up to
   **four** entries in `tried`, not two: two ends, and a run-on moves the end it lengthens so that
   end is asked again under its new key. Against `rounds * len(segs)` the rig already measured
   2.00, so a substrate whose laps run on at both ends would trip a raise that blames the geometry
   for a correct model. The bound is `rounds * 2 * len(segs)` now, with the ceiling written down.
-- **`skin/offset.py` — `drip_at` was silently wrong with no vertical face at the vertex.**
+- **`skinning/skin/offset.py` — `drip_at` was silently wrong with no vertical face at the vertex.**
   `np.linalg.lstsq` on a zero-row system returns `[0, 0, 0]` rather than complaining, so the drip
   was rooted on the **substrate** instead of `distance` out from it. Measured on a leaning-face
   fixture with the guard removed: it built, four faces, residual **4.34e-17**, clearance
@@ -2767,7 +2768,7 @@ fixes themselves, and the substrate export names against `Path.stem`.
 
 ## The pass as built (2026-08-21)
 
-`skin/clean.py`, `clean(mesh) -> mesh`, ~150 lines with its docstrings against the prototype's 64.
+`skinning/skin/clean.py`, `clean(mesh) -> mesh`, ~150 lines with its docstrings against the prototype's 64.
 It hits the acceptance table on the two columns that were the point — **area is exactly the area
 covered**, on both skins, to the µm² — and beats it on the rest:
 
@@ -2881,7 +2882,7 @@ number in the tables above reproduces.
 
 Duncan, same reading: *"There are also colinear edges in both skins. Does clean weld colinear
 edges?"* It did not, deliberately — shapely keeps collinear vertices through the union and
-`skin/export.py` keeps them on purpose, because dropping one that a neighbouring facet corners on
+`skinning/skin/export.py` keeps them on purpose, because dropping one that a neighbouring facet corners on
 leaves a T-junction. Measured on the cleaned skins: 35 collinear corners in the membrane and 30 in
 the cladding, of which only 6 and 10 were used by no other facet.
 
@@ -2910,9 +2911,9 @@ number to get wrong.
 
 ### Where it sits, and what it costs
 
-- **`skin/clean.py` is the only module that imports shapely**, and `clean` is deliberately **not**
-  re-exported from `skin/__init__.py`: `import skin` must not require it. `build.py` imports
-  `skin.clean.clean` directly. Same containment as yaml and jsonschema in `skin/parameters.py`,
+- **`skinning/skin/clean.py` is the only module that imports shapely**, and `clean` is deliberately **not**
+  re-exported from `skinning/skin/__init__.py`: `import skin` must not require it. `build.py` imports
+  `skin.clean.clean` directly. Same containment as yaml and jsonschema in `skinning/skin/parameters.py`,
   and the same reason — the student-house seam. shapely does join the undeclared-dependency list.
 - **`build()` measures raw and writes cleaned**, chosen by Duncan from three. Every printed
   number is a property of the offset and none of them moved on any of the three substrates; a
@@ -2972,7 +2973,7 @@ with "the lap emits whole quads" and "the lap cannot clip": the raw emission cov
 not, and `clean` dissolves the double count without touching the cause. Fixing it means
 re-triangulating a face whose tiling the offset inverted — detectable exactly, with no threshold:
 a face whose normal ends up opposed to its own plane's. Four such faces in the membrane and two in
-the cladding on the live bake; `skin/clean.py`'s `_sheets` already finds them, but it is the wrong
+the cladding on the live bake; `skinning/skin/clean.py`'s `_sheets` already finds them, but it is the wrong
 place to fix them, because by then the substrate face they came from is gone.
 
 **Do not "fix" this in `clean`.** Its job is what the plane is covered by; it cannot know that a
@@ -2983,7 +2984,7 @@ stops inverting triangles, and not before.
 
 Duncan, on the diagnosis above: *"Fix it."*
 
-`skin/offset.py` gains `_tiling`, run on the kept faces before any lap is placed. A face whose
+`skinning/skin/offset.py` gains `_tiling`, run on the kept faces before any lap is placed. A face whose
 offset triangle ends up pointing against the body's own normal has been turned **inside out** by
 the solve; the patch it belongs to — coplanar faces joined edge to edge — is tiled again from its
 own boundary loops, which an inversion does not move. Detection is exact and wants no threshold.
@@ -3000,7 +3001,7 @@ out **triangle for triangle identical**, which is the property to keep.
   Measured on the two real patches the slack is 1.9e-16 and 2.5e-16 against a 1e-9 bound, and the
   defect it guards against is 7e-3 of the patch — seven orders of headroom either way.
 - No shapely: signed areas are a shoelace and the tiling is `manifold3d.triangulate`, so
-  `skin/offset.py` keeps the dependency it had.
+  `skinning/skin/offset.py` keeps the dependency it had.
 
 **What it fixes, measured on the live bake.** The notch round the scupper cornice is symmetric
 again — outline `(4.6, 14.58) (4.6, 14.34) (5.37, 14.34) (5.37, 14.58)`, one horizontal edge at
@@ -3050,7 +3051,7 @@ implications of each option."*
 are not coupled, and the 2026-08-21 costing above is what made them look coupled.** That costing
 measured the gusset *inside `skin_over`*, where it is a face the offset produced, and there
 `clearance` reads 7.8808 → 5.8793 mm and `build.py` prints a self-intersection warning on a skin
-with nothing buried in anything. In `skin/clean.py` it is not: `build()` **measures the raw
+with nothing buried in anything. In `skinning/skin/clean.py` it is not: `build()` **measures the raw
 emission and writes the cleaned mesh**, so the printed verdict is taken on `skin_over`'s output
 before any gusset exists. Reproduced, on the live bake:
 
@@ -3121,7 +3122,7 @@ rather than a tear.
 ### What it cost
 
 Ten tests, eight of them hand-made with no substrate behind them, two on the bakes because the
-pinch is produced by the rules and not by hand. 110 tests, ~6.6 s. `skin/offset.py` and `RULES`
+pinch is produced by the rules and not by hand. 110 tests, ~6.6 s. `skinning/skin/offset.py` and `RULES`
 are unchanged and still do not know the module exists. `close` joins the parameter file under
 STRICT-COMPLETE — required on every skin, in the schema, ignored by `check_seeds` for the same
 reason `base` is: it bounds a cleanup, not a surface.
@@ -3586,7 +3587,7 @@ Duncan, reading `build/Cladding.obj` back in Blender on the live bake, on the **
 > at V4. V62 (on the skirt) should also be on the cheek plane (y=4.87). E72 should be at the
 > height of V6 and extend to x=8.585."*
 
-Vertex numbers are the exported OBJ's own order, which is what Blender shows: `skin/export.py`
+Vertex numbers are the exported OBJ's own order, which is what Blender shows: `skinning/skin/export.py`
 writes every mesh vertex as a `v` line before any face, so Blender's index *is* the index into
 `mesh.vertices`. All four corrections are consistent under that reading and they describe one
 shape, which is how the mapping was confirmed.
@@ -4095,7 +4096,7 @@ has no returns to inherit it.
   raises now, naming the count.
 
 Two things the review raised and did not count, both already named in the code: the turn gate at
-`skin/offset.py:1400` is inert for a band measured from the skin's own edge, and `_gussets` would
+`skinning/skin/offset.py:1400` is inert for a band measured from the skin's own edge, and `_gussets` would
 raise `KeyError` rather than refuse by name on a self-intersecting border piece. No substrate
 poses either. `audit.py` is untracked and outside `git diff` — its `live_skins()` does not apply
 the `covered` gate, which is harmless only while its `BAKE` is hard-coded to the bake that has
@@ -4136,7 +4137,7 @@ now holds the direction the band stands proud in, and the test is the half-space
 so a wall at a plan angle still reads. The wall's ends go back to the rainscreen, which is what
 carries it round the corner to the wall face.
 
-### What that cost in `skin/offset.py`
+### What that cost in `skinning/skin/offset.py`
 
 `planar_offset` gains `offsets`, a per-face distance, `None` for every ordinary offset.
 `_vertex_planes` is `_vertex_normals` with the plane's own move alongside its normal; the old name
@@ -4335,7 +4336,7 @@ widens past `interior`.
 ## The module split: rules, pipeline, rig (2026-08-28)
 
 Opus 5 over in the student-house asked to leave this code here and import it, rather than copy it
-across when the skinning modules are swapped. Nothing about `skin/` stood in the way — it imports
+across when the skinning modules are swapped. Nothing about `skinning/skin/` stood in the way — it imports
 trimesh, numpy, manifold3d, shapely, yaml and jsonschema and nothing of ours, so it was already
 portable. `build.py` was the whole of the problem: roughly 1700 of its 2055 lines were the rules
 the student-house actually wants, and they sat in a repo-root script beside the transcribed
@@ -4344,11 +4345,11 @@ the derivations without importing the rig.
 
 So the file is now three, drawn where the migration cuts:
 
-- **`rules.py`** — the domain tags, every face rule, `RULES`, `classifier`, `skins`, the two
-  `check_*` guards, and `TOL`. It is deliberately **not** under `skin/`: the invariant is that
-  `skin/` never learns what a wall or a membrane is, and moving the rules in there to make them
+- **`skinning/rules.py`** — the domain tags, every face rule, `RULES`, `classifier`, `skins`, the two
+  `check_*` guards, and `TOL`. It is deliberately **not** under `skinning/skin/`: the invariant is that
+  `skinning/skin/` never learns what a wall or a membrane is, and moving the rules in there to make them
   importable would have bought portability by spending the one boundary the module has.
-- **`pipeline.py`** — `prepare`, `run`, `_skin_from`, `covered`. This is the seam. `run(parts,
+- **`skinning/pipeline.py`** — `prepare`, `run`, `_skin_from`, `covered`. This is the seam. `run(parts,
   params)` takes plain data, reads no file, writes no file and prints nothing.
 - **`build.py`** — the rig, and now only the rig: `PART_N`, `current_substrate`,
   `separation_check`, `build()` and `__main__`. 367 lines.
@@ -4382,7 +4383,7 @@ as before. `md5sum` over `build/` before and after, five substrates each. That i
 repeat after touching any of the three modules, and it is cheap: five `python3 build.py` runs.
 
 **`tests/test_seam.py` pins the direction of the dependency**, 150 → 154. `rules` and `pipeline`
-may not import `build`, `skin/` may import none of the three, and `run` refuses anything that is
+may not import `build`, `skinning/skin/` may import none of the three, and `run` refuses anything that is
 not a params dict. Read off the AST rather than by importing, because the import that would slip
 through is a deferred one inside a function body: it never runs in the suite, never runs in the
 build, and would still have to be unpicked on the far side of the migration. Nothing else in the
@@ -4402,7 +4403,7 @@ better than I had: an AST-level comparison of every top-level function and assig
   `parameters.resolve` exists to stop, re-opened at the new seam. Both entries now take
   `_params`, which validates a dict and refuses a path or a `None`. `parameters.validate` and not
   `resolve`, because `resolve(None)` reads the file.
-- **`rules.py` claimed "nothing here reads a file".** `skins(params=None)` resolves against
+- **`skinning/rules.py` claimed "nothing here reads a file".** `skins(params=None)` resolves against
   `skin-parameters.yaml`, which about fifteen tests rely on. The default is deliberate and
   documented at the function; the module docstring was the thing that was wrong, and it now says
   so and names the hazard — `rules.skins()` in a host repo returns *this* repo's numbers and
@@ -4429,12 +4430,83 @@ being *used correctly*, not misused, and a second path would need its own copy o
 discipline that the finding above just caught `audit.py` getting wrong. One path through the seam
 is worth 67 ms. Revisit if `separation_check` is ever pointed at a live bake.
 
-What this does **not** do, and what the student-house still needs before it can import any of it:
-there is no `pyproject.toml`, so "import it" is still a `sys.path` insert or a vendored copy; and
-`rules`, `pipeline` and `build` are three generic top-level names that will collide in a host
-repo. `trimesh`, `manifold3d`, `shapely`, `yaml` and `jsonschema` are all still undeclared. That
-is the packaging half, and it is deliberately separate — the import mechanism is Duncan's call and
-naming the modules for a distribution is the same edit as choosing it.
+What this did **not** do was make any of it installable: no `pyproject.toml`, three generic
+top-level names that would collide in a host repo, and five undeclared dependencies. That was left
+deliberately separate, the import mechanism being Duncan's call. He took it the same day — see
+*"Packaging it"* below.
+
+## Packaging it (2026-08-28)
+
+Duncan chose to nest: one package, with the rig left outside it, and `skinning` as the name.
+
+```
+skinning/            skin/ (geometry) + rules.py + pipeline.py
+build.py audit.py    the rig and the scratch script, at the root, not in the package
+skin-parameters.yaml this rig's numbers, at the root
+```
+
+Intra-package imports are **relative** (`from .skin import parameters`), so the package can be
+renamed or vendored without touching a line inside it; everything outside imports through
+`skinning.`. `pip install -e .` and the wheel both work, and the wheel carries exactly the ten
+package files and nothing else — no tests, no `build.py`, no bakes.
+
+**The install found a real defect that nothing here could have.** `skinning/skin/parameters.py`
+resolved both its paths from the repo root, so an installed copy raised `FileNotFoundError` on its
+*first call*: `rules.skins()` -> `resolve` -> `validate` -> `_schema()` reads the JSON Schema, and
+the schema had never been shipped. The suite could not see it — the suite runs in the repo, where
+the root is right there — and neither could the build. It took building the wheel, installing it
+into a clean venv and skinning a bake from a neutral directory.
+
+The fix draws a line the two files had blurred by both sitting at the root. **The schema is code
+and ships inside the package**; it is the shape `rules.py` consumes, exactly as the `RULES` table
+is, and every validation path reads it. **The parameter file is data and stays at the root**; it is
+this rig's authored numbers, it migrates into the host's own file, and an installed copy has no
+business defaulting to skin-test's numbers. So `SCHEMA_PATH` is now `Path(__file__).parent / ...`
+with no reach outside the package at all, `DEFAULT_PATH` keeps the one repo-root escape there is,
+and `load` raises a `ParameterError` naming the situation rather than letting a `FileNotFoundError`
+out with a path inside site-packages. `tests/test_seam.py` asserts that escape is the *only* one.
+
+Verified by doing it: the wheel installed into a venv, imported from `/tmp`, and run over the unit8
+bake gives 115 / 84 / 2 triangles and residuals 8.67e-17 / 9.71e-16 / 1.08e-15 — the same figures
+the in-repo build prints for that substrate.
+
+All six dependencies are declared and required. The containment is real —
+`skinning/skin/clean.py` is the only importer of shapely, `skinning/skin/parameters.py` the only
+importer of yaml and jsonschema, so `skinning.skin` alone would run on trimesh, numpy and
+manifold3d — but `skinning.pipeline` reaches both, and an extra that the package's own entry point
+needs is not an extra. `bpy` is nobody's dependency and `blender/display.py` is not in the package.
+
+One incidental fix: `pythonpath = ["."]` in `[tool.pytest.ini_options]`, so a bare `pytest` works.
+It never did — only `python3 -m pytest`, whose `-m` inserts the working directory — and that is why
+"run pytest from the repo root" had been documented rather than fixed.
+
+**The toolchain on this machine cannot install it, and that took a review round to establish.**
+`[build-system] requires = ["setuptools>=61"]` does get a modern setuptools into pip's isolated
+build environment — but the *pip* doing the installing has to be modern too, and this machine's is
+22.0.2. Measured: `python3 -m pip install --target … .` takes the legacy `setup.py install` path
+anyway and writes an `UNKNOWN-0.0.0` dist-info **containing no package at all**, exit code 0, no
+error; `pip install -e .` fails outright, setuptools 59 having no PEP 660 `build_editable` hook.
+Under pip 26 in a venv both work and the wheel is correct. The silent one is the dangerous one, and
+the first draft of the `pyproject.toml` comment asserted the opposite in as many words. Install into
+a venv, or `pip install -U pip` first. A wheel build also drops `skinning.egg-info/` at the root and
+a `bdist.*` inside `build/`, next to the OBJs; both are gitignored now.
+
+**`manifold3d>=2` was two minor versions too low.** `offset._tiling` and `clean` both call
+`triangulate(..., allow_convex=False)`, deliberately, and that keyword does not exist before 3.1.
+Verified against real wheels rather than changelogs: 2.5.1 is `(polygons, precision=-1)`, 3.0.0 is
+`(polygons, epsilon=-1)`, and both raise `TypeError` on the keyword; 3.1.0 is the first with
+`allow_convex`. A host resolving 2.x or 3.0 — an existing pin, an older interpreter with no new
+wheels — would have installed cleanly and failed on the first cleaned skin. Floor is `>=3.1` now.
+
+**`tests/test_seam.py` had two holes of its own, both in the direction of passing.** `_imports`
+skipped every relative import, which was right for the rig test and wrong for the geometry one: in
+the flat layout the violation it exists to catch was `from rules import ...`, level 0, and was
+caught; inside the package it is `from ..rules import ...`, level 2, and went straight through. And
+the "one escape" test scanned the *text* for `parents[` and `parent.parent`, which in files this
+prose-heavy false-positives on a docstring and misses a real escape spelled
+`os.path.dirname(os.path.dirname(...))` or a `sys.path` insert. Both read off the AST now, and both
+were checked by posing the violation: a `from ..rules import CORNICE` in `offset.py` and a nested
+`dirname` in `measure.py` each fail the suite where they did not before.
 
 ## Open items
 
@@ -4451,13 +4523,13 @@ naming the modules for a distribution is the same edit as choosing it.
   **5**, plus 4 skin-to-skin pairs — and a spot check confirmed those were **geometrically real**,
   not false positives: a membrane triangle on `x = 8.072` passing through the scupper drip solid
   spanning `x 7.98…8.08, y 4.785…5.185, z 14.425…14.495`. The old defect preserved in the old
-  substrate. It is in git history if it is ever wanted. Found by `/code-review high skin/`.
+  substrate. It is in git history if it is ever wanted. Found by `/code-review high skinning/skin/`.
   **"all three substrates" throughout this file means rig, walls-and-caps and extended-cornices**,
   and now there are only three.
 - **The south-junction sliver**, 205 x 7.3 mm, left by the continuation. See above; it needs the
   lap to clip against its neighbour rather than emit whole quads.
 - ~~**Coplanar laps overlap, and it skews the area**~~ — membrane 0.180%, cladding 0.311%, plus
-  six bowtie quads. **Decided 2026-08-21: emit then clean.** `skin/clean.py` is specified at the
+  six bowtie quads. **Decided 2026-08-21: emit then clean.** `skinning/skin/clean.py` is specified at the
   top of this file. **Built 2026-08-21** — see *"The pass as built"*: area is now exactly the
   area covered, on both skins. The two source-level alternatives are measured and ruled out; the
   *cause* — the lap emitting whole quads that overlap — stays open above.
@@ -4511,7 +4583,7 @@ naming the modules for a distribution is the same edit as choosing it.
   entries unless asked.
 - **No exact skin-vs-skin intersection test exists.** `separation()` missed a genuine
   12-place intersection during the turn-out work. Worth promoting the Möller-Trumbore
-  check from the scratch script into `skin/measure.py` as `intersects(a, b)` and asserting
+  check from the scratch script into `skinning/skin/measure.py` as `intersects(a, b)` and asserting
   it in the build.
 - **The cladding overhangs part 4's bare ends by the offset**, reaching x = -3.169769 and
   x = 2.421661 where the wrapped top mitres with the unskinned end planes. Same family as

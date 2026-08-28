@@ -3,7 +3,7 @@
 The lap rule legitimately emits whole quads, and where one band lies wholly
 inside another on the same plane the two overlap — a miter between them cannot
 un-overlap them, so the double-covered area is resolved here instead, after the
-fact. Mesh in, mesh out: nothing in `skin/offset.py` or `build.py`'s rules knows
+fact. Mesh in, mesh out: nothing in `skinning/skin/offset.py` or `skinning/rules.py` knows
 this module exists, and it is named for a mesh rather than for a skin because
 overlapping itself in a plane is a property of a mesh.
 
@@ -14,7 +14,7 @@ survived is exactly where the offset put it" — the property that makes
 finished mesh, so the raw emission stays inspectable.
 
 shapely (GEOS, double precision) does the union because it is bit-exact on every
-point it preserves and it keeps collinear vertices, which `skin/export.py` keeps
+point it preserves and it keeps collinear vertices, which `skinning/skin/export.py` keeps
 on purpose so that a neighbouring facet cornering there leaves no T-junction.
 `manifold3d.triangulate` gets back to triangles: it is already a hard dependency
 and it takes holes.
@@ -167,7 +167,7 @@ def _corners(rings: list, points: list[np.ndarray]) -> set[int]:
     has to stay in *all* of them, which is why this is asked once over the whole
     mesh and not per plane — remove a vertex from one facet while its neighbour
     still corners there and the join becomes a T-junction, which is the reason
-    `skin/export.py` keeps collinear vertices in the first place.
+    `skinning/skin/export.py` keeps collinear vertices in the first place.
     """
     corners = set()
     for index, _, _ in rings:

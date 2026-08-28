@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "skin-test parameters",
-  "description": "Every tunable number in the rig. STRICT-COMPLETE: every property is required and additionalProperties is false everywhere, so a missing knob and a misspelt one both fail at the load seam rather than silently taking a default. Per-field validity (types, ranges, required, no strays) is enforced here; the cross-field residue a schema cannot express — non-degenerate seeds, a lapping skin having a direction to lap in, names matching the rule table — lives in Python (skin/parameters.py and build.py).",
+  "description": "Every tunable number in the rig. STRICT-COMPLETE: every property is required and additionalProperties is false everywhere, so a missing knob and a misspelt one both fail at the load seam rather than silently taking a default. Per-field validity (types, ranges, required, no strays) is enforced here; the cross-field residue a schema cannot express — non-degenerate seeds, a lapping skin having a direction to lap in, names matching the rule table — lives in Python (skinning/skin/parameters.py and skinning/rules.py).",
   "type": "object",
   "additionalProperties": false,
   "required": ["classify", "fall", "reveal", "skins"],

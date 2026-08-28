@@ -2,10 +2,10 @@
 """Build the geometry headless into build/. Blender only ever loads the result.
 
 This is the rig: the transcribed `PART_N` substrate, the OBJ emission and the
-printed report. None of it migrates. The parts that do are `rules.py` — every
-derivation, and the join from the authored numbers to it — and `pipeline.py`,
-which runs one over the other and is the seam a caller integrates against.
-Everything below is a caller of that seam.
+printed report. None of it migrates, and none of it is in the package. What does
+is `skinning.rules` — every derivation, and the join from the authored numbers to
+it — and `skinning.pipeline`, which runs one over the other and is the seam a
+caller integrates against. Everything below is a caller of that seam.
 """
 
 from __future__ import annotations
@@ -16,9 +16,11 @@ from pathlib import Path
 
 import trimesh
 
-import pipeline
-from rules import FACADE, RAINSCREEN, RULES, TOL
-from skin import buried, clearance, intersects, parameters, separation, substrate, write_obj
+from skinning import pipeline
+from skinning.rules import FACADE, RAINSCREEN, RULES, TOL
+from skinning.skin import (
+    buried, clearance, intersects, parameters, separation, substrate, write_obj,
+)
 
 BUILD_DIR = Path(__file__).parent / "build"
 

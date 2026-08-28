@@ -30,7 +30,7 @@ PLANE_TOL = 1e-6
 # two points closer than this are one point. Deliberately **not** `PLANE_TOL`,
 # which is the 1 µm lattice every substrate coordinate is snapped to — welding at
 # that radius merges neighbouring lattice points. Same value and same reasoning
-# as `clean.WELD_TOL`, declared again rather than imported: `skin/clean.py` is
+# as `clean.WELD_TOL`, declared again rather than imported: `skinning/skin/clean.py` is
 # the only module that needs shapely and nothing in the core may reach into it
 WELD_TOL = 1e-9
 # keeps the KKT system non-singular where the soft equations underdetermine a vertex
@@ -1748,7 +1748,7 @@ def _cut(verts, faces, normal, d):
         # is `WELD_TOL`, not `PLANE_TOL`: the latter *is* the 1 µm lattice every
         # substrate coordinate is snapped to, so a crossing landing one lattice
         # cell from a real corner would silently delete that corner from the
-        # loop. Same reasoning `skin/clean.py` spells out for its own weld
+        # loop. Same reasoning `skinning/skin/clean.py` spells out for its own weld
         loop = [
             v
             for n, v in enumerate(loop)

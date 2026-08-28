@@ -28,10 +28,10 @@ import trimesh
 # and reported numbers for code that was not under test. Found on review,
 # 2026-08-27, by a reader who hit exactly that
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import pipeline
-import rules
-from skin import substrate, parameters
-from skin.export import faces_as_ngons
+from skinning import pipeline
+from skinning import rules
+from skinning.skin import substrate, parameters
+from skinning.skin.export import faces_as_ngons
 
 BAKE = "unit8-parapets-caps-clt-insulation-headhouse-extended-cornices.obj"
 
@@ -101,7 +101,7 @@ def selfcrossing_ngons(m):
 
 def true_area(m):
     """Area actually covered: union each plane in 2D, either way up."""
-    from skin.clean import _groups, _basis
+    from skinning.skin.clean import _groups, _basis
     from shapely.ops import unary_union
     from shapely.geometry import Polygon
     total = 0.0
@@ -122,7 +122,7 @@ def report(name, m):
           f" | non-manifold {len(nonmanifold(m)):>2} | n-gons {ng:>3} ({bad} self-crossing)")
 
 if __name__ == "__main__":
-    from skin.clean import clean
+    from skinning.skin.clean import clean
     skins = live_skins()
     for name, m in skins.items():
         print(name)
