@@ -1665,3 +1665,56 @@ def test_the_whole_building_reads_and_skins():
             (0.2281, 10.3, 6.75), (10.8519, 10.3, 6.75)
         }
 
+def test_a_wall_takes_the_direction_of_the_lift_that_bears_on_it():
+    """A return at a wall's end is a lift of it, and carries almost none of it.
+
+    Duncan, 2026-08-28: *"E76/77/78 is a four storey vertical slot which
+    shouldn't be there. It looks like the southern ends of the alleyback-W
+    panels are not being covered."*
+
+    At a building corner a wall runs under its own parapet **and** under the two
+    returns at its ends, and a return is a whole elevation long. `rise` weighted
+    each lift by its own underside area until this, so the returns outvoted the
+    lift 10.397 m² to 4.406 and `L7-alleyback-W` came back `(0.604, -0.797)` — a
+    diagonal that is no wall's direction. The four `*-alleyback-W` panels inherit
+    it up their stack, their `y = 7.54` end reads `facing = -0.797` and
+    classifies **interior** rather than as the end it is, and an interior is not
+    grown into the neighbouring elevation and so is never clad.
+
+    Weighted by how much of each lift bears on *this* wall — `_plan_overlap`, the
+    measure `group_caps` already settles a contested plate with — it is the alley
+    elevation, and the end is clad at every one of the four storeys.
+    """
+    from skinning.rules import FACADE, RAINSCREEN, cladding_faces, rise, wall_faces
+    from skinning.skin import parameters, substrate
+    from skinning import pipeline
+
+    import build
+
+    parts = build.stamped(substrate.from_obj(WHOLE, metadata={FACADE: RAINSCREEN}))
+    params = parameters.load_validated()
+    faces = pipeline.prepare(parts, params)
+    named = {faces.parts[m[0]].metadata["name"]: m for m in faces.elements}
+
+    # the alley elevation, not a diagonal, on every storey of the stack
+    for lift in ("L1", "L3", "L5", "L7"):
+        direction = rise(faces, named[f"{lift}-alleyback-W"])
+        assert np.allclose(direction, [1.0, 0.0], rtol=0.0, atol=0.05), lift
+
+    # ...so the south end of each is an end, is grown into the court elevation
+    # it is coplanar with, and is clad. This is the slot
+    exterior, interior = wall_faces(faces, params["fall"])
+    clad = cladding_faces(faces, params["fall"])
+    south = (
+        (np.abs(faces.normals[:, 1] - 1.0) < 1e-6)
+        & (np.abs(faces.centres[:, 1] - 7.54) < 1e-6)
+        & np.isin(
+            faces.owner,
+            [i for n, m in named.items() if "alleyback" in n for i in m],
+        )
+    )
+    assert south.any(), "the alleyback walls show no south end"
+    assert not (south & interior).any(), "the south end reads as an interior face"
+    assert exterior[south].all(), "the south end is not grown into the elevation"
+    assert clad[south].all(), "the south end is grown but not clad"
+

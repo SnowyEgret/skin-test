@@ -1145,6 +1145,22 @@ listed — there are no plane coordinates and no part indices in them:
   strays down by area: that leaves the answer tilted a few degrees and dependent on how long the
   walls happen to be. Where the stack ends with no slope anywhere it still raises, naming the
   element. Do not add a fallback that guesses a side.
+  **Where a wall has several lifts, each is weighted by how much of it bears on *this* wall** —
+  `_plan_overlap`, the same measure `group_caps` settles a contested plate with — and **not** by
+  the lift's own underside area, which is what this did until 2026-08-28. The difference is a
+  lift that mostly bears on somebody else. At a building corner a wall runs under its own parapet
+  *and* under the two returns at its ends, and a return is a whole elevation long:
+  `L7-alleyback-W` bears 2.865 m² on `Parapet-Deck9-W`, which is its actual next lift, and
+  0.137 m² on `Parapet-Deck9-N` — but the north parapet's underside is 10.397 m² against the
+  west's 4.406, so the returns outvoted the lift and `rise` returned `(0.604, -0.797)`, a diagonal
+  that is no wall's direction. Per overlap it is `(1.0, 0.008)`, the alley elevation. What the
+  diagonal cost was a facade: the `*-alleyback-W` panels inherit it up their stack, so `facing` on
+  their `y = 7.54` end read −0.797 and classified **interior** rather than as the end it is — an
+  end is grown into the neighbouring elevation and clad, an interior is not, and the cladding left
+  a four-storey slot down the whole south end of that wall (Duncan, 2026-08-28). It also removes
+  the spurious 87 × 250 mm panel on that wall's corner return that NOTES had left open since
+  2026-08-27. The two headhouse bakes are bit-identical across the change; the two deck bakes gain
+  1.021 m² each, and nothing anywhere loses a face.
 
 ## Substrate changes
 

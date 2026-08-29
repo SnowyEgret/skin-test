@@ -73,6 +73,70 @@ luck: it was a face of a **boolean flap**, not of the substrate. Duncan chose to
 `substrate.union` dropping the flap removed the face it stood on, and the cladding's clearance
 went 0.0006 → 74.8901 mm. Nothing was tolerated in the end.
 
+### What Duncan read back off the whole-building cladding (2026-08-28)
+
+Two defects, and they have different homes: one was ours, one is the missing slabs again.
+
+**The four-storey slot was `rise`'s weighting, and it is fixed.** Duncan: *"E76/77/78 is a four
+storey vertical slot which shouldn't be there. It looks like the southern ends of the alleyback-W
+panels are not being covered."* He was right about the faces. The cause is the item this file had
+open as *"The lift that is not a lift"* since 2026-08-27 — `L7-alleyback-W` coming out with
+`rise = (0.604, -0.797)`, a diagonal — but **not** the cause that entry proposed. It is not that
+`_next_lift` accepts the two returns at the wall's ends; it is that `rise` then weighted them by
+the lift's **own underside area** where its docstring says "how much underside the lift bears on
+us with". A return is a whole elevation long, so it outvotes the wall's actual next lift:
+
+    lift                    direction     own underside     bears on this wall
+    Parapet-Deck9-W         (1, 0)           4.406 m2            2.865 m2     <- the real lift
+    Parapet-Deck9-N         (0, -1)         10.397 m2            0.137 m2
+    Parapet-Deck9-S         (0, 1)           4.587 m2            0.160 m2
+    ---------------------------------------------------------------------
+    weighted as coded  -> (0.604, -0.797)      weighted as documented -> (1.0, 0.008)
+
+The four `*-alleyback-W` panels inherit the diagonal up their stack, so `facing` on their `y = 7.54`
+end read −0.797 and classified **interior** rather than as the end it is. An end coplanar with a
+neighbour's facade is grown into the exterior and clad; an interior is not — hence a slot the full
+height of the wall. Weighted by `_plan_overlap` instead, which is the measure `group_caps` already
+settles a contested plate with, and which is what the docstring promised. Measured: the two
+headhouse bakes are **bit-identical**, the two deck bakes gain 1.021 m² each, the whole building
+gains 4.299 m², and **nothing anywhere loses a face**. It also retires the entry below: the
+spurious 87 × 250 mm panel on `L7-alleyback-W`'s corner return is gone, which is the 0.043 m² the
+deck bakes trade for the 1.064 m² end.
+
+The fix `_next_lift` did *not* need is worth recording, because it was the obvious one and it was
+wrong: requiring the opposed pair to be held by **one body** would break a parapet built as an
+inner and an outer leaf, where no single body holds both faces. Weighting is the smaller and truer
+change — the returns really are lifts of that wall, they just carry almost none of it.
+
+**The C-shaped bits are the missing floor slabs, and they are not fixed.** Duncan: *"There are
+c-shaped bits of cladding (selected) which are extraneous. It looks like they are covering interior
+surfaces."* They are wall tops, claimed by `cladding_faces`' "every wall top", at **seven internal
+lift boundaries**:
+
+    z = 1.15  2.55  3.95  5.35  6.75  8.15  9.55     11 to 13 faces each, 40.8 m2 in all
+
+Each is the slab-bearing **rebate** at the foot of the lift above: every lift is inset 228.1 mm on
+its outer face and 248.1 mm at its ends for the 250 mm below its finished floor, and with no slab
+drawn in it that ring is an exposed upward face of the wall below. "Every wall top" reads it as a
+coping, the cladding runs out across it and the lap hangs a 33 mm drip off its edge — a bracket in
+section, wrapping each wall, which is exactly what Duncan selected. Only the three cap-plate levels
+(12.83, 13.10, 14.74) are real copings.
+
+Proven the same way the `z = 6.75` pinch was: a floor plate at `z 6.75…7.00` removes **that level's
+11 faces and 6.539 m² and nothing else**, every other level untouched. So the re-export that closes
+the pinch closes this too, and the two are one substrate defect with two symptoms.
+
+`cladding_faces`' **ledge** rule cannot catch it as written, and the reason is worth knowing. It
+takes both halves — a roof running into the wall, and the wall carrying on above — and *neither*
+reads here. There is no roof, because the slab is the roof and it is absent; and "carrying on
+above" is tested as `triangles.z.max < the element's own highest`, which is false, because the
+rebate ring **is** the top of `L0-courtfacing-N` and the wall carries on as a *different element*.
+
+If Duncan wants the rule anyway rather than the slabs, the shape of it is derivable with nothing
+authored: **an upward face at the level the next lift bears on is a bearing, not a coping** —
+`_next_lift` already computes that level. It is deliberately not built: it reaches every wall in
+every substrate, it does nothing at all once the slabs are in, and one substrate poses it.
+
 ### What the review round found (2026-08-28)
 
 `/code-review high` over the whole-building work. Four findings, all verified against the code
@@ -174,6 +238,8 @@ diagnosis, the fixes and what they moved.
 **One thing was found on the way and is left for Duncan to call**: `L7-alleyback-W` reads its own
 corner return as a facade, and the cladding puts an 87 x 250 mm panel on it at `y = 7.2069`,
 `z 8.065…8.315`. The cause is `_next_lift`, not the skirt — see *"The lift that is not a lift"*.
+(**Closed 2026-08-28**, and by `rise`'s weighting rather than by `_next_lift` — see the section
+at the top of this file. The panel is gone on both deck bakes.)
 It was there before this session and was hidden inside a panel the false cheek pair drew over it;
 removing that panel is what left it standing alone. Nothing else on this substrate is open, and
 all four builds are warning-free.
@@ -442,7 +508,18 @@ Four tests, all four red before the fixes: the courtyard-and-slot pair in `tests
 the ledge and coping on a stepped-parapet fixture there, and two on the deck bake in
 `tests/test_import.py` — the whole run of the skirt, and the corner returns reading as interior.
 
-### The lift that is not a lift (2026-08-27, open)
+### The lift that is not a lift (2026-08-27; CLOSED 2026-08-28)
+
+**Read the entry at the top of this file first.** The diagnosis below is right about the
+symptom and about `_next_lift` accepting three lifts, and **wrong about where the fix goes**:
+the returns really are lifts of that wall, and what was broken was `rise` weighting them by
+their own underside area instead of by how much of each bears on the wall. Requiring the
+opposed pair to be held by one body — the first shape proposed below — would have broken a
+parapet built as two leaves. Kept as written because the measurements in it are still good.
+
+Found while checking what the skirt fix left behind, and **not fixed**: it is a `_next_lift`
+question, which decides every wall's exterior and interior, and Duncan should choose whether to
+spend that.
 
 Found while checking what the skirt fix left behind, and **not fixed**: it is a `_next_lift`
 question, which decides every wall's exterior and interior, and Duncan should choose whether to

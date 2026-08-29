@@ -528,15 +528,31 @@ def rise(faces, members, seen=None) -> np.ndarray:
             if "flat top" not in str(flat):
                 raise
             continue
-        # weighted by how much underside the lift bears on us with, the same
+        # weighted by how much underside the lift bears on **us** with, the same
         # shape of measure `uphill` weights its own faces by. It matters where a
         # panel runs under two parapets: the longer one governs, and two that
         # disagree flatly cancel into a raise rather than a silent coin-toss
-        area = sum(
-            part.area_faces[part.face_normals[:, 2] < -TOL].sum()
-            for part in (faces.parts[i] for i in other)
-        )
-        up += area * direction
+        #
+        # ...and that is `_plan_overlap`, not the lift's own underside area,
+        # which is what this weighted by until 2026-08-28. The difference is a
+        # lift that mostly bears on somebody else: at a building corner a wall
+        # runs under its own parapet *and* under the two returns at its ends,
+        # and a return is a whole elevation long. `L7-alleyback-W` bears
+        # 2.865 m2 on `Parapet-Deck9-W`, which is its actual next lift, and
+        # 0.137 m2 on `Parapet-Deck9-N` — but the north parapet's underside is
+        # 10.397 m2 against the west's 4.406, so the returns outvoted the lift
+        # and `rise` came back (0.604, -0.797): a diagonal that is no wall's
+        # direction. Read per overlap it is (1.0, 0.008), the alley elevation.
+        #
+        # What that cost is a facade: the four `*-alleyback-W` panels inherit
+        # the diagonal up their stack, so `facing` on their y = 7.54 end read
+        # -0.797 and it classified **interior** rather than as the end it is.
+        # An end is grown into the neighbouring elevation and clad; an interior
+        # is not, so the cladding left a four-storey slot down the whole south
+        # end of that wall. Duncan, 2026-08-28: *"a four storey vertical slot
+        # which shouldn't be there... the southern ends of the alleyback-W
+        # panels are not being covered."*
+        up += _plan_overlap(faces.parts, members, other) * direction
 
     length = float(np.linalg.norm(up))
     if length < TOL:
