@@ -17,7 +17,7 @@ from pathlib import Path
 import trimesh
 
 from skinning import pipeline
-from skinning.rules import FACADE, RAINSCREEN, RULES, TOL
+from skinning.rules import FACADE, RAINSCREEN, RULES, TOL, UNSURVEYED
 from skinning.skin import (
     buried, clearance, intersects, parameters, separation, substrate, write_obj,
 )
@@ -89,6 +89,48 @@ def current_substrate() -> list:
     parts = [substrate.polyhedron(*p) for p in (PART_1, PART_2, PART_3, PART_4)]
     for part in parts:
         part.metadata[FACADE] = RAINSCREEN
+    return parts
+
+
+# Walls this rig's bakes cannot yet say the outside of. Duncan, 2026-08-28:
+# *"The L0, L2 and L3-internaljoin-S panels and their adjacent panel ends on
+# that plane must be left uncovered until a full student-house site model is
+# surveyed."* The three panels on that plane are L0, L2 and **L4** — there is no
+# `L3-internaljoin-S` in the export, and L3 is the other wing, nowhere near
+# `y = 10.3` — so the name is read as the third of the three.
+#
+# Named here rather than derived, and rather than in `skinning.rules`, because
+# it is not a fact about the geometry at all: it is a fact about which
+# neighbouring building has been surveyed. This is the reader, which is where
+# every authored fact enters — the same place `FACADE` is stamped, and in the
+# student-house one read of the IFC instead of a list. Nothing about the shape
+# of these panels distinguishes them from a wall whose cap was left off by
+# mistake, which is exactly why `rise` raises on both and why this is authored.
+UNSURVEYED_OBJECTS = ("L0-internaljoin-S", "L2-internaljoin-S", "L4-internaljoin-S")
+
+
+def stamped(parts: list) -> list:
+    """The bake, with the authored facts the OBJ itself cannot carry.
+
+    An OBJ names its objects and says nothing else, so a bake arrives with one
+    `FACADE` for every part and nothing to separate a wall that is skinned from
+    one that is not. The `o` name is the only authored handle there is.
+
+    Matched on `metadata["object"]`, which is that name, and **not** on
+    `metadata["name"]`, which is only the same thing while a group yields a
+    single solid — `from_obj` disambiguates two into `<group>.1` and `<group>.2`,
+    and this very bake does it to the taper layers. A join panel exported as two
+    disjoint solids, which a rebate detached at a lift boundary would do, would
+    then match nothing and be stamped with nothing, silently, and would be clad
+    after all. Found on review, 2026-08-28.
+
+    Silent on a substrate that names none of them, which is every bake but the
+    whole-building one: the tuple is a property of this rig's exports, not a
+    requirement on a substrate.
+    """
+    for part in parts:
+        if part.metadata.get("object") in UNSURVEYED_OBJECTS:
+            part.metadata[UNSURVEYED] = True
     return parts
 
 
@@ -248,6 +290,16 @@ def build(
                 f" {', '.join(str(v) for v in folds)} — surfaces facing opposite"
                 f" ways that this skin does not cover"
             )
+        # a horizontal edge the solve stopped holding horizontal, for the same
+        # reason folds are printed: the ends have to rise by different amounts,
+        # so the surface tears along it rather than staying level
+        torn = skin.metadata.get("torn") or []
+        if torn:
+            print(
+                f"           {len(torn)} horizontal edge(s) torn, between vertex"
+                f" {', '.join(f'{a}-{b}' for a, b in torn)} — the two ends rise by"
+                f" different amounts, so the skin has no such edge"
+            )
         # the verdict. `clearance` is printed above and asserts nothing —
         # demoted 2026-08-25 on Duncan's decision, because it cannot tell a skin
         # that deliberately stops short of a feature from one folded through
@@ -351,9 +403,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) > 1:
-        build(
-            parts=substrate.from_obj(sys.argv[1], metadata={FACADE: RAINSCREEN}),
-            emit_substrate=True,
-        )
+        bake = substrate.from_obj(sys.argv[1], metadata={FACADE: RAINSCREEN})
+        build(parts=stamped(bake), emit_substrate=True)
     else:
         build(emit_substrate=True)

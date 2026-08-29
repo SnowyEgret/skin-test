@@ -273,7 +273,9 @@ def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6, cov
     incident face planes, so displacing it by `t` with `n . t == distance` for
     each incident normal `n` puts it on all the offset planes at once. Those
     equations are hard for vertical and horizontal planes, least-squares for the
-    sloped rest; horizontal edges add hard equations tying endpoint heights.
+    sloped rest; horizontal edges add hard equations tying endpoint heights —
+    except across an edge whose two ends must rise by different amounts, which
+    is a tear rather than an edge and is reported in `metadata["torn"]`.
 
     `covered` is the face mask the caller is actually building a skin over, and
     is consulted at exactly one kind of vertex: one whose planes contradict each
@@ -344,6 +346,14 @@ def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6, cov
     # "at the knife", and `_knife_side`'s per-body gate is what keeps it safe.
     side = _knife_side(mesh, covered, owner)
 
+    # how far each vertex's own level planes require it to rise, read **after**
+    # reconciliation. It is what the level-edge equations below are checked
+    # against: a plane `n . t = move` with `|n_z| = 1` fixes `t_z` outright
+    rises: list[set] = [set() for _ in range(len(mesh.vertices))]
+    # a fold the skin does not reach at all: `_reconcile` read its planes from
+    # the covered faces and there were none, so it is not a point of this skin
+    adrift: set[int] = set()
+
     for vertex in range(len(mesh.vertices)):
         normals, moves = _vertex_planes(mesh, vertex, tol, offsets, instead=side)
         if _opposed(normals) is not None:
@@ -351,6 +361,8 @@ def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6, cov
                 mesh, vertex, tol, normals, moves, covered, offsets
             )
             folds.append(vertex)
+            if not len(normals):
+                adrift.add(vertex)
         if offsets is None:
             moves = np.full(len(normals), distance)
         for normal, move in zip(normals, moves):
@@ -361,13 +373,87 @@ def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6, cov
             # demote a vertical wall running at any other plan angle to soft.
             level = abs(normal[2]) < tol or abs(normal[2]) > 1 - tol
             (hard if level else soft).append((row, move))
+            if abs(normal[2]) > 1 - tol:
+                rises[vertex].add(round(float(np.sign(normal[2]) * move), 12))
+
+    # An edge horizontal in the substrate is held horizontal in the skin —
+    # **unless its two ends are required to rise by different amounts**, in
+    # which case the skin does not have that edge at all and holding it welds
+    # two surfaces that have parted.
+    #
+    # These equations chain: three vertices on two horizontal edges are tied to
+    # one height, which is right, because each edge on its own must stay level.
+    # The chain is what makes the test necessary. Where an upward face and a
+    # downward face lie on **one level with no thickness between them** the two
+    # offset surfaces separate by twice the distance, and a run of horizontal
+    # edges leading from one sheet to the other then demands `+distance` and
+    # `-distance` of a single connected set of heights. Nothing satisfies that,
+    # and a least-squares solve does not say so: it splits the difference and
+    # spreads the error over the whole body. Measured on the whole-building bake
+    # at z = 6.75, where a lift's exposed top ring meets the lift above it
+    # oversailing — 5.15 mm of it on the membrane, 66.5 on the cladding, 96.6 on
+    # the masonry, all reported by `offset_residual` and none of it a surface
+    # anyone placed.
+    #
+    # Refusing the equation is refusing a claim that was never true, so nothing
+    # else has to move: each end is still held by its own level plane, and it is
+    # only the edge between them that is not level any more — which is what a
+    # tear is. The test is on the **rise**, not on the fold, and that is what
+    # keeps it this narrow: two tops at one level, or two soffits, agree and
+    # stay tied however folded the surface around them is. It fires on nothing
+    # in the four substrates that solved before it existed, which are
+    # bit-identical with it in place.
+    #
+    # A level face's plane says how far the sheet it belongs to rises, and an
+    # edge bounding that face inherits it. That is the same question asked of an
+    # edge rather than of its ends, and it is what reaches the case below
+    face_rise = np.full(len(mesh.faces), np.nan)
+    upright = np.abs(mesh.face_normals[:, 2]) > 1 - tol
+    for face in np.flatnonzero(upright):
+        move = distance if offsets is None else float(offsets[face])
+        face_rise[face] = np.sign(mesh.face_normals[face, 2]) * move
 
     sharp = mesh.face_adjacency_angles > tol  # ignore diagonals inside a facet
-    for a, b in mesh.face_adjacency_edges[sharp]:
-        if abs(mesh.vertices[a][2] - mesh.vertices[b][2]) < tol:
-            row = np.zeros(width)
-            row[3 * a + 2], row[3 * b + 2] = 1.0, -1.0
-            hard.append((row, 0.0))
+    level = np.abs(
+        mesh.vertices[mesh.face_adjacency_edges[sharp][:, 0], 2]
+        - mesh.vertices[mesh.face_adjacency_edges[sharp][:, 1], 2]
+    ) < tol
+    edges = mesh.face_adjacency_edges[sharp][level]
+    pairs = mesh.face_adjacency[sharp][level]
+    sheet = [
+        {r for r in face_rise[pair] if not np.isnan(r)} for pair in pairs
+    ]
+    # a vertex the skin does not place, with horizontal edges of two different
+    # sheets meeting at it, is the two sheets' only join. It is a join the skin
+    # does not have — see the rule above; this is the same weld reaching across
+    # a point rather than along an edge. All three earlier bakes carry an adrift
+    # fold with level edges on it, and every one of those has a single sheet on
+    # it — a soffit — so the join is not posed and the edges still tie.
+    #
+    # Every level edge at such a vertex goes, not only the ones that name a
+    # sheet. An edge between two *sloped* faces names none — `face_rise` is nan
+    # off a level face — and would otherwise chain the two sheets through the
+    # very point this exists to separate. No substrate here poses that edge, but
+    # excluding it was an accident of how the sheets are read rather than a
+    # decision about what a branch is. Found on review, 2026-08-28
+    branch = {
+        int(v)
+        for v in adrift
+        if len({r for edge, rs in zip(edges, sheet) if v in edge for r in rs}) > 1
+    }
+
+    torn: list = []
+    for (a, b), rs in zip(edges, sheet):
+        a, b = int(a), int(b)
+        if rises[a] and rises[b] and rises[a].isdisjoint(rises[b]):
+            torn.append((a, b))
+            continue
+        if a in branch or b in branch:
+            torn.append((a, b))
+            continue
+        row = np.zeros(width)
+        row[3 * a + 2], row[3 * b + 2] = 1.0, -1.0
+        hard.append((row, 0.0))
 
     H, h = _stack(hard, width)
     S, s = _stack(soft, width)
@@ -418,6 +504,10 @@ def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6, cov
     # the folds that were reconciled rather than raised on: geometry the solve
     # deliberately stopped constraining, so a caller can say where it did that
     out.metadata["folds"] = folds
+    # ...and the horizontal edges it stopped holding horizontal, reported for
+    # the same reason and never left to the metadata alone: a constraint the
+    # solve dropped must not be silent. See the torn-edge rule above
+    out.metadata["torn"] = torn
     return out
 
 

@@ -1827,3 +1827,168 @@ def test_a_face_with_no_area_states_no_plane():
     # ...and the surface is where it always was: the row is dropped, not
     # traded off against the ones that state a plane
     assert np.allclose(spoiled.vertices[: len(clean.vertices)], clean.vertices, rtol=0.0)
+
+
+def _laid_to_fall(lo, hi, axis=1, low="hi", fall=0.1):
+    """A rectangular part whose top falls toward one side, so it has a facade.
+
+    `wall_faces` reads a wall's sides off its own top — the face under the high
+    edge is the facade — so a synthetic wall has to have one. `axis` is the plan
+    axis the fall runs along and `low` says which end of it the top drops to, so
+    the facade is the *other* end.
+
+    Built from `prism` and then lowered on one side rather than from loops: a
+    hand-wound loop list needs `fix_normals`, and trimesh routes that through
+    networkx, which is not installed here.
+    """
+    part = substrate.prism(lo, hi)
+    verts = part.vertices.copy()
+    middle = (lo[axis] + hi[axis]) / 2.0
+    side = verts[:, axis] > middle if low == "hi" else verts[:, axis] < middle
+    verts[(verts[:, 2] > hi[2] - 1e-9) & side, 2] -= fall
+    return trimesh.Trimesh(vertices=verts, faces=part.faces.copy(), process=False)
+
+
+def test_an_unsurveyed_wall_takes_no_skin_and_stops_the_facade_growing_across():
+    """A wall the substrate cannot yet place has no exterior and no interior.
+
+    Duncan, 2026-08-28, of the student-house's internal join panels: *"The L0,
+    L2 and L3-internaljoin-S panels and their adjacent panel ends on that plane
+    must be left uncovered until a full student-house site model is surveyed."*
+
+    Posed here without a bake, and as the elevation it is: a street front, the
+    join wall continuing that same plane, and a side wall butting the join's far
+    end and presenting its own end on the same plane. All three of Duncan's
+    sentences are one rule and are checked together.
+
+    The join panel is flat-topped with nothing above it, which is how the real
+    ones arrive — a stack of their own, no cap, no slope anywhere in it — so
+    `rise` would raise on it rather than guess a side. `wall_faces` never asks.
+
+    The **growth** is the half that could have been missed. Skipping the panel
+    only stops it seeding; the street front beside it is coplanar with it and
+    joined to it, and would otherwise carry a facade straight across the panel
+    and on into the side wall's end. That is the "adjacent panel ends" sentence,
+    and it costs one clause rather than a rule of its own.
+    """
+    from skinning.rules import (
+        FACADE, RAINSCREEN, UNSURVEYED, cladding_faces, skins, wall_faces,
+    )
+
+    front = _laid_to_fall((0, 0, 0), (4, 0.4, 2))
+    join = substrate.prism((4, 0, 0.25), (8, 0.4, 2))
+    # ...and the side wall faces +x, so its own facade is nowhere near the
+    # join plane and the face it shows there is an end
+    side = _laid_to_fall((8, 0, 0), (8.4, 4, 2), axis=0, low="lo")
+    parts = [front, join, side]
+    for part in parts:
+        part.metadata[FACADE] = RAINSCREEN
+    join.metadata[UNSURVEYED] = True
+    faces = _faces(parts)
+
+    on_plane = (np.abs(faces.normals[:, 1] + 1) < 1e-6) & (
+        np.abs(faces.centres[:, 1]) < 1e-6
+    )
+    mine = faces.owner == 1
+    exterior, interior = wall_faces(faces, FALL)
+
+    # the street front is a facade, and it is the seed the growth starts from
+    assert (on_plane & (faces.owner == 0) & exterior).any()
+    # the join panel has no side of its own...
+    assert mine.any()
+    assert not (mine & (exterior | interior)).any(), "an unsurveyed wall has sides"
+    # ...and nothing on its plane past it is grown into the facade either
+    assert (on_plane & (faces.owner == 2)).any(), "the side wall shows no end here"
+    assert not (on_plane & (faces.owner != 0) & exterior).any()
+
+    # ...and nothing claims the panel by *role* either. That is a second half
+    # rather than a restatement: the cladding takes every wall top, which is how
+    # it reaches a coping, so the rule still selects the panel's top on its own
+    # and it is `skins()` that subtracts it once for every skin at the bind
+    assert (cladding_faces(faces, FALL) & mine).any(), (
+        "the rule no longer claims a wall top, so this asserts nothing"
+    )
+    for spec in skins(PARAMS):
+        assert not spec["keep"](faces)[mine].any(), spec["name"]
+
+
+def _pinched(gap=0.0):
+    """A block, and one above it oversailing its footprint by the same amount.
+
+    With `gap` zero the upper block rests on the lower, so the lower's top is
+    exposed where the upper does not cover it and the upper's underside is
+    exposed where it oversails — two sheets at one level with no thickness
+    between them, meeting at the two points where the footprints cross. Lift the
+    upper clear and there is one sheet at each level and nothing to refuse.
+    """
+    return [
+        substrate.prism((0, 0, 0), (2, 2, 1)),
+        substrate.prism((1, 1, 1 + gap), (3, 3, 2 + gap)),
+    ]
+
+
+def test_a_horizontal_edge_between_two_sheets_that_part_is_not_held_level():
+    """Two level faces at one height with no thickness between them.
+
+    A lower block's top is exposed where the block above does not cover it, and
+    the block above oversails into thin air, so its underside is exposed at the
+    very same level. The two sheets meet at a point, and the run of horizontal
+    edges leading from one to the other asks a single connected set of heights
+    to move `+distance` and `-distance` at once.
+
+    Nothing satisfies that, and a least-squares solve does not say so — it splits
+    the difference and spreads the error over the whole body, which is what the
+    whole-building bake did at `z = 6.75`: 5.15 mm of residual on the membrane
+    and 96.6 on the masonry. The tie is refused instead, the two sheets part by
+    twice the distance the way they should, and the edges are reported rather
+    than left silent.
+
+    The skin has to dress **both** blocks for this to be the case in hand, and
+    that is not a contrivance — it is what the cladding does on an elevation
+    built in lifts. A skin dressing only the lower one leaves the upper wholly
+    on the far side of the knife, and `_knife_side` settles it before the solve
+    ever sees a contradiction.
+    """
+    parts = _pinched()
+    body = substrate.union(parts)
+    skin = skin_over(parts, D, keep=lambda f: f.normals[:, 2] > 0.9)
+
+    assert skin.metadata["offset_residual"] < 1e-9
+    assert len(skin.metadata["folds"]) == 2, "the pinch is not where it was"
+    assert len(skin.metadata["torn"]) == 4
+    for a, b in skin.metadata["torn"]:
+        assert abs(body.vertices[a][2] - body.vertices[b][2]) < 1e-9
+
+    # the two sheets parted by 2 x D across the pinch, which is the whole of
+    # what the tie forbade. Read off `planar_offset` rather than the skin,
+    # because it keeps every vertex of the body in the body's own order where
+    # `skin_over` emits only the faces it kept
+    faces = _faces(parts, body)
+    whole = planar_offset(
+        body, D, covered=body.face_normals[:, 2] > 0.9, owner=faces.owner
+    )
+
+    def moved(point):
+        which = int(np.argmin(np.linalg.norm(body.vertices - np.array(point), axis=1)))
+        return whole.vertices[which][2]
+
+    assert np.isclose(moved((2, 1, 1)), 1 + D)      # the pinch, on the covered top
+    assert np.isclose(moved((3, 1, 1)), 1 - D)      # the soffit oversailing beside it
+    assert np.isclose(skin.vertices[:, 2].max(), 2 + D)
+    lower = skin.triangles[skin.triangles[:, :, 2].mean(axis=1) < 1.5]
+    assert np.allclose(lower[:, :, 2], 1 + D)
+
+
+def test_two_sheets_that_agree_are_still_tied():
+    """...and the same substrate with the pinch taken out refuses nothing.
+
+    The test is on the **rise**, not on the fold and not on the pinch: two tops
+    at one level agree, so the edges between them stay tied however the surface
+    around them is arranged. This is what keeps the rule off every substrate
+    that solved before it existed, all four of which are bit-identical with it.
+    """
+    skin = skin_over(_pinched(gap=1.0), D, keep=lambda f: f.normals[:, 2] > 0.9)
+
+    assert skin.metadata["torn"] == []
+    assert skin.metadata["offset_residual"] < 1e-9
+    assert np.isclose(skin.area, 2.2 * 2.2 * 2, atol=1e-9)

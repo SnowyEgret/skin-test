@@ -493,11 +493,16 @@ def clean(
         )
     # what made the mesh is worth carrying — the offset's distance, its residual
     # — but nothing keyed on an index is: `offset._plane_ids` holds an id per
-    # face and `folds` a list of vertex indices, and both were rebuilt here.
-    # Dropped rather than remapped, so a reader gets nothing instead of the
-    # wrong vertex; `build.py` prints folds off the raw skin
+    # face, `folds` a list of vertex indices and `torn` a list of vertex index
+    # *pairs*, and all three indexings were rebuilt here. Dropped rather than
+    # remapped, so a reader gets nothing instead of the wrong vertex;
+    # `build.py` prints all three off the raw skin
     out.metadata.update(
-        {k: v for k, v in mesh.metadata.items() if k not in ("plane_ids", "folds")}
+        {
+            k: v
+            for k, v in mesh.metadata.items()
+            if k not in ("plane_ids", "folds", "torn")
+        }
     )
     out.metadata["overlap_removed"] = dissolved
     out.metadata["vertices_dissolved"] = thinned

@@ -12,6 +12,7 @@ This file covers commands and structure; `NOTES.md` covers why the code is the w
 ```bash
 python3 build.py              # headless build: writes build/*.obj + build/manifest.json
 python3 build.py <bake.obj>   # ...over a baked substrate instead of the transcribed rig
+                              #    (`build.stamped` adds the authored facts an OBJ cannot carry)
 pytest -q                     # the suite; `python3 -m pytest` works too
 pytest -q -k lap              # single test by name
 pip install -e .              # make `skinning` importable elsewhere — needs a modern pip
@@ -245,6 +246,32 @@ Key invariants, each of which spans several files:
   `metadata["folds"]` and printed by `build.py`, because a constraint the solve deliberately
   dropped must not be silent. Consequence, accepted by Duncan 2026-08-16: a degenerate sliver
   **no skin covers** is now tolerated rather than refused.
+- **A horizontal edge whose two ends must rise by different amounts is not held level.** The
+  solve keeps a substrate-horizontal edge horizontal by tying its endpoints' heights, and those
+  ties **chain**: three vertices on two horizontal edges come out at one height, which is right,
+  because each edge on its own must stay level. The chain is what needed the rule. Where an
+  upward face and a downward face lie on **one level with no thickness between them**, the two
+  offset surfaces part by twice the distance, and a run of horizontal edges leading from one
+  sheet to the other then demands `+distance` and `-distance` of a single connected set of
+  heights. Nothing satisfies that, and least-squares does not report it — it splits the
+  difference and spreads the error over the whole body. Measured on the whole-building bake at
+  `z = 6.75`, where the L4 lift's exposed top ring meets the L6 lift oversailing it: **5.15 mm**
+  of residual on the membrane, 66.5 on the cladding, 96.6 on the masonry, and the membrane then
+  crashed in `_tiling` naming the symptom rather than the cause. Refusing the tie refuses a claim
+  that was never true, so nothing else moves — each end is still held by its own level plane, and
+  it is the edge between them that is no longer level, which is what a tear *is*. The test is on
+  the **rise**, not on the fold: two tops at one level agree and stay tied however folded the
+  surface around them is, which is why all four substrates that solved before it are
+  bit-identical with it in place. Reported in `metadata["torn"]` and printed, for the same reason
+  folds are.
+  The one shape the rise cannot see is a vertex the skin does not reach at all — `_reconcile`
+  reads a fold's planes from the covered faces and there may be none — which demands nothing and
+  so conducts the chain straight through. So a vertex that is **adrift** and has horizontal edges
+  of two different sheets meeting at it is the two sheets' only join, and it is not one the skin
+  has: those edges go too. Both pinch points at `z = 6.75` are that vertex for the membrane.
+  All three earlier bakes carry an adrift fold with level edges on it — `v9`, `v33`/`v97` and
+  `v49`, each at a roof layer's end knifing into a parapet — and every one of those has a
+  **single** sheet on it, a soffit, so the join is not posed and the edges still tie.
 - **A tiling the offset turned inside out is tiled again.** `planar_offset` moves vertices and
   keeps the union's triangulation, and manifold3d tiles a face with a hole cut in it by fanning
   across the hole. A hole corner that starts closer to one of those diagonals than `distance`
@@ -1073,6 +1100,23 @@ listed — there are no plane coordinates and no part indices in them:
   substrate reader stamps `part.metadata["facade"]`; in the student-house that is one read of the
   IFC material. `check_facades` raises if any facade is claimed by no declared system, so an
   unstamped part cannot silently vanish from every skin.
+- **a wall the substrate cannot yet place takes no skin at all** — `UNSURVEYED`, stamped on the
+  part, and the stronger version of the same argument as `FACADE`: where a material is a design
+  decision no shape implies, this is a fact about a *neighbouring building that is not in the
+  model*. Duncan, 2026-08-28, of the student-house's internal join panels: *"must be left
+  uncovered until a full student-house site model is surveyed."* Three consequences, and they are
+  one rule in three places. `wall_faces` gives such a wall neither an exterior nor an interior,
+  so `rise` is never asked — which matters, because those panels are a stack of their own with no
+  cap and no slope anywhere in it, and `rise` **raises** on exactly that. It is not a growth
+  candidate either, so a neighbour's elevation coplanar with it stops at it instead of carrying a
+  facade across, and the returns beyond it stay ends: that is *"and their adjacent panel ends on
+  that plane"*, derived rather than listed, and measured at 0 faces claimed on `y = 10.3` by any
+  skin. And `skins()` subtracts it from every `keep` and `lap` at the bind, because a wall is
+  claimed by **role** as well as by side — the cladding takes every wall top, and the top of an
+  internal join panel is a slab bearing rather than a coping.
+  Do **not** turn `rise`'s raise into a silent skip instead. A wall someone forgot to cap is the
+  same shape from inside the geometry and would lose its cladding without a word; the raise is
+  the geometry saying it does not know, and the stamp is the authored answer to it.
 - **a masonry facade is carved out of the rainscreen set by the cornice.** `masonry_faces` claims
   the face a top cornice overhangs, and `cladding_faces` subtracts that same mask, so the
   two partition the facade set rather than overlapping — the opposite of the coping, where the
@@ -1094,7 +1138,7 @@ listed — there are no plane coordinates and no part indices in them:
   way up — panel, parapet, and only the cap plate laid to fall — so the walk is recursive, not
   one step. `_next_lift` decides what counts as the next lift, and takes three conditions: it
   rests on this element's top, it overlaps it in plan, and it is **flush on both faces across
-  this element's thickness**. Both faces, not one: a roof deck bears on every wall it lands on
+  this element's thickness**.  Both faces, not one: a roof deck bears on every wall it lands on
   and is flush with none, while a neighbour's cap plate runs over a wall's *end* and is flush
   with the building's outer plane there — one face of two. Requiring the opposed pair separates
   them exactly, with no threshold to author. Do not relax it to a single plane and weight the
@@ -1114,6 +1158,23 @@ through `substrate.from_obj(path, metadata=...)` instead — one OBJ export out 
 per `o` group, snapped to 1 µm on the way in. Blender cannot be the reader: a `.blend` needs
 `bpy`, and geometry here is headless. The `PART_N` parts stay regardless — they are the synthetic
 worst case the tests run on, not a stand-in for a real substrate.
+
+**The whole student-house arrived 2026-08-28** —
+`whole-building-walls-parapets-caps-cornices-clt-insulation.obj`, 79 objects in 92 bodies: nine
+wall lifts in two wings, three roofs, both scuppers, three corniced walls and the headhouse. It
+is the fifth substrate and the one the repo publishes on. **Its floor slabs are absent**, which
+is not cosmetic: every lift has a 250 mm rebate at its foot where a slab would bear, so a slab's
+absence leaves that rebate ring exposed as an upward face at every lift boundary. At `z = 6.75`
+alone that ring meets a soffit — the L6 lift oversails where the building steps off the internal
+join line at `y = 10.3` onto the court line at `y = 11.3` — and the two sheets pinch at two
+points. See the torn-edge invariant above for what that cost.
+
+`build.stamped` is where a bake gets the authored facts an OBJ cannot carry. An OBJ names its
+objects and says nothing else, so `from_obj`'s `metadata` gives every part one `FACADE` and there
+is nothing to separate a wall that is skinned from one that is not; `metadata["name"]` is the
+only authored handle there is. It lives in the **rig** and not in `skinning.rules` because it is
+not a fact about geometry at all — in the student-house it is one read of the IFC instead of a
+list of names.
 
 `from_obj` parses the OBJ itself rather than calling `trimesh.load`, which in trimesh 5.0.0
 silently merges every `o` group into one mesh named after the first. It raises, naming the object,

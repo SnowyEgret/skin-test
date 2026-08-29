@@ -73,6 +73,95 @@ luck: it was a face of a **boolean flap**, not of the substrate. Duncan chose to
 `substrate.union` dropping the flap removed the face it stood on, and the cladding's clearance
 went 0.0006 → 74.8901 mm. Nothing was tolerated in the end.
 
+### What the review round found (2026-08-28)
+
+`/code-review high` over the whole-building work. Four findings, all verified against the code
+before acting, all four real, and none of them moved a vertex — the four earlier substrates stayed
+byte-identical and the whole-building report is unchanged to the figure. Two are the same mistake
+in two places: **an index is not a name, and a name is not an identity.**
+
+- **`torn` rode through `clean` with stale indices.** `clean` strips `plane_ids` and `folds`
+  precisely because cleaning rebuilds both indexings, and `torn` is a list of vertex index *pairs*
+  — the same kind of thing — and was not in the tuple. It matters more than `folds` does, because
+  `pipeline` hands back the **cleaned** mesh and the student-house supplies its own reporting off
+  it, so a caller would have got pairs indexing the pre-clean numbering. `build.py` was already
+  reading it off the raw skin, which is why nothing here showed it. Stripped now, and the test
+  that states the property covers all three keys.
+- **`build.stamped` matched `metadata["name"]`, which is not the `o` name when a group splits.**
+  `from_obj` writes `<group>.1`, `<group>.2` when one `o` group yields several solids — this bake
+  does it to the taper layers — and only `metadata["object"]` is unconditionally the group. A join
+  panel exported as two disjoint solids, which a rebate detached at a lift boundary would produce,
+  would have matched nothing, been stamped with nothing, **silently**, and been clad after all.
+  Matched on `object` now. The docstring had the same slip written out in prose.
+- **The `UNSURVEYED` check read only the element's first body.** `faces.roles[members[0]]` on the
+  line above is safe because a role is computed per element and shared; a metadata tag is not, and
+  `elements_of` orders members by part index. Asked of every body now.
+- **The adrift-vertex cut skipped an edge that names no sheet.** `face_rise` is `nan` off a level
+  face, so a horizontal edge between two *sloped* faces gives an empty sheet set and fell through
+  the `len(rs) == 1` guard — chaining the two sheets through the very point the rule separates.
+  No substrate poses that edge; excluding it was an accident of how the sheets are read rather
+  than a decision, and dropping the clause makes the code say what the comment already said.
+
+**`build.py` split into three on 2026-08-28 and the result packaged the same day**, so that the
+student-house can import the rules rather than copy them. Everything importable is now the
+`skinning` package — `skinning.rules`, `skinning.pipeline` over `skinning.skin` — and `build.py`
+and `audit.py` stay outside it at the root as this rig. `pip install -e .`, or install from the git
+URL. No geometry moved through either step: the report and every OBJ are byte-identical on all four
+substrates. See *"The module split: rules, pipeline, rig"* and *"Packaging it"*.
+
+**The reveal landed on 2026-08-27 — a second authored allowance, `reveal: 0.018`.** A cladding
+skin stands `distance` off the wall it clads and `reveal` off a substrate feature it dies against.
+The same day the skirt over a cornice was told to run to the cornice's bottom. All four substrates
+build warning-free and the suite is 138 → 148.
+
+    Membrane   offset   8 mm | residual 9.89e-17 | clearance  7.3149 mm | 215 -> 163 triangles
+    Cladding   offset  85 mm | residual 9.44e-16 | clearance 17.9999 mm | 199 -> 119 triangles
+    Masonry    offset 150 mm | residual 1.69e-15 | clearance  18.0000 mm |  12 ->   2 triangles
+
+Separations are 10.000 / 55.973 / **18.000** mm. That last one is the design and not a collision:
+the cladding's return wraps down the cornice and stops flush with its underside, the masonry's top
+stops `reveal` under the same soffit, and the two look straight at each other across the joint. **Slope absorption is bit-identical to before on
+every substrate** — 0.685/7.279/7.400 here, 0.158/1.717/2.969 on unit8, 0.158/1.717 on the
+headhouse, 0.655/6.963/12.287 on the three-part deck — which is the check that says the reveal
+moves the planes it names and disturbs nothing else in the solve. See *"The reveal, and the sill
+that is a roof"* below for what it cost to get there.
+
+The cladding's clearance is now **the authored reveal**, and will be on any substrate with a lined
+opening: the lining stands 18 mm off its cheek by construction, so `distance` is no longer the
+floor. That is the fourth reason `clearance` is printed rather than asserted, and the first one
+that is a design intent rather than an artefact.
+
+
+**The fourth substrate arrived on 2026-08-26 and now builds, warning-free.**
+`deck9-parapets-caps-cornices-clt-insulation-unit7-walls-headhouse.obj` — 35 objects, the
+student-house deck 9 with its L7 walls under it, the same headhouse on top, **two** scuppers, and
+a second corniced wall. Duncan: *"The geometry is familiar, I am hoping this will skin without
+incident. A real test for our program."* It was not without incident: **seven** defects, all in
+this module, all fixed and pinned. See *"The deck 9 bake: what it found"* below.
+
+As it stood **that day** — the current figures are the block above, and the cladding and masonry
+readings have since moved with the reveal:
+
+    Membrane   offset   8 mm | residual 9.89e-17 | clearance  7.3149 mm | 215 -> 163 triangles
+    Cladding   offset  85 mm | residual 1.10e-15 | clearance 74.8901 mm | 215 -> 126 triangles
+    Masonry    offset 150 mm | residual 1.78e-15 | clearance 150.0000 mm |  12 ->   2 triangles
+
+No self-crossing, nothing crossing into the substrate, nothing buried, no pair of skins crossing.
+The three earlier substrates were unchanged to the figure — 173172 mm², 3304 mm², 145 → 115,
+142 → 86, clearance 7.8808 and 74.8903, separation 66.889 — and the suite was 131 → 138.
+
+**`Headhouse-N`'s nib needs no re-modelling after all.** Duncan chose on 2026-08-26 to cut it and
+re-export rather than build a vertex split, and that is now moot: the fold at `v53` was the
+membrane covering the inside of the headhouse, and once the deck under the headhouse is read as
+the floor it is, the membrane never goes near that pinch. The substrate builds as exported. The
+vertex split stays undone and unqueued — see *"The open question"* for what it would be, and note
+that nothing now poses it.
+
+**The 771 mm² triangle buried in the cap plate is gone too**, and for a reason rather than by
+luck: it was a face of a **boolean flap**, not of the substrate. Duncan chose to leave it warned;
+`substrate.union` dropping the flap removed the face it stood on, and the cladding's clearance
+went 0.0006 → 74.8901 mm. Nothing was tolerated in the end.
+
 ### Open, and first thing tomorrow
 
 **The reveal is done and nothing about it is open** — see the entry below. The one thing it

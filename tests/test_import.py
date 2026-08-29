@@ -323,6 +323,7 @@ REPO = Path(__file__).resolve().parent.parent
 BAKE = REPO / "headhouse-walls-parapets-caps-clt-insulation.obj"
 LIVE = REPO / "unit8-parapets-caps-clt-insulation-headhouse-extended-cornices.obj"
 DECK = REPO / "deck9-parapets-caps-cornices-clt-insulation-unit7-walls-headhouse.obj"
+WHOLE = REPO / "whole-building-walls-parapets-caps-cornices-clt-insulation.obj"
 
 
 def test_the_baked_headhouse_reads_and_skins():
@@ -1583,3 +1584,84 @@ def test_one_plane_cannot_be_both_a_joint_and_an_arris(monkeypatch):
     )
     with pytest.raises(ValueError, match="asked for .* and .* at once"):
         pipeline._skin_from(spec, parts)
+
+
+def test_the_whole_building_reads_and_skins():
+    """The fifth substrate: the whole student-house, and the one this rig ships on.
+
+    Nine wall lifts in two wings, three roofs, both scuppers, three corniced
+    walls and the headhouse — 79 objects. Two conditions are new, and neither is
+    a shape any earlier bake posed.
+
+    The **internal join** walls, which the site model cannot yet place: they are
+    a stack of their own with no cap and no slope anywhere in it, so `rise`
+    raises on them rather than guessing a side, and `build.stamped` answers that
+    raise by authoring `UNSURVEYED`. Pinned here: nothing on the `y = 10.3`
+    plane is claimed by any skin — not the panels' own faces and not the returns
+    the streetfront and courtfacing walls present on it, which fall out of the
+    same rule because there is no exterior seed on that plane to grow from.
+
+    And the **level at z = 6.75**, where the L4 lift's exposed top ring meets the
+    L6 lift oversailing it. The two sheets pinch at two points, both on the
+    internal join plane, and the horizontal edges running from one to the other
+    demanded `+distance` and `-distance` of a single chain of heights: 5.15 mm of
+    residual on the membrane, 66.5 on the cladding, 96.6 on the masonry, all of
+    it error the solve spread over the whole building. See `planar_offset`'s
+    torn-edge rule; what is pinned here is that all three residuals are clean.
+    """
+    from skinning.pipeline import _skin_from
+    from skinning.rules import (
+        FACADE, RAINSCREEN, UNSURVEYED, classifier, group_caps, group_cornices,
+        skins, wall_faces,
+    )
+    from skinning.skin import parameters, substrate
+    from skinning.skin.measure import buried, intersects
+    from skinning.skin.offset import Faces, _owner
+
+    import build
+
+    parts = build.stamped(substrate.from_obj(WHOLE, metadata={FACADE: RAINSCREEN}))
+    assert len(parts) == 92          # 79 objects, the tapers splitting into six
+    stamp = [p.metadata["name"] for p in parts if p.metadata.get(UNSURVEYED)]
+    assert stamp == ["L0-internaljoin-S", "L2-internaljoin-S", "L4-internaljoin-S"]
+
+    params = parameters.load_validated()
+    group_cornices(parts)
+    group_caps(parts, classifier(params))
+    body = substrate.union(parts)
+    assert body.body_count == 1, "a boolean flap survived the union"
+    faces = Faces(body, parts, _owner(body, parts), classifier(params))
+
+    # the internal join plane carries no exterior and no interior, so the ends
+    # the neighbouring panels present on it are ends and stay ends
+    exterior, interior = wall_faces(faces, params["fall"])
+    on_join = (np.abs(faces.normals[:, 1]) > 1 - 1e-6) & (
+        np.abs(faces.centres[:, 1] - 10.3) < 1e-6
+    )
+    assert on_join.sum() == 34, "the y = 10.3 plane is not where it was"
+    assert not (on_join & (exterior | interior)).any()
+
+    built = {}
+    for spec in skins(params):
+        skin = _skin_from(spec, parts)
+        built[spec["name"]] = skin
+        assert not (spec["keep"](faces) & on_join).any(), (
+            f"{spec['name']} covers a face on the unsurveyed plane"
+        )
+        assert not intersects(skin, skin), f"{spec['name']} folds through itself"
+        assert not buried(parts, skin), f"{spec['name']} has a sample inside a part"
+        # the level chain at z = 6.75 is what this would fail on: it pinned the
+        # residual in millimetres, five orders above anything else here
+        assert skin.metadata["offset_residual"] < 1e-9, spec["name"]
+    assert set(built) == {"Membrane", "Cladding", "Masonry"}
+
+    # ...and the tear that made it solvable is reported rather than silent, at
+    # the two points where the two sheets meet
+    for name in ("Membrane", "Masonry"):
+        torn = built[name].metadata["torn"]
+        assert len(torn) == 8, name
+        pinch = {v for edge in torn for v in edge if sum(v in e for e in torn) == 4}
+        assert {tuple(np.round(body.vertices[v], 4)) for v in pinch} == {
+            (0.2281, 10.3, 6.75), (10.8519, 10.3, 6.75)
+        }
+

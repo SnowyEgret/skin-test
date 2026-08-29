@@ -70,6 +70,22 @@ CORNICE = "cornice"  # stamped by group_cornices; the cladding stops below one
 TOP_CORNICE = "top_cornice"
 RAINSCREEN = "rainscreen"
 BRICK = "brick"
+# A wall the substrate cannot yet say the outside of, and which therefore takes
+# no skin at all. Authored, like `FACADE`, and for the stronger version of the
+# same reason: where a material is a design decision no shape implies, this is a
+# fact about a *neighbouring* building that is not in the model. The
+# student-house's internal join walls are the case in hand — Duncan, 2026-08-28:
+# *"must be left uncovered until a full student-house site model is surveyed."*
+#
+# It is deliberately not a `FACADE` value. A facade value says what clads a
+# facade; this says the wall has no facade to clad — `wall_faces` cannot give it
+# an exterior or an interior, and `rise` cannot even be asked, because such a
+# wall is commonly a stack of its own with no cap and no slope anywhere in it.
+# That raise is the geometry saying it does not know, and this is the answer to
+# it. Do not turn the raise itself into a silent skip: a wall someone forgot to
+# cap looks identical from inside the geometry, and would then lose its cladding
+# without a word.
+UNSURVEYED = "unsurveyed"
 
 CLADDING_SYSTEMS = (RAINSCREEN,)  # every system that claims facades; see check_facades
 
@@ -592,6 +608,21 @@ def wall_faces(faces, fall):
         # `Faces.roles` moved to the element and left the filter saying nothing.
         if faces.roles[members[0]] != substrate.WALL:
             continue
+        # ...and an unsurveyed wall is neither, because nothing is known to be
+        # on either side of it. It contributes no seed, so its own faces stay
+        # bare **and so do the ends its neighbours present on its plane**: the
+        # growth below is what carries a facade round a corner, and with nothing
+        # to grow from, a return coplanar with an unsurveyed wall is an end and
+        # stays one. That is the whole of Duncan's "and their adjacent panel
+        # ends on that plane", derived rather than listed. `rise` is not asked
+        # either, which is the point — see `UNSURVEYED`
+        # asked of **every** body, where `roles` above is safe to read off the
+        # first: a role is computed per element and shared, but this tag rides
+        # on the part, and `elements_of` orders members by part index rather
+        # than by anything meaningful. A wall whose outer leaf is stamped and
+        # whose inner leaf is not would otherwise be classified in full
+        if any(faces.parts[i].metadata.get(UNSURVEYED) for i in members):
+            continue
         # and the direction likewise: the cap carries the slope, so reading the
         # bodies separately would find nothing but flat tops on the leaves
         facing = faces.normals[:, :2] @ rise(faces, members)
@@ -599,7 +630,20 @@ def wall_faces(faces, fall):
         exterior |= mine & (facing > fall)
         interior |= mine & (facing < -fall)
 
-    ends = vertical & faces.of_role(substrate.WALL) & ~exterior & ~interior
+    # ...and an unsurveyed wall is not somewhere a facade may grow *to* either.
+    # Skipping it above only stops it seeding; a neighbour whose own facade is
+    # coplanar with it and joined to it — the elevation running on into the
+    # party wall — would otherwise carry the growth straight across, and the
+    # panel would be clad after all. The whole-building bake does not pose it,
+    # its join plane carrying nothing but ends, but "left uncovered" is not a
+    # claim about which neighbours happen to be coplanar
+    ends = (
+        vertical
+        & faces.of_role(substrate.WALL)
+        & ~exterior
+        & ~interior
+        & ~faces.tagged(UNSURVEYED, True)
+    )
     outside = _grow_coplanar(faces, exterior, ends)
     return outside, _grow_coplanar(faces, interior, ends & ~outside)
 
@@ -1579,6 +1623,31 @@ def classifier(params: dict):
     return partial(substrate.classify, **params["classify"])
 
 
+def _surveyed(predicate, fall):
+    """`predicate` bound to `fall`, and never selecting an unsurveyed wall.
+
+    Applied once here, to every skin's `keep` and `lap` alike, rather than
+    written into each rule set: "no skin covers a wall the substrate cannot
+    place" is one sentence about the substrate, not a different sentence per
+    skin, and a rule set that had to remember it would eventually forget.
+
+    `wall_faces` already keeps such a wall out of the exterior and interior
+    sets, which is what leaves its facade and its neighbours' returns bare. This
+    is the rest of it: a wall is claimed by role as well as by side — the
+    cladding takes *every* wall top — and the top of an internal join panel is a
+    slab bearing rather than a coping. Measured on the whole-building bake at 6
+    faces, two on each of the three panels, and they survive into the union at
+    all only because the floor slabs are absent: at every other lift the panel
+    above sits straight on the one below and the top is buried.
+    """
+    ready = partial(predicate, fall=fall)
+
+    def keep(faces):
+        return ready(faces) & ~faces.tagged(UNSURVEYED, True)
+
+    return keep
+
+
 def skins(params: dict | None = None) -> tuple[dict, ...]:
     """The skin specs: the authored numbers joined to `RULES` by name.
 
@@ -1632,7 +1701,7 @@ def skins(params: dict | None = None) -> tuple[dict, ...]:
     # into `skin_offsets`, which composes the two: a reveal is about the
     # substrate and needs no sibling at all
     bound = {
-        spec["name"]: (partial(RULES[spec["name"]]["keep"], fall=fall), spec["distance"])
+        spec["name"]: (_surveyed(RULES[spec["name"]]["keep"], fall), spec["distance"])
         for spec in params["skins"]
     }
 
@@ -1671,7 +1740,7 @@ def skins(params: dict | None = None) -> tuple[dict, ...]:
                 ),
                 "lap": None
                 if rules["lap"] is None
-                else partial(rules["lap"], fall=fall),
+                else _surveyed(rules["lap"], fall),
                 "classify": classify,
             }
         )

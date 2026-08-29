@@ -334,19 +334,24 @@ def test_dissolve_leaves_a_solid_alone():
 
 
 def test_metadata_keyed_on_an_index_does_not_ride_along():
-    """`folds` is a list of vertex indices and `plane_ids` one id per face, and
-    cleaning rebuilds both indexings. Carried over they name the wrong geometry:
-    on the live bake the raw skin's fold vertex 33 and the cleaned mesh's are
-    2.6 m apart. Dropped rather than remapped, so a reader gets nothing rather
-    than something wrong."""
+    """`folds` is a list of vertex indices, `torn` a list of vertex index pairs
+    and `plane_ids` one id per face, and cleaning rebuilds every one of those
+    indexings. Carried over they name the wrong geometry: on the live bake the
+    raw skin's fold vertex 33 and the cleaned mesh's are 2.6 m apart. Dropped
+    rather than remapped, so a reader gets nothing rather than something wrong.
+
+    `torn` is the one that matters most to a caller other than this rig, because
+    `pipeline` hands back the cleaned mesh and the student-house supplies its own
+    reporting off it. Found on review, 2026-08-28."""
     quad = _mesh(_sheet([(0, 0, 0), (2, 0, 0), (2, 2, 0), (0, 2, 0)]))
     quad.metadata.update(
-        {"offset_distance": 0.008, "folds": [3], "plane_ids": "cache"}
+        {"offset_distance": 0.008, "folds": [3], "torn": [(1, 2)], "plane_ids": "cache"}
     )
     out = clean(quad)
 
     assert out.metadata["offset_distance"] == 0.008
-    assert "folds" not in out.metadata and "plane_ids" not in out.metadata
+    for keyed in ("folds", "torn", "plane_ids"):
+        assert keyed not in out.metadata, keyed
 
 
 def test_an_empty_mesh_cleans_to_an_empty_mesh():
