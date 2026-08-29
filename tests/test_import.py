@@ -1665,6 +1665,7 @@ def test_the_whole_building_reads_and_skins():
             (0.2281, 10.3, 6.75), (10.8519, 10.3, 6.75)
         }
 
+
 def test_a_wall_takes_the_direction_of_the_lift_that_bears_on_it():
     """A return at a wall's end is a lift of it, and carries almost none of it.
 
@@ -1718,3 +1719,87 @@ def test_a_wall_takes_the_direction_of_the_lift_that_bears_on_it():
     assert exterior[south].all(), "the south end is not grown into the elevation"
     assert clad[south].all(), "the south end is grown but not clad"
 
+
+FLOORS = REPO / "whole-building-walls-parapets-caps-cornices-clt-insulation-floors.obj"
+
+
+def test_the_floor_slabs_bury_the_bearing_ledges_and_join_no_wall():
+    """The same building with its floor slabs in — Duncan, 2026-08-28.
+
+    The slabs settle two of the three things the substrate without them posed,
+    and pose one of their own that this pins.
+
+    **The bearing ledges go.** Every lift is inset 228.1 mm on its outer face
+    and 248.1 mm at its ends for the 250 mm below its finished floor, and with
+    no slab in that rebate the ring is an exposed upward face of the wall below
+    — which "every wall top" reads as a coping, so the cladding ran out across
+    it and hung a 33 mm drip off the edge. Seven internal levels, 40.768 m² of
+    it. With the slabs the faces are not there to claim.
+
+    **The pinch at `z = 6.75` goes with them**, which is the same fact: the
+    exposed ledge was one of the two sheets that met at a point, so there is no
+    weld left for the torn-edge rule to refuse and it fires nowhere.
+
+    **And a slab is not a cap plate.** `_next_lift` reads "flush on both faces
+    across this element's thickness", and a wall's two **ends** are an opposed
+    pair as well: `L0-courtfacing-W` is 420 mm thick and 3.18 m long, and
+    `L2.Floor` runs out to both of its ends. Taken for a lift, `group_caps`
+    joined it as that wall's cap plate, the merged element classified `roof` on
+    the slab's area, and `wall_faces` skipped a wall that is not a wall any
+    more — 16.087 m² of court elevation left bare over two storeys.
+    """
+    from skinning.pipeline import _skin_from, prepare
+    from skinning.rules import (
+        FACADE, RAINSCREEN, _opening, _upward, cladding_faces, skins, wall_faces,
+    )
+    from skinning.skin import parameters, substrate
+    from skinning.skin.measure import buried, intersects
+
+    import build
+
+    parts = build.stamped(substrate.from_obj(FLOORS, metadata={FACADE: RAINSCREEN}))
+    assert len(parts) == 101                        # the 92 bodies plus nine slabs
+    params = parameters.load_validated()
+    faces = prepare(parts, params)
+    slab = np.array(
+        [".Floor" in faces.parts[o].metadata["object"] for o in faces.owner]
+    )
+    assert slab.any()
+
+    # a slab joins no wall: every element holding one holds nothing else
+    for members in faces.elements:
+        names = [faces.parts[i].metadata["name"] for i in members]
+        if any(".Floor" in n for n in names):
+            assert len(members) == 1, f"a floor slab was joined to {names}"
+
+    # ...and every wall still has a side. `L0-` and `L2-courtfacing-W` are the
+    # two that lost theirs, so they are the ones worth naming
+    exterior, _ = wall_faces(faces, params["fall"])
+    for wall in ("L0-courtfacing-W", "L2-courtfacing-W"):
+        mine = np.array(
+            [faces.parts[o].metadata["object"] == wall for o in faces.owner]
+        )
+        assert (exterior & mine).any(), f"{wall} has no facade"
+
+    # no wall top below the first cap plate is claimed by anything: the bearing
+    # ledges are buried, and the three coping levels are all that is left
+    tops = _upward(faces.normals) & faces.of_role(substrate.WALL)
+    claimed = tops & cladding_faces(faces, params["fall"])
+    low = faces.centres[:, 2] < 12.0
+    assert not (claimed & low).any(), "a slab-bearing ledge is still read as a coping"
+    assert (claimed & ~low).any(), "the real copings went too"
+
+    # the two scuppers, and nothing else, are still openings
+    cheeks, _ = _opening(faces)
+    assert not (cheeks & slab).any()
+
+    built = {}
+    for spec in skins(params):
+        skin = _skin_from(spec, parts)
+        built[spec["name"]] = skin
+        assert skin.metadata["offset_residual"] < 1e-9, spec["name"]
+        assert not skin.metadata["torn"], "the z = 6.75 weld survived the slabs"
+        assert not spec["keep"](faces)[slab].any(), f"{spec['name']} covers a slab"
+        assert not intersects(skin, skin), f"{spec['name']} folds through itself"
+        assert not buried(parts, skin), f"{spec['name']} has a sample inside a part"
+    assert set(built) == {"Membrane", "Cladding", "Masonry"}

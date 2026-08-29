@@ -13,65 +13,162 @@ and rejected, and what is still open.
 
 ### Where to pick up
 
-**`build.py` split into three on 2026-08-28 and the result packaged the same day**, so that the
-student-house can import the rules rather than copy them. Everything importable is now the
-`skinning` package — `skinning.rules`, `skinning.pipeline` over `skinning.skin` — and `build.py`
-and `audit.py` stay outside it at the root as this rig. `pip install -e .`, or install from the git
-URL. No geometry moved through either step: the report and every OBJ are byte-identical on all four
-substrates. See *"The module split: rules, pipeline, rig"* and *"Packaging it"*.
+**Current state: the building skins, with its floor slabs, warning-free.** Build it with
+`python3 build.py whole-building-walls-parapets-caps-cornices-clt-insulation-floors.obj`; that is
+what `build/` holds. Read *"The floor slabs arrived"* below for what they settled, then *"What
+Duncan read back"* for the two defects that session found, then *"Open, and first thing tomorrow"*.
 
-**The reveal landed on 2026-08-27 — a second authored allowance, `reveal: 0.018`.** A cladding
-skin stands `distance` off the wall it clads and `reveal` off a substrate feature it dies against.
-The same day the skirt over a cornice was told to run to the cornice's bottom. All four substrates
-build warning-free and the suite is 138 → 148.
+**The whole student-house arrived on 2026-08-28 and all three skins solve on it.**
+`whole-building-walls-parapets-caps-cornices-clt-insulation.obj` — 79 objects in 92 bodies, nine
+wall lifts in two wings, three roofs, both scuppers, three corniced walls, the headhouse. Duncan:
+*"a last test before we publish our repo... I am hoping it will skin without incident."* It was
+not without incident: one authored condition, two real defects in this module, and the floor
+slabs, which are missing and account for everything still visibly wrong. All four earlier
+substrates are byte-identical bar the two deck bakes' cladding, which **gains** 1.021 m2 each.
 
-    Membrane   offset   8 mm | residual 9.89e-17 | clearance  7.3149 mm | 215 -> 163 triangles
-    Cladding   offset  85 mm | residual 9.44e-16 | clearance 17.9999 mm | 199 -> 119 triangles
-    Masonry    offset 150 mm | residual 1.69e-15 | clearance  18.0000 mm |  12 ->   2 triangles
+    Membrane   offset   8 mm | residual 2.13e-16 | clearance  7.3148 mm | 276 -> 216 triangles
+    Cladding   offset  85 mm | residual 1.29e-15 | clearance  0.0002 mm | 484 -> 286 triangles
+    Masonry    offset 150 mm | residual 2.19e-15 | clearance 18.0001 mm |  51 ->   6 triangles
 
-Separations are 10.000 / 55.973 / **18.000** mm. That last one is the design and not a collision:
-the cladding's return wraps down the cornice and stops flush with its underside, the masonry's top
-stops `reveal` under the same soffit, and the two look straight at each other across the joint. **Slope absorption is bit-identical to before on
-every substrate** — 0.685/7.279/7.400 here, 0.158/1.717/2.969 on unit8, 0.158/1.717 on the
-headhouse, 0.655/6.963/12.287 on the three-part deck — which is the check that says the reveal
-moves the planes it names and disturbs nothing else in the solve. See *"The reveal, and the sill
-that is a roof"* below for what it cost to get there.
+**Warning-free**, as of the `rise` fix below. The suite is 155 -> 160.
 
-The cladding's clearance is now **the authored reveal**, and will be on any substrate with a lined
-opening: the lining stands 18 mm off its cheek by construction, so `distance` is no longer the
-floor. That is the fourth reason `clearance` is printed rather than asserted, and the first one
-that is a design intent rather than an artefact.
+Separations 10.000 / 55.973 / 18.000 mm — the same three figures the deck bake gives, which is
+the check that says nothing about the enlarged substrate moved the systems relative to each other.
 
+**The authored condition: `UNSURVEYED`.** Duncan: *"The L0, L2 and L3-internaljoin-S panels and
+their adjacent panel ends on that plane must be left uncovered until a full student-house site
+model is surveyed."* Read as L0, L2 and **L4** — there is no `L3-internaljoin-S` in the export and
+L3 is the other wing, nowhere near `y = 10.3`, so the third name is taken as the third of the
+three panels on that plane. Worth a word from Duncan, but there is only one coherent reading.
 
-**The fourth substrate arrived on 2026-08-26 and now builds, warning-free.**
-`deck9-parapets-caps-cornices-clt-insulation-unit7-walls-headhouse.obj` — 35 objects, the
-student-house deck 9 with its L7 walls under it, the same headhouse on top, **two** scuppers, and
-a second corniced wall. Duncan: *"The geometry is familiar, I am hoping this will skin without
-incident. A real test for our program."* It was not without incident: **seven** defects, all in
-this module, all fixed and pinned. See *"The deck 9 bake: what it found"* below.
+The build **stopped dead** on it before anything else: `rise` raises on `L0-internaljoin-S`,
+because the three panels are a stack of their own — set back 250 mm at the foot of each lift, so
+nothing rests on the one below — with no cap and no slope anywhere in it. That raise is the
+geometry saying it cannot tell which side is out, and the stamp is the authored answer. See
+CLAUDE.md, *"a wall the substrate cannot yet place takes no skin at all"*. The "adjacent panel
+ends" half costs one clause rather than a rule: with no exterior seed on `y = 10.3` there is
+nothing for `_grow_coplanar` to carry across, so the returns the streetfront and courtfacing walls
+present there stay ends. Measured at **0 faces** claimed on that plane by any of the three skins.
 
-As it stood **that day** — the current figures are the block above, and the cladding and masonry
-readings have since moved with the reveal:
+**The defect: a horizontal edge welding two sheets that have parted.** This one is worth reading
+properly, because it was silent-ish and general. The solve keeps substrate-horizontal edges
+horizontal by tying endpoint heights, and those ties **chain** — which is correct until a chain
+runs from an upward sheet to a downward one at the same level, and then it demands `+distance`
+and `-distance` of one connected set of heights. Least-squares does not report that; it splits
+the difference. Measured before the fix: **5.15 mm** of `offset_residual` on the membrane, 66.5 on
+the cladding, 96.6 on the masonry — five orders above the 1e-9 that means something broke — and
+the membrane then died in `_tiling` with *"the offset outline crosses itself"*, which names a
+symptom two steps downstream of the cause. `_retiled` was right to refuse; the outline really had
+crossed itself, because the solve had put it 5 mm out.
 
-    Membrane   offset   8 mm | residual 9.89e-17 | clearance  7.3149 mm | 215 -> 163 triangles
-    Cladding   offset  85 mm | residual 1.10e-15 | clearance 74.8901 mm | 215 -> 126 triangles
-    Masonry    offset 150 mm | residual 1.78e-15 | clearance 150.0000 mm |  12 ->   2 triangles
+It is at `z = 6.75` and nowhere else on this substrate, and the reason it is only there is the
+open item below.
 
-No self-crossing, nothing crossing into the substrate, nothing buried, no pair of skins crossing.
-The three earlier substrates were unchanged to the figure — 173172 mm², 3304 mm², 145 → 115,
-142 → 86, clearance 7.8808 and 74.8903, separation 66.889 — and the suite was 131 → 138.
+**Left open: the floor slabs are missing, and that is what made the pinch.** Duncan said so
+mid-session. Every lift has a 250 mm rebate at its foot — an inset "foot" the slab bears beside —
+so with no slab the rebate ring is an exposed **upward** face at every lift boundary. That alone
+is one sheet and harmless. At `z = 6.75` the building also steps off the internal join line
+(`y = 10.3`) onto the court line (`y = 11.3`), so the L6 lift oversails and its foot's **soffit**
+is exposed at the very same level. The two sheets meet at exactly two points —
+`v204 [0.2281, 10.3, 6.75]` and `v429 [10.8519, 10.3, 6.75]`, both on the join plane — and those
+two points are the whole of the weld: cut them out of the level graph and it splits cleanly into
+one up component and one down component.
 
-**`Headhouse-N`'s nib needs no re-modelling after all.** Duncan chose on 2026-08-26 to cut it and
-re-export rather than build a vertex split, and that is now moot: the fold at `v53` was the
-membrane covering the inside of the headhouse, and once the deck under the headhouse is read as
-the floor it is, the membrane never goes near that pinch. The substrate builds as exported. The
-vertex split stays undone and unqueued — see *"The open question"* for what it would be, and note
-that nothing now poses it.
+Confirmed by construction rather than by argument: adding a synthetic floor plate at
+`z 6.75..7.00` takes the exposed up faces at that level from 11 to **0**, the pinch vertices to
+none, and all three skins then build with the torn-edge rule never firing. So a re-export with
+the slabs in removes the condition at source. The rule stays regardless — the weld is a real thing
+for the module to get right, and a building that genuinely steps like this without a slab between
+is not an error — but the geometry Duncan wants is the one with the slabs.
 
-**The 771 mm² triangle buried in the cap plate is gone too**, and for a reason rather than by
-luck: it was a face of a **boolean flap**, not of the substrate. Duncan chose to leave it warned;
-`substrate.union` dropping the flap removed the face it stood on, and the cladding's clearance
-went 0.0006 → 74.8901 mm. Nothing was tolerated in the end.
+**No longer posed, but the asymmetry behind it is still there: the cladding's one warning.**
+It is **gone** as of the `rise` fix above — the whole-building bake now builds *warning-free* — and
+it went for a reason rather than by luck: all three crossings were the drip at an internal corner
+of `Lobby-`, `L3-` and `L5-courtfacing-E`, and those are among the walls whose direction the fix
+corrected. What follows is the diagnosis as it stood, kept because the asymmetry it names is real
+and the next substrate that lands a skin flush on a substrate face will pose it again.
+
+**Also open, and small: the cladding's one warning.** `WARNING: 3 crossing(s) into the substrate`,
+and it is a **52 nm graze**, not a penetration. `buried` reports nothing; a 7 260-point sample over
+each of the three triangles has **0 points inside**; the deepest reading is 52.5 nm. The cause is
+exact: the drip band's mitre at the internal corner where the mitoyen wall meets `*-courtfacing-E`
+lands flush on that wall's face at `x = 8.92` — correctly, dying on the wall behind the neighbour's
+cladding, the same arithmetic as *"the outer system owns the corner"* — and `substrate.union` puts
+that plane at `x = 8.919999948`, **52.0 nm** inside the part's own snapped `8.92`. The skin is
+exactly where the offset put it; the surface it is checked against is the *parts*, which sit up to
+~5e-7 m from the union the skin was derived from.
+
+So it is a measurement artefact of comparing across the union/parts boundary, and the asymmetry
+that lets it through is that `measure.buried` allows for the float32 floor (`SURFACE_TOL = 1e-6`)
+and `measure.intersects` does not (`tol = 1e-9`). It has not bitten before because no earlier bake
+puts a skin surface flush *on* a substrate face — every skin there stands 8, 85 or 150 mm proud of
+everything. **Duncan's call**, because it is the build's verdict and he chose that verdict on
+2026-08-25: give `intersects` the same allowance `buried` has, or leave the warning standing and
+documented. Nothing else on this substrate warns.
+
+### The floor slabs arrived, and settled it (2026-08-28)
+
+`whole-building-walls-parapets-caps-cornices-clt-insulation-floors.obj` — the same 79 objects plus
+`L0.Floor` … `L8.Floor`, 101 bodies. Duncan: *"Skin it to show how the C-shapes will go away."*
+They go, and so does the other thing the missing slabs were causing.
+
+    Membrane   offset   8 mm | residual 1.70e-16 | clearance  7.3148 mm | 276 -> 216 triangles
+    Cladding   offset  85 mm | residual 2.14e-15 | clearance 17.9998 mm | 310 -> 139 triangles
+    Masonry    offset 150 mm | residual 1.92e-15 | clearance 18.0001 mm |  51 ->   6 triangles
+
+Warning-free, separations unchanged at 10.000 / 55.973 / 18.000 mm.
+
+**The C-shapes are gone, and only they are gone.** The cladding's claim on wall tops:
+
+    z          1.15   2.55   3.95   5.35   6.75   8.15   9.55  | 12.83  12.83  13.10  13.10  14.74  14.74
+    without    11     13     11     11     11     11     11    |   5      5      4      4      5      5     faces
+    with        0      0      0      0      0      0      0    |   5      5      4      4      5      5
+
+79 faces and 40.768 m² of slab-bearing ledge, gone; all six real coping levels unchanged face for
+face and square metre for square metre. On the emitted skins: **Membrane and Masonry are identical
+to five decimal places** (237.38144 and 271.11120 m²), and the Cladding goes 642.72484 → 580.65679,
+losing 62.068 m² — 30.416 of horizontal shelf, 20.539 of the 33 mm drip hanging off it, and the
+rest the returns and miters at the ends of those runs.
+
+**And the `z = 6.75` weld goes with them**, which is the same fact said differently: the exposed
+ledge was one of the two sheets that met at a point. 11 up faces at that level → 0, two pinch
+vertices → none, and the torn-edge rule fires nowhere on this substrate. `clearance` on the
+cladding goes 0.0002 → 17.9998 mm, which is the authored reveal and is what it should read.
+
+**What the slabs posed instead: a slab is not a cap plate.** Two of the nine were joined to walls
+as cap plates and cost 16.087 m² of court elevation, and the cause is a sentence the code did not
+say. `_next_lift`'s docstring reads *"flush on both faces **across its thickness**"*; the code took
+any opposed pair, and a wall's two **ends** are an opposed pair too — they look away from each other
+exactly as its faces do. `L0-courtfacing-W` is 420 mm thick and 3.18 m long:
+
+    pair                          separation   L2.Floor flush with both?
+    y = 7.12 / y = 10.30  (ends)    3.1800 m           yes
+    x = 10.68 / x = 11.10 (faces)   0.4200 m           no
+
+So the slab was its next lift, `group_caps` joined it as the cap, the merged element classified
+**`roof`** on the slab's area, and `wall_faces` skipped a wall that was no longer a wall. The
+facade was not misclassified — it was never classified at all.
+
+Fixed by taking the pairs across the direction the element is **thin in**. Not the smallest
+separation, which was tried and is wrong: a rebate is an opposed pair too, and one across the
+element's *length* is as narrow as one across its thickness. `Parapet-Headhouse-S` is 420 mm thick
+and 5.44 m long and carries a 248.1 mm rebate at each end as well as along its face — three pairs
+at 0.2481 m, two of them lengthways — so the smallest picked a lengthways pair, the cap plate was
+refused, and every headhouse wall lost its direction. The widest pair in each direction is what
+that direction measures, and the thin one is the direction whose widest is smallest: 0.42 m across
+the thickness against 5.44 m along the run. Every pair in that direction is then kept, rebates
+included, because `CapPlate-Deck9-S2` sits in exactly such a rebate.
+
+**All five earlier substrates are bit-identical across this fix**, checked against the state before
+it as well as against the start of the session.
+
+One difference is left and it is not a loss: seven walls each drop **0.043 m²** of facade, a sliver
+at a court corner in the 250 mm slab zone — `L3.Floor` runs out to `y = 7.2919` and buries it, so
+the union has no such face any more. Confirmed: 2 faces / 0.0430 m² there without the slabs, 0 with.
+
+**What the slabs do not settle** is the `UNSURVEYED` condition, which is authored and still holds:
+the `y = 10.3` join plane now carries 48 faces rather than 34 — the slabs present their own edges
+on it — and **none** of them is claimed by any skin.
 
 ### What Duncan read back off the whole-building cladding (2026-08-28)
 
@@ -228,21 +325,38 @@ went 0.0006 → 74.8901 mm. Nothing was tolerated in the end.
 
 ### Open, and first thing tomorrow
 
-**The reveal is done and nothing about it is open** — see the entry below. The one thing it
-declined to decide is what a *turning upstand* should be priced at, and no substrate poses it.
+**2026-08-28's second session landed in three commits**, one per seam: the whole building
+(`UNSURVEYED`, the torn-edge rule and a review round), then `rise`'s weighting, then the floor
+slabs and `_next_lift`'s thickness. Each carries its own tests and its own section below.
 
-**The cladding skirt around the deck is fixed** — Duncan described the two errors on 2026-08-27
-and both are closed. See *"The skirt around the deck, and the two rules under it"* below for the
-diagnosis, the fixes and what they moved.
+**All six substrates build warning-free**, the suite is 161, and the four that predate this
+session are bit-identical to where they started except the two deck bakes' cladding, which gains
+1.021 m² each from the `rise` fix (and loses the spurious corner panel).
 
-**One thing was found on the way and is left for Duncan to call**: `L7-alleyback-W` reads its own
-corner return as a facade, and the cladding puts an 87 x 250 mm panel on it at `y = 7.2069`,
-`z 8.065…8.315`. The cause is `_next_lift`, not the skirt — see *"The lift that is not a lift"*.
-(**Closed 2026-08-28**, and by `rise`'s weighting rather than by `_next_lift` — see the section
-at the top of this file. The panel is gone on both deck bakes.)
-It was there before this session and was hidden inside a panel the false cheek pair drew over it;
-removing that panel is what left it standing alone. Nothing else on this substrate is open, and
-all four builds are warning-free.
+**Do not delete `whole-building-…-clt-insulation.obj`** — the one *without* floors. It is now the
+only substrate that poses the torn-edge weld, and `test_the_whole_building_reads_and_skins` pins
+the rule on it: 8 torn edges, the two pinch vertices, and clean residuals on all three skins. The
+floors bake supersedes it as the model of the building, not as a test case. Both are in the suite.
+
+**Three things are Duncan's to call, and none of them blocks anything:**
+
+- **`L3-internaljoin-S` is read as `L4-`.** There is no `L3-internaljoin-S` in either export and L3
+  is the other wing, nowhere near `y = 10.3`, so `build.UNSURVEYED_OBJECTS` names L0, L2 and L4.
+  One line if that is wrong.
+- **`measure.intersects` allows 1e-9 where `measure.buried` allows `SURFACE_TOL = 1e-6`.** No
+  substrate poses it any more — the three 52 nm crossings went with the `rise` fix — but the
+  asymmetry is real and the next skin to land flush *on* a substrate face will pose it again. See
+  the entry above for the measurement.
+- **A bearing ledge is only not a coping because the slab buries it.** With the slabs in, nothing
+  is wrong; without them, "every wall top" reads the rebate ring as a coping and the cladding runs
+  out across it. The `ledge` rule cannot catch it — it needs a roof running in, and the slab *is*
+  the roof. If it is ever wanted as insurance the shape is derivable with nothing authored: *an
+  upward face at the level the next lift bears on is a bearing, not a coping*, and `_next_lift`
+  already computes that level. Deliberately not built: it reaches every wall in every substrate
+  and does nothing once the slabs are in.
+
+**And one that is not open, but is worth not re-deriving**: the `turning upstand` the reveal work
+declined to price is still undecided, and still posed by no substrate.
 
 ### What the second review round found (2026-08-27)
 
@@ -516,10 +630,6 @@ the returns really are lifts of that wall, and what was broken was `rise` weight
 their own underside area instead of by how much of each bears on the wall. Requiring the
 opposed pair to be held by one body — the first shape proposed below — would have broken a
 parapet built as two leaves. Kept as written because the measurements in it are still good.
-
-Found while checking what the skirt fix left behind, and **not fixed**: it is a `_next_lift`
-question, which decides every wall's exterior and interior, and Duncan should choose whether to
-spend that.
 
 Found while checking what the skirt fix left behind, and **not fixed**: it is a `_next_lift`
 question, which decides every wall's exterior and interior, and Duncan should choose whether to

@@ -176,7 +176,9 @@ def _next_lift(parts, elements, members) -> list:
     - It is **flush on both sides**: this element has a pair of opposed vertical
       planes — the two faces across its thickness — and the element above lies
       in both. That is what "the next lift of this wall" means, and it is the
-      condition that does the work here.
+      condition that does the work here. *Across its thickness*, and the code
+      says so since 2026-08-28: a wall's two **ends** are an opposed pair too,
+      and a floor slab running out to both of them was taken for a cap plate.
     - Consequently it is not a roof: `Roof_Headhouse_CLT` bears on all four
       headhouse walls at z = 14.025 and would otherwise hand each of them the
       taper's fall, which says nothing about which side of a wall is outside.
@@ -215,6 +217,43 @@ def _next_lift(parts, elements, members) -> list:
     ]
     if not opposed:
         return []
+    # ...**across its thickness**, which is what the sentence above means and is
+    # not what "a pair of opposed planes" says on its own. A wall's two **ends**
+    # are an opposed pair too, and they look away from each other exactly as its
+    # faces do: `L0-courtfacing-W` is 420 mm thick and 3.18 m long, and both
+    # pairs qualify. A floor slab running out to the wall's two ends is then
+    # "flush on both faces" of a pair that is not the thickness, and is taken
+    # for the wall's next lift — after which `group_caps` joins it as that
+    # wall's cap plate, the merged element classifies `roof` on the slab's area,
+    # `wall_faces` skips it for not being a wall, and the whole court elevation
+    # goes unclad. Measured on the floors bake at 16.087 m2 over two walls.
+    #
+    # The thickness is the direction the element is **thin in**, which needs
+    # nothing authored and no bounds: `classify` defines a wall as the thing
+    # that is thin horizontally, and `_next_lift` is only ever asked of one. It
+    # is emphatically *not* the smallest separation, which was tried and is
+    # wrong: a rebate is an opposed pair too, and one across the element's
+    # **length** is as narrow as one across its thickness.
+    # `Parapet-Headhouse-S` is 420 mm thick and 5.44 m long and carries a 248 mm
+    # rebate at each end as well as along its face — three pairs at 0.2481 m,
+    # two of them lengthways — so the smallest picked a lengthways pair, the
+    # cap plate was refused, and every headhouse wall lost its direction.
+    #
+    # So the widest pair in each direction is what that direction measures, and
+    # the thin one is the direction whose widest is smallest: 0.42 m across the
+    # thickness against 5.44 m along the run. Every pair in that direction is
+    # then kept, rebates included — a wall in lifts carries 420 mm of full
+    # thickness and 248 mm of slab rebate, and a cap flush with either is still
+    # a cap (`CapPlate-Deck9-S2` sits in exactly such a rebate).
+    axes = np.array([mine[i, :3] for i, _ in opposed])
+    gaps = np.array([mine[i, 3] + mine[j, 3] for i, j in opposed])
+    widest = [
+        gaps[np.abs(np.abs(axes @ axis) - 1) < TOL].max() for axis in axes
+    ]
+    thin = axes[int(np.argmin(widest))]
+    opposed = [
+        (i, j) for i, j in opposed if abs(abs(float(mine[i, :3] @ thin)) - 1) < TOL
+    ]
     plan = np.array([[part.bounds[j][:2] for part in bodies] for j in (0, 1)])
     box = (plan[0].min(axis=0), plan[1].max(axis=0))
 

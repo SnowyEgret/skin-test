@@ -1138,7 +1138,21 @@ listed — there are no plane coordinates and no part indices in them:
   way up — panel, parapet, and only the cap plate laid to fall — so the walk is recursive, not
   one step. `_next_lift` decides what counts as the next lift, and takes three conditions: it
   rests on this element's top, it overlaps it in plan, and it is **flush on both faces across
-  this element's thickness**.  Both faces, not one: a roof deck bears on every wall it lands on
+  this element's thickness**. *Across its thickness*, and the code says so rather than only the
+  docstring since 2026-08-28: a wall's two **ends** are an opposed vertical pair as well, looking
+  away from each other exactly as its faces do, and a **floor slab** running out to both of them
+  was taken for the wall's next lift. `group_caps` then joined it as that wall's cap plate, the
+  merged element classified `roof` on the slab's area, `wall_faces` skipped a wall that was no
+  longer a wall, and 16.087 m² of court elevation went unclad — not misclassified, never
+  classified. The pairs kept are the ones across the direction the element is **thin in**, which
+  is derived and needs no bounds: `classify` defines a wall as the thing that is thin
+  horizontally. It is **not** the smallest separation, which was tried and broke every headhouse
+  wall — a rebate is an opposed pair too, and `Parapet-Headhouse-S` carries 248 mm rebates at both
+  *ends* as well as along its face, so the smallest picked a lengthways pair and the cap plate was
+  refused. The widest pair in each direction is what that direction measures, and the thin
+  direction is the one whose widest is smallest; every pair in it is then kept, rebates included,
+  because `CapPlate-Deck9-S2` sits in exactly such a rebate.
+  Both faces, not one: a roof deck bears on every wall it lands on
   and is flush with none, while a neighbour's cap plate runs over a wall's *end* and is flush
   with the building's outer plane there — one face of two. Requiring the opposed pair separates
   them exactly, with no threshold to author. Do not relax it to a single plane and weight the
@@ -1184,6 +1198,14 @@ absence leaves that rebate ring exposed as an upward face at every lift boundary
 alone that ring meets a soffit — the L6 lift oversails where the building steps off the internal
 join line at `y = 10.3` onto the court line at `y = 11.3` — and the two sheets pinch at two
 points. See the torn-edge invariant above for what that cost.
+
+**And with its floor slabs, 2026-08-28** —
+`whole-building-walls-parapets-caps-cornices-clt-insulation-floors.obj`, the same 79 objects plus
+`L0.Floor` … `L8.Floor` in 101 bodies. It is the substrate the two conditions above are *absent*
+from, and so the one that says they were the slabs: the seven bearing ledges are buried and their
+40.768 m² of false coping with them, and the `z = 6.75` pinch has no exposed upward sheet left to
+make. It posed one thing of its own — a slab taken for a cap plate — which is the `_next_lift`
+thickness rule above.
 
 `build.stamped` is where a bake gets the authored facts an OBJ cannot carry. An OBJ names its
 objects and says nothing else, so `from_obj`'s `metadata` gives every part one `FACADE` and there
