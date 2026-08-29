@@ -28,6 +28,7 @@ import trimesh
 # and reported numbers for code that was not under test. Found on review,
 # 2026-08-27, by a reader who hit exactly that
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import build
 from skinning import pipeline
 from skinning import rules
 from skinning.skin import substrate, parameters
@@ -36,13 +37,21 @@ from skinning.skin.export import faces_as_ngons
 BAKE = "unit8-parapets-caps-clt-insulation-headhouse-extended-cornices.obj"
 
 def live_skins():
-    parts = substrate.from_obj(BAKE, metadata={rules.FACADE: rules.RAINSCREEN})
+    # ...through the rig's own reader, because a bake arrives with no roof zone
+    # and no masonry on it, and `check_roofs` and `check_cladding` both refuse a
+    # substrate that cannot say which membrane covers what
+    parts = build.stamped(
+        substrate.from_obj(BAKE, metadata={rules.FACADE: rules.RAINSCREEN})
+    )
     params = parameters.resolve(None)
     # the name join first, for the reason `pipeline.run` does it in this order:
     # `prepare` re-stamps `metadata["object"]` on the parts, and a parameter file
-    # that fails the join should not have mutated a substrate on its way to raising
-    specs = rules.skins(params)
+    # that fails the join should not have mutated a substrate on its way to
+    # raising. The specs themselves come after it, because a fanned-out rule set
+    # is one skin per roof and the substrate is what says how many
+    rules.check_skins(params)
     faces = pipeline.prepare(parts, params)
+    specs = rules.skins(params, faces)
     # raw, deliberately: this script measures before and after `clean` itself,
     # so it wants what `skin_over` emitted rather than what `pipeline.run` ships
     return {

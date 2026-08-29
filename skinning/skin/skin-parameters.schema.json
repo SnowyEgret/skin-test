@@ -38,17 +38,27 @@
       "exclusiveMinimum": 0
     },
     "skins": {
-      "description": "One entry per skin, in build order. Each name must match a rule set in build.py's RULES exactly — no defaults, either way.",
+      "description": "One entry per skin, in build order. Each `rules` must match a rule set in skinning/rules.py's RULES exactly — no defaults, either way. An entry with `select: \"*\"` is one skin per value of that rule set's key the substrate carries, so the number of skins built can exceed the number of entries.",
       "type": "array",
       "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "distance", "drop", "out", "base", "close", "display"],
+        "required": ["name", "rules", "select", "distance", "drop", "out", "base", "close", "display"],
         "properties": {
           "name": {
-            "description": "Joins these numbers to a rule set in build.py, and names the emitted OBJ and its manifest entry.",
+            "description": "Names the emitted OBJ and its manifest entry. A fanned-out skin (select: \"*\") names one per value found, as <name>-<value>.",
             "type": "string",
+            "minLength": 1
+          },
+          "rules": {
+            "description": "The rule set in skinning/rules.py RULES these numbers are built with. Several skins may name one rule set \u2014 two masonries at two allowances, a membrane per roof \u2014 which is why this is a field of its own and no longer the name.",
+            "type": "string",
+            "minLength": 1
+          },
+          "select": {
+            "description": "Which instance of that rule set this skin is: the value of the metadata key the rule set declares (a roof zone, a cladding material), \"*\" for one skin per value the substrate carries, or null for a rule set that takes no selector. Checked against RULES in skinning/rules.check_skins, both ways round.",
+            "type": ["string", "null"],
             "minLength": 1
           },
           "distance": {

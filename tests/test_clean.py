@@ -10,8 +10,17 @@ import numpy as np
 import pytest
 import trimesh
 
+import build
 from skinning.skin import substrate
 from skinning.skin.clean import clean
+
+
+def _spec(params, parts, name):
+    """One skin's spec, over this substrate — see `tests.test_import._spec`."""
+    from skinning.pipeline import prepare
+    from skinning.rules import skins
+
+    return next(s for s in skins(params, prepare(parts, params)) if s["name"] == name)
 
 
 def _sheet(corners, flip=False):
@@ -229,7 +238,9 @@ def _rig_skins():
     body = substrate.union(parts)
     faces = Faces(body, parts, _owner(body, parts), classifier(params))
     return parts, {
-        s["name"]: _skin_from(s, parts) for s in skins(params) if covered(s, faces)
+        s["name"]: _skin_from(s, parts)
+        for s in skins(params, faces)
+        if covered(s, faces)
     }
 
 
@@ -241,7 +252,7 @@ def test_the_rig_membrane_overlaps_itself_and_the_pass_dissolves_it():
     from shapely.ops import unary_union
 
     _, built = _rig_skins()
-    membrane = built["Membrane"]
+    membrane = built["Membrane-Rig"]
 
     covered = 0.0
     for rep, group in _groups(membrane):
@@ -486,10 +497,10 @@ def test_the_baked_scupper_tear_closes_and_the_perimeters_do_not():
     from tests.test_import import BAKE
 
     params = parameters.load_validated()
-    parts = substrate.from_obj(BAKE, metadata={FACADE: RAINSCREEN})
+    parts = build.stamped(substrate.from_obj(BAKE, metadata={FACADE: RAINSCREEN}))
     group_cornices(parts)
     group_caps(parts, classifier(params))
-    spec = next(s for s in skins(params) if s["name"] == "Membrane")
+    spec = _spec(params, parts, "Membrane-Headhouse")
     skin = _skin_from(spec, parts)
 
     open_ = clean(skin, dissolve=True, close=0.0)
@@ -515,13 +526,13 @@ def test_the_cladding_has_nothing_to_gusset_at_the_membranes_bound():
     from tests.test_import import LIVE
 
     params = parameters.load_validated()
-    parts = substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN})
+    parts = build.stamped(substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN}))
     group_cornices(parts)
     group_caps(parts, classifier(params))
-    spec = next(s for s in skins(params) if s["name"] == "Cladding")
+    spec = _spec(params, parts, "Cladding")
     cladding = _skin_from(spec, parts)
 
-    membrane_bound = next(s for s in skins(params) if s["name"] == "Membrane")["close"]
+    membrane_bound = _spec(params, parts, "Membrane-Unit8")["close"]
     out = clean(cladding, dissolve=True, close=membrane_bound)
 
     assert out.metadata["tears_closed"] == 0

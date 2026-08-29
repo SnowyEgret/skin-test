@@ -443,7 +443,12 @@ def planar_offset(mesh: trimesh.Trimesh, distance: float, tol: float = 1e-6, cov
     }
 
     torn: list = []
-    for (a, b), rs in zip(edges, sheet):
+    # `sheet` is read above, in `branch`, and not here: what an edge is tested on
+    # is its **ends'** rises, which is the whole of the rule -- two tops at one
+    # level agree and stay tied however folded the surface around them is. The
+    # loop zipped `sheet` in and never read it, which made it look as though the
+    # per-edge sheet were part of the test. Found on review, 2026-08-28
+    for a, b in edges:
         a, b = int(a), int(b)
         if rises[a] and rises[b] and rises[a].isdisjoint(rises[b]):
             torn.append((a, b))

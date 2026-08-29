@@ -74,8 +74,25 @@ reveal: 0.018
 # derivation is wrong: the membrane's one tear is twice the offset across in
 # plan, but 18.016 mm along its own sloped plane, so `2 x distance` would miss
 # the very tear it was reasoned from.
+#
+# `rules` names the rule set in `skinning/rules.py` these numbers are built with,
+# and `select` says which instance of it this skin is. They were one field —
+# the name — until 2026-08-28, when a rule set stopped being one skin: the
+# membrane is per roof and the masonry per material. `'*'` fans a rule set out
+# over the substrate, one skin per value it carries; a value binds one instance;
+# `null` is a rule set that takes no selector at all.
 skins:
   - name: Membrane
+    rules: Membrane
+    select: '*'      # one skin per `roof_zone` the substrate carries — three on
+                     # the whole building (`Membrane-Deck9`, `-Unit8`,
+                     # `-Headhouse`), one on the rig. Fanned out rather than
+                     # authored three times because a roof membrane is ONE
+                     # allowance laid on three roofs: three entries repeating
+                     # 0.008 would collide in `check_seeds` as equal seeds, and
+                     # rightly — nothing distinguishes them but where they are.
+                     # A roof that wants its own build-up is a different system
+                     # and becomes an entry of its own, like the two masonries
     distance: 0.008
     drop: 0.062      # a lap hanging below its arris — the drip over a coping
     out: 0.205       # a lap rising or running sideways — the upstand at an abutment
@@ -84,9 +101,13 @@ skins:
                      # edge that must NOT be filled is 248.268 mm
     display: solid
   - name: Cladding
+    rules: Cladding
+    select: null     # the rainscreen is the residue: it clads every facade no
+                     # masonry claims, so there is one of it however many
+                     # materials the substrate carries
     distance: 0.085
     drop: 0.033      # down the interior walls, part 4's included. Was 0.030
-                     # until 2026-08-26, when `Masonry.distance` arrived at
+                     # until 2026-08-26, when the masonry's distance arrived at
                      # 0.150 — exactly 5x it, which `check_seeds` refuses. The
                      # masonry allowance is the authored one of the two, so this
                      # is the number that moved
@@ -95,7 +116,11 @@ skins:
                      # would hang `distance` below the substrate's underside
     close: 0.0       # the cladding tears nowhere; nothing to gusset
     display: wire
-  - name: Masonry
+  - name: Masonry-Brick
+    rules: Masonry
+    select: brick    # the material stamped on the corniced wall this skin clads
+                     # — `Parapet-Unit8-E`, and the street front grown down from
+                     # it. See `rules.masonry_faces`
     distance: 0.15   # the finished face of a masonry facade, off the structural
                      # outer face. Copied — not read — from the student-house's
                      # `cladding.allowance.street-front` (0.15, brick veneer +
@@ -104,11 +129,27 @@ skins:
                      # `Cornice-Unit8-E` projects 170 mm, and the same file
                      # authors `cornice.projection.street-front` at 0.020, so
                      # the cornice oversails this face by exactly the 20 mm it
-                     # is drawn to. A second masonry — block on the firewall,
-                     # 0.140 + 0.020 cavity — is a different allowance and so a
-                     # different skin; no substrate here poses it yet
+                     # is drawn to
     drop: 0.0        # unread: the rule set's `lap` is None. Masonry is
     out: 0.0         # abstracted as a surface until its thickness is drawn
     base: 0.0        # stops at ground level, as the cladding does
+    close: 0.0       # nothing to gusset
+    display: wire
+  - name: Masonry-Firewall
+    rules: Masonry
+    select: block    # the mitoyen elevation — `Parapet-Deck9-N` and the wall
+                     # below it. A second masonry is a second allowance and so a
+                     # second skin, which is what `check_cladding` said would be
+                     # needed the day a substrate posed one. 2026-08-28: it does
+    distance: 0.161  # block 0.140 + a cavity. The cavity is drawn 20 mm in the
+                     # student-house, which makes this 0.160 — and 0.160 is
+                     # exactly 20x `Membrane.distance`, which `check_seeds`
+                     # refuses. The new number is the one that moves, as
+                     # `reveal` moved 0.016 -> 0.018 on 2026-08-27 rather than
+                     # take the membrane off 8 mm (Duncan, 2026-08-28). The
+                     # 1 mm lives in the cavity, which is a site dimension
+    drop: 0.0        # unread, as above: `lap` is None
+    out: 0.0
+    base: 0.0        # stops at ground level, as the brick does
     close: 0.0       # nothing to gusset
     display: wire

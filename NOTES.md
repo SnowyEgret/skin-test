@@ -13,10 +13,24 @@ and rejected, and what is still open.
 
 ### Where to pick up
 
-**Current state: the building skins, with its floor slabs, warning-free.** Build it with
+**Current state: the building skins in six, with its floor slabs, warning-free.** Build it with
 `python3 build.py whole-building-walls-parapets-caps-cornices-clt-insulation-floors.obj`; that is
-what `build/` holds. Read *"The floor slabs arrived"* below for what they settled, then *"What
-Duncan read back"* for the two defects that session found, then *"Open, and first thing tomorrow"*.
+what `build/` holds. Read *"Six skins"* at the end for the current shape of a skin — a membrane per
+roof and two masonries, which is where the parameter file's `rules:` and `select:` fields come
+from — then *"The floor slabs arrived"* below for what they settled, then *"What Duncan read back"*
+for the two defects that session found, then *"Open, and first thing tomorrow"*.
+
+    Membrane-Deck9      offset   8 mm | residual 1.02e-16 | clearance  7.3148 mm
+    Membrane-Headhouse  offset   8 mm | residual 1.70e-16 | clearance  7.8811 mm
+    Membrane-Unit8      offset   8 mm | residual 1.02e-16 | clearance  7.9199 mm
+    Cladding            offset  85 mm | residual 1.80e-15 | clearance 17.9998 mm
+    Masonry-Brick       offset 150 mm | residual 1.94e-15 | clearance 86.8850 mm
+    Masonry-Firewall    offset 161 mm | residual 1.89e-15 | clearance 18.0278 mm
+
+The three membranes are the one membrane cut up — 237.3814 m2 between them, the figure the single
+skin printed — and the two masonries likewise, 271.1112. Every figure quoted **below** this line
+was measured with three skins rather than six, and the surfaces they name have not moved; where a
+skin is called `Membrane` or `Masonry` in an older section, read it as all of its zones together.
 
 **The whole student-house arrived on 2026-08-28 and all three skins solve on it.**
 `whole-building-walls-parapets-caps-cornices-clt-insulation.obj` — 79 objects in 92 bodies, nine
@@ -4783,6 +4797,178 @@ prose-heavy false-positives on a docstring and misses a real escape spelled
 `os.path.dirname(os.path.dirname(...))` or a `sys.path` insert. Both read off the AST now, and both
 were checked by posing the violation: a `from ..rules import CORNICE` in `offset.py` and a nested
 `dirname` in `measure.py` each fail the suite where they did not before.
+
+## Six skins: a membrane per roof, and the masonry in two (2026-08-28)
+
+Duncan: *"separating the membrane into three, one for each roof, and the masonry facades
+separated in two, one for the brick facade, and another for the firewall."*
+
+    Membrane-Deck9      offset   8 mm | residual 1.02e-16 | clearance  7.3148 mm | 111.4072 m2
+    Membrane-Headhouse  offset   8 mm | residual 1.70e-16 | clearance  7.8811 mm |  32.6849 m2
+    Membrane-Unit8      offset   8 mm | residual 1.02e-16 | clearance  7.9199 mm |  93.2893 m2
+    Cladding            offset  85 mm | residual 1.80e-15 | clearance 17.9998 mm | 591.5588 m2
+    Masonry-Brick       offset 150 mm | residual 1.94e-15 | clearance 86.8850 mm | 111.2459 m2
+    Masonry-Firewall    offset 161 mm | residual 1.89e-15 | clearance 18.0278 mm | 159.8653 m2
+
+The scupper's gusset — 2 tears, 3459.1 mm2 — is now the **headhouse** zone's, which is where the
+scupper is, and the folds each skin reports are the same four union vertices they always were.
+
+**Nothing moved.** The three membranes sum to 237.3814 m2 and the two masonries to 271.1112 —
+the two figures the single skins printed, to the last decimal. Face for face, the emitted
+polygons are **identical on four of the five substrates**; on the floors bake one vertex differs
+in its eighth decimal (`y = 2.84984703` against `2.84984707`, 40 nm — float noise in a
+least-squares system solved over a smaller soft set), and the firewall's panel stands 11 mm
+further out because its allowance is a different number. That is the whole of the geometric
+difference.
+
+One number does move and it is worth understanding: the coplanar overlap `clean` dissolves falls
+from 344 797 mm2 on the one membrane to 260 748 across the three. That is not surface — it is
+**redundant cover**, a plane the lap rule reached twice from two sides of what is now a zone
+boundary and reaches once from within a zone. The written meshes are identical either way, which
+is what says it was redundant.
+
+### How it is authored, and why the two splits are not the same shape
+
+A rule set stopped being one skin. `RULES` entries now declare a **`select`** — the metadata key
+they are instantiated on — and a parameter entry says which instance it is: a value binds one,
+`'*'` fans the rule set out over the substrate.
+
+    - name: Membrane        rules: Membrane   select: '*'      # one per roof_zone
+    - name: Cladding        rules: Cladding   select: null
+    - name: Masonry-Brick   rules: Masonry    select: brick    distance: 0.150
+    - name: Masonry-Firewall rules: Masonry   select: block    distance: 0.161
+
+The asymmetry is the point and it is `check_seeds`. Three membranes are **one allowance on three
+roofs**: authored as three entries they would repeat 0.008 / 0.062 / 0.205 and collide as equal
+seeds, and the seed rule is right — nothing distinguishes them but where they are. So the numbers
+are authored once and the *substrate* says how many skins that is. The two masonries are two
+allowances, so they are two entries with two sets of numbers, and no rule has to be bent.
+
+The cost is that the number of skins is a property of the substrate: `skins()` takes the `Faces`
+view as well as the numbers, and `pipeline.run` calls it after `prepare`. Everything the file
+can be wrong about is still checked before any geometry runs — that is `check_skins`, which `run`
+calls first, for the same reason the join always came first: `prepare` re-stamps
+`metadata["object"]` on the caller's parts, and a bad file should not have mutated a substrate on
+its way to raising.
+
+Names come from the tag: `Membrane-Deck9`, `-Unit8`, `-Headhouse` on the whole building,
+`Membrane-Rig` on the rig, `Membrane-Headhouse` alone on the headhouse bake. The stale-file sweep
+in `build()` had to widen to match — `Membrane-Deck9.obj` is a name neither `RULES` nor the
+parameter file spells, and a bake of another substrate leaves one behind.
+
+### The membrane: one authored stamp, everything else derived
+
+`ROOF_ZONE` is stamped on the **roof parts only** — `build.stamped` reads it off `Roof_<zone>_<layer>`
+with a regex, so a new roof needs no table edit — and the walls follow from the geometry that was
+already there: `_climbed` is `_rules`' own election, asked of one zone's roof faces instead of all
+of them. Measured on the whole building: three zones, four parapets each, **no element elected
+twice**, and the three keep sets are exactly the 156 faces the one skin selected.
+
+The derivation was tried first and it works: the roof face set has exactly three connected
+components here (7, 7 and 5 faces), one per roof. It is not what shipped, for two reasons — a
+component has no name to author a skin against, and a roof that arrived in two pieces would
+silently become two zones. `check_roofs` is the other half of that: a roof face whose part carries
+no zone raises, because the fan-out enumerates the zones it *finds* and a missing stamp would
+subtract a membrane from the build without a word.
+
+One thing did change and it is worth writing down. The **raw** emission per zone is not the joint
+skin's raw emission cut up: on the unit8 bake the headhouse zone comes out two vertices short of
+symmetric at the scupper, where the joint skin was symmetric. It is redundant cover, not surface —
+`_lap` legitimately covers part of a plane twice, and which of two overlapping quads lands where
+is not mirrored — and `clean` dissolves it either way, which is why the *written* meshes are
+identical face for face. `test_the_scupper_comes_out_symmetrical_on_the_live_bake` now asks the
+written mesh, which is the surface Duncan's *"the scupper is symmetrical"* is about.
+
+### The masonry: the guard became the selector
+
+`check_cladding` has raised since 2026-08-26 if the corniced walls of one substrate carried more
+than one `FACADE` value — *"one masonry skin is one allowance, so a substrate posing two needs a
+skin each, selected on the tag as well as on the cornice"*. That is exactly what was built:
+`masonry_faces(faces, fall, system)` takes the material off the **corniced host**, and the two
+grown sets are 13 and 33 of the 46 faces the unfiltered rule claims, disjoint.
+
+It is the *host's* material that selects, not each face's, and that is the growth's own argument
+read again. 20 of the firewall's 33 faces are ends of `L*-alleyback-W`, `L*-courtfacing-E` and
+`Lobby-*` — every one of them stamped `rainscreen`, because a return at a corner is a face on the
+elevation it lands in. Filtering per face would have dropped precisely those.
+
+### What the split forced: the rainscreen is the residue
+
+This is the one real change of rule, and it was not optional. `cladding_faces` read
+`facades_of(faces, RAINSCREEN, fall)`, which was identical to "every exterior facade the masonry
+does not claim" for as long as every part carried one tag. Stamp the street front `brick` and the
+two part company **at the corners**: that wall's 20 return-ends leave the rainscreen set with it,
+7.795 m2 of facade claimed by nobody, and `check_cladding` refuses the substrate as *"claimed by
+neither"*. A per-part tag cannot say that a wall's end is clad in whatever clads the elevation it
+lands in.
+
+So the rainscreen claims the residue. Measured both ways on the whole-building bake: with it, the
+cladding is 591.5588 m2 / 138 triangles / one fold — exactly what it was; without it, 583.7635 and
+149. On every substrate where all parts are rainscreen the two readings are the same, which is why
+the other four bakes are unaffected.
+
+What the residue then cannot notice is a wall stamped `brick` that no cornice reaches: the cladding
+takes it and says nothing, where before it was claimed by neither skin and refused. So the tag is
+read back against the skins — `check_cladding` raises on a wall carrying a masonry material with no
+face in that masonry's skin. The claim the old check made is unchanged; only the sentence that
+catches it moved.
+
+### The firewall's 161 mm
+
+The block is drawn 0.140 with a 20 mm cavity, which makes 0.160 — and 0.160 is exactly
+**20x `Membrane.distance`**, which `check_seeds` refuses. Duncan chose to move the new number
+rather than the membrane, the way `reveal` went 0.016 -> 0.018 on 2026-08-27 for the same reason:
+the millimetre lives in the cavity, which is a site dimension. `Masonry-Firewall.distance` is
+0.161, and the deck bakes' masonry panel therefore stands 11 mm further out than it did — the one
+intended geometric difference in this whole change.
+
+### What the review caught (2026-08-28)
+
+`/code-review high` over the branch and the working tree, five findings, four acted on and one
+rejected with a reason. Worth recording because two of them are about the *shape* of the change
+rather than about a line.
+
+**The build got 3.3x slower, and that was structural.** 2m14s on the whole-building bake against
+41s for the three-skin build it replaced. Not the skins — the **derivations**: every skin's
+`facade_offsets` evaluates every *other* skin's `keep`, so six skins ask for `wall_faces`,
+`_rules` and `_opening` about thirty times each, and `rise` walks every element's stack while
+`_under_cover` casts a ray off every roof face. Instrumented on the deck bake: 45 `wall_faces`,
+540 `rise`, 14 `_under_cover` in one build. Fixed by memoising the three on the `Faces` they were
+read from — `_derived`, which hands the value back as a **copy** so a caller writing into a mask
+cannot corrupt what the next one reads. `Faces` already caches `roles` and `elements` on the same
+footing, and the scope is the same: re-stamp metadata and you need a new `Faces`. Now **55.8s**,
+the remainder being six skins to solve and clean where there were three. The printed report and
+every OBJ are identical with it and without it on all five substrates.
+
+**A check that could not fail.** `check_cladding` asserted that the per-system masonry sets add up
+to the unfiltered one. They cannot fail to: `_grow_coplanar` is a reachability closure over a
+fixed adjacency, so growing the union of the seeds *is* the union of the growths, and the loop
+above it has already refused any host whose material is not a masonry. Deleted, and the sentence
+saying why is what stands there now — a check that looks maintained and cannot fire is worse than
+none. The **disjointness** check beside it is real and stays: two elevations growing into one
+another along a shared plane is a substrate condition, not an arithmetic identity.
+
+**`facade_offsets` was last-writer-wins across `others`.** It assigned per sibling skin with no
+conflict test, so a plane carrying the facades of two *different* neighbouring systems took
+whichever came last in the list. Latent while there were two siblings and one of them clad no
+facade; not latent with five, two of them masonries at 0.150 and 0.161. Now collected per plane
+before anything is written and raised on disagreement, the same shape `skin_offsets` already had
+for the reveal and the flush stop. **No substrate here poses it** — every OBJ is unchanged — so
+the guard is structural rather than measured, which is the same footing as its neighbour.
+
+**One finding rejected.** The review proposed tightening the "a masonry-stamped wall is reached by
+its masonry" check from *"some face of this wall"* to *"every exterior face of this wall"*, to
+catch a wall whose facade is reached only in part. The strict form is wrong here and would refuse
+every corniced wall on the live bake: a wall's **ends** are exterior and are not in its masonry —
+they are faces on the neighbouring elevation, clad by whoever clads that elevation, which is the
+whole of the residue argument (`Parapet-Unit8-E` has 20 such). The gap it names is real but is a
+per-plane question, and the answer to it already exists downstream: a plane carrying two
+allowances raises in `skin_offsets`. Left as it is, deliberately.
+
+**And a dead binding.** `for (a, b), rs in zip(edges, sheet)` in the torn-edge loop never read
+`rs` — the test is on the ends' rises, which is the whole of the rule. Dropped, with a line saying
+which test is live, because the surrounding comment reads as though the per-edge sheet were part
+of it.
 
 ## Open items
 

@@ -46,8 +46,9 @@ the clean line is measured on the **raw** emission, before cleaning — see **Cl
 
 A skin whose rules select no face of the substrate is **skipped, and said so** — no OBJ, no
 manifest entry, and last run's file for that skin is swept out of `build/` with the stale
-substrate copies, because it holds geometry offset from a different substrate. That is a real condition rather than a defect: the masonry skin needs a wall a
-cornice finishes, and only one of the three substrates has one. `pipeline.covered` is the test, and
+substrate copies, because it holds geometry offset from a different substrate. That is a real condition rather than a defect: a masonry skin needs a wall a
+cornice finishes **and stamped with that masonry's material**, so the rig and the headhouse bake
+build neither, the deck bakes build the firewall's alone and the unit8 bake the brick's alone. `pipeline.covered` is the test, and
 its docstring records what an empty skin does to everything downstream of it if it is let through
 (`clean`, `clearance`, `buried`, `separation` and `write_obj` all raise on a shape of `(0,)`).
 
@@ -134,13 +135,17 @@ Data flows one way:
 ```
 skin-parameters.yaml                    every tunable number, JSON-Schema validated
    → skinning/skin/parameters.load_validated()   → dict; the ONLY file that reads it
-   → rules.skins(params)                joins the numbers to the RULES by name
+   → rules.check_skins(params)          joins the numbers to RULES by `rules:`
 
 build.py  PART_N vertex/face literals   (transcribed from Blender, snapped to 1 µm)
    → substrate.polyhedron()             list[Trimesh], one per part
      ...or substrate.from_obj()         a baked export, one part per `o` group
+   → build.stamped()                    the authored facts an OBJ cannot carry:
+                                        roof zone, masonry material, unsurveyed
    → pipeline.run(parts, params)        the seam: substrate in, skins out
        → pipeline.prepare()             group_cornices → group_caps → union → Faces
+       → rules.skins(params, faces)     ...and one skin per instance the substrate
+                                        carries: a membrane per roof
        → skin_over()                    planar_offset → keep() → lap
        → clean()                        coplanar overlap dissolved, after the fact
    → write_obj()                        build/*.obj as n-gons + manifest.json
@@ -307,7 +312,9 @@ Three rules carried over from student-house `bim/phase1/parameters.py`:
   raises if none was passed. Do not "fix" any of those by restoring a default.
 - **Schema does per-field, Python does cross-field.** Types, ranges, `required` and
   `additionalProperties: false` are in the JSON Schema. What a schema cannot express stays in
-  Python: `parameters.check_seeds` (non-degenerate distances) and `rules.skins`'s name join.
+  Python: `parameters.check_seeds` (non-degenerate distances) and `rules.check_skins`'s join —
+  which rule set a skin names, whether that rule set takes a `select` value and whether the file
+  gave it one, and whether a skin that laps has a direction to lap in.
 - **Fail at the seam, addressed.** Every raise names the field to edit, not the geometry that
   consumed it.
 
@@ -330,20 +337,26 @@ or a path, or a submodule on `sys.path` — the wheel is the same either way) an
 `skinning.rules` and `skinning.pipeline`. Then the `classify` / `fall` / `reveal` / `skins` block moves into
 `student-house-parameters.yaml` under a `skin:` key, its schema is pasted into that repo's
 schema, and the caller passes `topo["skin"]` where `build.py` passes `load_validated()` into
-`pipeline.run`.
+`pipeline.run`. What the host has to supply besides the numbers is what `build.stamped` supplies
+here: a `roof_zone` on every roof part and a `facade` material on every wall — one read of the IFC
+each, where this rig reads an `o` name. Without them `check_roofs` and `check_cladding` refuse the
+substrate, which is the intended failure: a membrane per roof needs the roofs named.
 `skinning/skin/parameters.py` is then dead code there and should be deleted rather than ported — the
 student-house already owns the read, via `topology_yaml.load` → `parameters.load_merged`.
 
 ## Adding a skin
 
 A skin is an entry in `skins:` in `skin-parameters.yaml` plus a rule set in `RULES` in
-`skinning/rules.py`, not a new code path. `rules.skins()` joins them by name, and raises if either side
-names something the other does not — a skin with no rules cannot be built, and a rule set no
-skin names would sit there looking maintained while emitting nothing.
+`skinning/rules.py`, not a new code path. `rules.check_skins()` joins them by `rules:`, and raises if
+either side names something the other does not — a skin with no rules cannot be built, and a rule
+set no skin names would sit there looking maintained while emitting nothing.
 
 ```yaml
 # skin-parameters.yaml — the numbers
-- name: ...
+- name: ...        # what the OBJ and the manifest entry are called
+  rules: ...       # the rule set in RULES these numbers are built with
+  select: v | '*' | null   # which instance of it: a tag value, one per value
+                           # the substrate carries, or none
   distance: m
   drop: m          # a lap that hangs below its arris; 0.0 switches that way off
   out: m           # a lap that rises or runs sideways; 0.0 switches that way off
@@ -353,39 +366,76 @@ skin names would sit there looking maintained while emitting nothing.
 ```
 
 ```python
-# rules.py RULES — the predicates, keyed by the same name
-"...": {"keep": fn, "lap": fn | None}
+# rules.py RULES — the predicates, keyed by rule-set name
+"...": {"keep": fn, "lap": fn | None, "select": METADATA_KEY | None}
 ```
 
+**One rule set can be several skins**, which is what `select` is for and the one thing here that
+is not a knob. A rule set that declares a `select` key is instantiated per *value* of it, and the
+parameter file says which: a value binds one instance (`select: brick`), and `'*'` fans the rule
+set out over the substrate — one skin per value it carries, named `<name>-<value>`. The membrane
+fans out over `roof_zone` and the masonry binds a `facade` material, because those are two
+different situations:
+
+* **one system on several roofs** is one entry. Three membranes at 8/62/205 mm would collide in
+  `check_seeds` as equal seeds, and rightly — nothing distinguishes them but where they are. So the
+  numbers are authored once and the substrate says how many skins that is: `Membrane-Deck9`,
+  `-Unit8` and `-Headhouse` on the whole building, `Membrane-Rig` on the rig, and a roof that
+  arrives later needs no edit here at all.
+* **two systems** are two entries, because they are two allowances: `Masonry-Brick` at 0.150 and
+  `Masonry-Firewall` at 0.161. A roof that wanted its own build-up would become an entry the same
+  way.
+
+The consequence is that the number of skins is a property of the **substrate**, not of the file,
+so `skins()` takes the `Faces` view as well as the numbers and `pipeline.run` calls it after
+`prepare`. The parameter-file checks all still run *before* any geometry — that is
+`rules.check_skins(params)`, which `run` calls first for the reason it always did: `prepare`
+re-stamps `metadata["object"]` on the caller's parts, and a file that fails the join should not
+have mutated a substrate on its way to raising.
+
 `drop` and `out` are the two directions a lap can take, and a skin with both zero would stop dead
-on every arris it reaches — `skins()` raises. Either alone is fine: the cladding has no upstand
-and never did. A rule set may instead say **`"lap": None`** — a skin that genuinely stops where it
-ends, which is the masonry, abstracted as a surface until its thickness is drawn. `skins()` then
-leaves `drop` and `out` unread and both are authored zero, so the raise above applies only to a
-skin that laps at all. `base` pairs with no rule — it is a datum rather than a face selection — and `null`
+on every arris it reaches — `check_skins()` raises. Either alone is fine: the cladding has no
+upstand and never did. A rule set may instead say **`"lap": None`** — a skin that genuinely stops
+where it ends, which is the masonry, abstracted as a surface until its thickness is drawn.
+`skins()` then leaves `drop` and `out` unread and both are authored zero, so the raise above
+applies only to a skin that laps at all. `base` pairs with no rule — it is a datum rather than a face selection — and `null`
 is **not** `0.0`: zero is a real height to cut at, where a zero `drop` or `out` is that direction
 switched off. It is also not a seed, so `check_seeds` ignores it. Nor is `close`, which bounds a
 cleanup rather than any surface — see **Cleaning a mesh**.
 
 `reveal` is deliberately **not** in this list: it is one top-level number, not a per-skin knob, and
 a new skin gets it or not from what it clads rather than from what it authors — see **The reveal**.
-The rules take `(Faces, fall)`; `skins()` binds `fall` from the file, so what `skinning/skin/` receives
-still has the `Faces -> bool[nfaces]` signature it expects. A built spec is *exactly*
+The rules take `(Faces, fall)`, plus the `select` value where they declare one; `skins()` binds
+`fall` from the file and the value positionally, so what `skinning/skin/` receives still has the
+`Faces -> bool[nfaces]` signature it expects. A built spec is *exactly*
 `skin_over`'s argument list plus `name`, `display` and `close` — the last two are read by
 `build()` and never reach the offset: one says how Blender shows the skin, the other how wide a
 tear `skinning/skin/clean.py` may gusset.
+
+**The expensive derivations are memoised on the `Faces` they were read from** — `wall_faces`,
+`_rules` and `_opening`, through `rules._derived`, each returned as a copy so a caller writing into
+a mask cannot corrupt what the next one reads. It is a performance property and not a semantic one:
+every skin's `facade_offsets` evaluates every *other* skin's `keep`, so six skins asked for those
+three about thirty times each and the whole-building bake took 2m14s against 41s for the three
+skins it replaced. With the memo it is 55.8s, and the printed report and every OBJ are identical
+with it and without it on all five substrates. The scope is one `Faces`, which is built after
+`group_cornices` and `group_caps` have re-stamped the parts: a caller that re-stamps metadata needs
+a new `Faces`, which was already true of `Faces.roles`.
 
 `keep` and `lap` are predicates `Faces -> bool[nfaces]` over the union's faces. `Faces` (in
 `skinning/skin/offset.py`) carries `body`, `parts`, `owner`, `normals`, `centres`, plus `roles` (WALL/ROOF
 per part), `of_role(role)` and `touching(mask)`. Predicates get the whole thing because rules that
 read the substrate need to ask what a face *adjoins*, not just where it sits. Compose `_upward`,
 `wall_faces` and `_rules` rather than writing new plane tests. `keep` selects what the surface
-**covers**; `lap` selects what it may **continue onto**.
+**covers**; `lap` selects what it may **continue onto**. Only `keep` takes the `select` value: what
+a skin may lap *onto* is a fact about the receiving face rather than about which instance is
+lapping, and the membrane's laps came out bit-identical per zone with the candidate set left whole.
 
 A skin whose `keep` selects nothing on the substrate being built is **skipped and named**, not
 built — see `pipeline.covered`. So a rule set may legitimately describe a condition only some
-substrates pose, which is what lets the masonry live in the one parameter file the rig and both
-bakes share.
+substrates pose, which is what lets both masonries live in the one parameter file the rig and every
+bake share: the rig has no cornice and skips both, the deck bakes pose the firewall's, and the unit8
+bake the brick.
 
 ## The lap: one rule, not a skirt and a flange
 
@@ -619,6 +669,13 @@ two edges on 2026-08-26. One rule covers them:
   cavity. That is the offset-**zero** case, and it is what "the outer system owns the corner"
   means in arithmetic.
 
+**Two neighbours cannot both name one plane.** The mitre is collected per plane before anything is
+written and raises where two sibling skins disagree about it — the shape `skin_offsets` already had
+for the reveal and the flush stop. It assigned as it went until 2026-08-28, so the last skin in the
+list won and nothing said so: tolerable while there were two siblings and one of them clad no
+facade, and not with five, two of them masonries at 0.150 and 0.161. No substrate here poses it, so
+the guard is structural rather than measured. Found on review.
+
 Two things it has to get right, both found by running it. **A skin that clads no facade takes no
 facade miter** — the membrane covers roofs, interior faces, copings and cheeks and never an
 exterior facade, so every plane it touches still moves by its own 8 mm. And **the decision is per
@@ -703,8 +760,13 @@ machinery can express.
 
 What the cornice does **not** say is *which* masonry. Brick on a street front and block on a
 firewall are two allowances and therefore two skins, and which one a wall takes is a material —
-authored on the part like every other cladding system, never derived. Only one is posed by any
-substrate here.
+authored on the part like every other cladding system, never derived. The whole-building bake poses
+both, so since 2026-08-28 `masonry_faces` takes a `system` and there are two skins:
+`Masonry-Brick` at 0.150 on the street front (`Parapet-Unit8-E`, `Cornice-Unit8-E`) and
+`Masonry-Firewall` at 0.161 on the mitoyen elevation (`Parapet-Deck9-N`, `Cornice-Deck9-N`). The
+firewall's block is drawn 0.140 + a 20 mm cavity, and 0.160 is exactly 20x `Membrane.distance`,
+which `check_seeds` refuses — so the cavity carries the millimetre, the way `reveal` took 0.018
+over 0.016 on 2026-08-27 rather than move the membrane off 8 mm (Duncan, 2026-08-28).
 
 **A separately-authored cap plate joins the wall it caps.** `rules.group_caps` runs before
 anything reads a role, and re-stamps `metadata["object"]` so the plate and its parapet are one
@@ -1100,6 +1162,29 @@ listed — there are no plane coordinates and no part indices in them:
   substrate reader stamps `part.metadata["facade"]`; in the student-house that is one read of the
   IFC material. `check_facades` raises if any facade is claimed by no declared system, so an
   unstamped part cannot silently vanish from every skin.
+  **The rainscreen is the exception, and it is the residue**: `cladding_faces` claims every
+  exterior facade no masonry skin claims, rather than the parts tagged `rainscreen`. The two
+  readings were identical while every part carried one tag, and they part company at the corners
+  the moment a material is authored — a wall's **end** is a face on the neighbouring elevation,
+  clad in whatever clads that elevation, and a per-part tag cannot say so. Stamping the street
+  front `brick` took its 20 return-ends out of `facades_of(RAINSCREEN)` and left 7.795 m² of facade
+  claimed by nobody. Measured both ways 2026-08-28: with the residue the cladding is exactly what
+  it was, 591.5588 m² and 138 triangles on the whole-building bake.
+  What the residue cannot then notice is a wall stamped `brick` that no cornice reaches — the
+  cladding would take it and say nothing — so `check_cladding` reads the tag back against the
+  skins: a wall carrying a masonry material with no face in that masonry's skin raises.
+- **one membrane per roof** — `membrane_faces(faces, fall, zone)`, the zone being `ROOF_ZONE` on the
+  roof parts, and nothing else authored. The walls follow from it: each zone elects the walls *its*
+  roof runs into (`_climbed`), and their tops and cheeks come with them. It is a partition, not a
+  narrowing, and that is measured rather than assumed — on the whole-building bake the three zones
+  select between them exactly the 156 faces the one skin selected, no face twice, and the surfaces
+  sum to 237.3814 m², the single membrane's area to the last figure it printed. Duncan, 2026-08-28.
+  The zone is stamped on the **roof parts alone**. The connected components of the roof face set do
+  come out as the three roofs here (7, 7 and 5 faces, each electing only its own four parapets), so
+  the derivation exists — but a component has no name to author a skin against, and a roof that
+  arrived in two pieces would silently become two zones. `check_roofs` refuses a roof face whose
+  part carries no zone, because the fan-out enumerates the zones it *finds*: a missing stamp
+  subtracts a membrane from the build rather than failing it.
 - **a wall the substrate cannot yet place takes no skin at all** — `UNSURVEYED`, stamped on the
   part, and the stronger version of the same argument as `FACADE`: where a material is a design
   decision no shape implies, this is a fact about a *neighbouring building that is not in the
@@ -1128,10 +1213,18 @@ listed — there are no plane coordinates and no part indices in them:
   them — the scupper drips, 4 faces on the live deck bake and 2 on each of the others, and nothing
   else on any of them. A wall cornice's exterior faces are all claimed now: see **The skirt over a
   cornice**.
-  `check_cladding` also raises where the corniced walls of one substrate carry **more than one**
-  `FACADE` value, which is the exact moment the cornice stops being enough to select a masonry
-  skin: one skin is one allowance, and two systems need a skin each, chosen on the tag as well as
-  on the cornice.
+  `check_cladding` used to raise where the corniced walls of one substrate carried **more than one**
+  `FACADE` value — the exact moment the cornice stops being enough to select a masonry skin. The
+  whole-building bake reached that moment on 2026-08-28, and the raise became the selector:
+  `masonry_faces(faces, fall, system)` takes the material off the **corniced host**, and there are
+  two masonry skins. What it checks now is the three things one skin cannot see — every corniced
+  wall carries a material some skin is built for, no face is claimed by two masonries, and between
+  them they claim exactly what the cornice rule claims. Measured: 13 faces brick, 33 block, of the
+  46 the unfiltered rule claims.
+  It is the **host's** material that selects, not each face's, and that is the growth's own
+  argument read again: 20 of the firewall's 33 faces are ends of `L*-alleyback-W`,
+  `L*-courtfacing-E` and `Lobby-*`, every one stamped `rainscreen`, because a return at a corner is
+  a face on the elevation it lands in. Filtering per face would drop exactly those.
 - **A flat-topped wall takes its direction from the lift above it.** `uphill` reads one
   element's own top and raises where it is flat; `rise` walks the stack to the element that
   carries the fall, and is what `wall_faces` calls. A wall built in lifts is flat-topped all the
@@ -1213,6 +1306,17 @@ is nothing to separate a wall that is skinned from one that is not; `metadata["n
 only authored handle there is. It lives in the **rig** and not in `skinning.rules` because it is
 not a fact about geometry at all — in the student-house it is one read of the IFC instead of a
 list of names.
+
+Three facts now, and they are all read off the `o` name. `UNSURVEYED_OBJECTS` names the walls that
+take no skin. `ROOF_OBJECT` matches `Roof_<zone>_<layer>` and stamps the zone, which is what the
+membrane's `select: '*'` fans out over — a pattern rather than a table, so a bake with a new roof
+in it needs no edit. `MASONRY_OBJECTS` stamps the two materials: `-streetfront-` and
+`Parapet-Unit8-E` are brick, `-mitoyen-` and `Parapet-Deck9-N` are block. The material goes on the
+whole elevation and not only on the corniced parapet, because it is the wall's material and
+`check_facades` reads it — what *selects* the masonry skin is the host's value. Every bake here
+names its objects the same way, so the one table stamps all five substrates, and the two checks
+that read them (`check_roofs`, `check_cladding`) refuse a roof with no zone and a corniced wall
+with no masonry rather than quietly dropping either from the build.
 
 `from_obj` parses the OBJ itself rather than calling `trimesh.load`, which in trimesh 5.0.0
 silently merges every `o` group into one mesh named after the first. It raises, naming the object,

@@ -7,8 +7,24 @@ import numpy as np
 import pytest
 import trimesh
 
+import build
 from skinning.skin import skin_over, substrate
 from skinning.skin.export import write_objs
+
+
+def _spec(params, parts, name):
+    """One skin's spec, over this substrate.
+
+    `skins` takes the `Faces` view as well as the numbers since 2026-08-28: the
+    membrane is authored `select: '*'`, one skin per roof zone, and only the
+    substrate can say how many that is. Tests that build a `Faces` of their own
+    pass it directly; this is for the ones that do not, and it goes through
+    `pipeline.prepare` so the grouping and the checks are the ones `build()` runs.
+    """
+    from skinning.pipeline import prepare
+    from skinning.rules import skins
+
+    return next(s for s in skins(params, prepare(parts, params)) if s["name"] == name)
 
 
 def _two_object_obj(tmp_path, parts=None):
@@ -343,7 +359,7 @@ def test_the_baked_headhouse_reads_and_skins():
     from skinning.skin.measure import buried, clearance, intersects, separation
     from skinning.skin.offset import Faces, _owner, elements_of
 
-    parts = substrate.from_obj(BAKE, metadata={FACADE: RAINSCREEN})
+    parts = build.stamped(substrate.from_obj(BAKE, metadata={FACADE: RAINSCREEN}))
     assert len(parts) == 18
     assert all(part.is_watertight for part in parts)
 
@@ -371,13 +387,13 @@ def test_the_baked_headhouse_reads_and_skins():
         ).min() < 1e-9
 
     built = {}
-    for spec in skins(params):
-        # this bake carries no cornice, so it poses no masonry facade and that
-        # skin is skipped here exactly as `build()` skips it -- see
+    for spec in skins(params, faces):
+        # this bake carries no cornice, so it poses no masonry facade and both
+        # masonry skins are skipped here exactly as `build()` skips them -- see
         # `build.covered`. Asserted rather than silently filtered: a bake that
         # started posing one would be worth noticing
         if not covered(spec, faces):
-            assert spec["name"] == "Masonry"
+            assert spec["name"].startswith("Masonry")
             continue
         skin = _skin_from(spec, parts)
         built[spec["name"]] = skin
@@ -404,7 +420,9 @@ def test_the_baked_headhouse_reads_and_skins():
             gap = clearance(parts, skin)
             assert gap > spec["distance"] - skin.metadata["slope_deviation"] - 1e-6
 
-    membrane, cladding = built["Membrane"], built["Cladding"]
+    # one roof, so one membrane, and it is named for the zone the bake stamps
+    assert set(built) == {"Membrane-Headhouse", "Cladding"}
+    membrane, cladding = built["Membrane-Headhouse"], built["Cladding"]
 
     # This reading has a history, and all of it was the scupper. It was 3.6593 mm
     # until 2026-08-25, when `_knife_side` fixed the cause and it went to
@@ -484,16 +502,26 @@ def test_the_scupper_comes_out_symmetrical_on_the_live_bake():
     """
     from skinning.rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices
     from skinning.pipeline import _skin_from
-    from skinning.rules import skins
     from skinning.skin import parameters, substrate
+    from skinning.skin.clean import clean
 
-    parts = substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN})
+    parts = build.stamped(substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN}))
     params = parameters.load_validated()
     group_cornices(parts)
     group_caps(parts, classifier(params))
-    membrane = _skin_from(
-        next(spec for spec in skins(params) if spec["name"] == "Membrane"), parts
-    )
+    # the scupper is cut through the headhouse parapet, so it is the headhouse
+    # roof's membrane that wraps it
+    #
+    # ...and it is the **written** mesh that is asked, not the raw emission.
+    # `_lap` legitimately covers part of a plane twice, and which of two
+    # overlapping quads lands on which side of the mouth is not mirrored: with
+    # one membrane over both roofs the raw emission happened to be symmetric
+    # here, and with one per roof it is not, by two vertices of redundant cover
+    # that `clean` dissolves either way (2026-08-28). The surface is the same
+    # surface -- the cleaned meshes of the two readings are identical face for
+    # face -- and it is the surface that has to be symmetrical
+    spec = _spec(params, parts, "Membrane-Headhouse")
+    membrane = clean(_skin_from(spec, parts), dissolve=True, close=spec["close"])
 
     # the scupper's own neighbourhood: outboard of the parapet's inner face,
     # within a jamb's reach of the slot, and above the cornice's drip
@@ -566,7 +594,7 @@ def test_the_bake_s_separately_authored_cap_plates_are_capped_by_both_skins():
     from skinning.skin.offset import Faces, _owner
 
     params = parameters.load_validated()
-    parts = substrate.from_obj(BAKE, metadata={FACADE: RAINSCREEN})
+    parts = build.stamped(substrate.from_obj(BAKE, metadata={FACADE: RAINSCREEN}))
     group_caps(parts, classifier(params))
 
     body = substrate.union(parts)
@@ -579,7 +607,9 @@ def test_the_bake_s_separately_authored_cap_plates_are_capped_by_both_skins():
     # every cap plate face that is exposed upward is claimed by both skins
     tops = plates & (faces.normals[:, 2] > 0.9)
     assert tops.sum() == 10  # five plates, two triangles each
-    assert membrane_faces(faces, params["fall"])[tops].all()
+    # the membrane is per roof, so the claim is made by the zone that covers
+    # this one -- there is a single roof in this bake and the stamp names it
+    assert membrane_faces(faces, params["fall"], "Headhouse")[tops].all()
     assert cladding_faces(faces, params["fall"])[tops].all()
 
     # and every plate reads `wall`, through the parapet it was joined to --
@@ -621,11 +651,11 @@ def test_the_cheek_lining_reaches_the_coping_on_the_live_bake():
     from skinning.rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins
     from skinning.skin import parameters, substrate
 
-    parts = substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN})
+    parts = build.stamped(substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN}))
     params = parameters.load_validated()
     group_cornices(parts)
     group_caps(parts, classifier(params))
-    spec = next(s for s in skins(params) if s["name"] == "Cladding")
+    spec = _spec(params, parts, "Cladding")
     cladding = _skin_from(spec, parts)
 
     # the coping is laid to fall, so the reveal's head is sloped: west corner
@@ -701,7 +731,7 @@ def test_a_wall_a_cornice_finishes_is_clad_in_masonry_at_its_own_allowance():
     from skinning.skin.measure import separation
     from skinning.skin.offset import Faces, _owner
 
-    parts = substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN})
+    parts = build.stamped(substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN}))
     params = parameters.load_validated()
     group_cornices(parts)
     group_caps(parts, classifier(params))
@@ -733,7 +763,7 @@ def test_a_wall_a_cornice_finishes_is_clad_in_masonry_at_its_own_allowance():
     assert (faces.normals[masonry][:, 0] < -0.999).all(), "masonry turned a corner"
     assert not (masonry & cladding_faces(faces, params["fall"])).any()
 
-    spec = next(s for s in skins(params) if s["name"] == "Masonry")
+    spec = next(s for s in skins(params, faces) if s["name"] == "Masonry-Brick")
     assert covered(spec, faces)
     skin = _skin_from(spec, parts)
     assert skin.metadata["offset_residual"] < 1e-14
@@ -766,7 +796,7 @@ def test_a_wall_a_cornice_finishes_is_clad_in_masonry_at_its_own_allowance():
     # mitring onto a plane 85 mm out that nothing is clad to. Duncan, 2026-08-26:
     # *"E90 is moved -x to align with the exterior plane of the wall."* So its
     # end drops straight down at x = 0, and no panel stands at x = -0.085
-    rainscreen = next(s for s in skins(params) if s["name"] == "Cladding")
+    rainscreen = _spec(params, parts, "Cladding")
     cladding = _skin_from(rainscreen, parts)
     assert not (np.abs(cladding.vertices[:, 0] + 0.085) < 1e-6).any()
     for end in (2.345, 11.385):
@@ -837,7 +867,7 @@ def test_a_skin_mitres_onto_the_plane_of_the_system_that_dresses_it():
     from skinning.skin import parameters, substrate
     from skinning.skin.offset import Faces, _plane_ids
 
-    parts = substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN})
+    parts = build.stamped(substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN}))
     params = parameters.load_validated()
     group_cornices(parts)
     group_caps(parts, classifier(params))
@@ -845,17 +875,24 @@ def test_a_skin_mitres_onto_the_plane_of_the_system_that_dresses_it():
     faces = Faces(body, parts, _owner(body, parts), classifier(params))
     exterior, _ = wall_faces(faces, params["fall"])
     masonry = masonry_faces(faces, params["fall"])
-    spec = {s["name"]: s for s in skins(params)}
+    spec = {s["name"]: s for s in skins(params, faces)}
 
     # the membrane clads no facade, so it has no corner with a cladding system
     # and every plane it touches moves by its own 8 mm. It reaches the same
     # cornices and lines the same cheeks, and takes neither the joint nor the
     # flush stop: both are where a *cladding* system finishes, and a membrane
     # covering a cornice's top is not a skirt running down its face
-    membrane = spec["Membrane"]["offsets"](faces)
-    assert not (exterior & spec["Membrane"]["keep"](faces)).any()
-    assert (membrane == spec["Membrane"]["distance"]).all()
-    assert not wrapped(faces, spec["Membrane"]["keep"](faces)).any()
+    # ...and it is said of **every** membrane zone, this bake carrying two: the
+    # gate is "does this skin clad a facade", which is a property of the rule
+    # set and not of which roof an instance of it covers
+    zones = [name for name in spec if name.startswith("Membrane")]
+    assert zones == ["Membrane-Headhouse", "Membrane-Unit8"]
+    for zone in zones:
+        offsets = spec[zone]["offsets"](faces)
+        assert not (exterior & spec[zone]["keep"](faces)).any()
+        assert (offsets == spec[zone]["distance"]).all()
+        assert not wrapped(faces, spec[zone]["keep"](faces)).any()
+    membrane = spec["Membrane-Headhouse"]["offsets"](faces)
 
     # the rainscreen meets masonry standing 65 mm proud of it, so it does not
     # mitre onto that face at all: it dies on the wall behind it, offset zero
@@ -890,12 +927,12 @@ def test_a_skin_mitres_onto_the_plane_of_the_system_that_dresses_it():
     # its own 8 mm, which the blanket assertion above already says of every
     # plane it touches. Said again here because it is the gate that keeps a
     # waterproofing layer out of a cladding rule, not an accident of this bake
-    assert (membrane[cheeks] == spec["Membrane"]["distance"]).all()
+    assert (membrane[cheeks] == spec["Membrane-Headhouse"]["distance"]).all()
 
     # ...and the masonry, being the outer system, runs through the corner and
     # lands in the rainscreen's own plane
-    stone = spec["Masonry"]["offsets"](faces)
-    assert (stone[masonry] == spec["Masonry"]["distance"]).all()
+    stone = spec["Masonry-Brick"]["offsets"](faces)
+    assert (stone[masonry] == spec["Masonry-Brick"]["distance"]).all()
     neighbour = exterior & spec["Cladding"]["keep"](faces)
     assert neighbour.any()
     assert (stone[neighbour] == spec["Cladding"]["distance"]).all()
@@ -918,7 +955,19 @@ def test_a_skin_mitres_onto_the_plane_of_the_system_that_dresses_it():
     # case: clad by nobody and coplanar with nothing anyone clads
     lonely = exterior & owned_by("Cornice-Headhouse-E")
     assert lonely.any()
-    assert (stone[lonely] == spec["Masonry"]["distance"]).all()
+    assert (stone[lonely] == spec["Masonry-Brick"]["distance"]).all()
+
+    # ...and the brick wall's own **ends** are the rainscreen's, which is what
+    # the residue rule is for. `Parapet-Unit8-E` is stamped `brick`, so a
+    # rainscreen read off the tag lost its two returns the moment the material
+    # was authored -- they are faces on the north and south elevations, clad in
+    # whatever clads those, and no per-part tag can say so. Measured at 20 faces
+    # and 7.795 m² on the whole-building bake; here it is the parapet's own
+    from skinning.rules import cladding_faces
+
+    returns = exterior & owned_by("Parapet-Unit8-E") & ~masonry
+    assert returns.any(), "the brick parapet presents no end on another elevation"
+    assert cladding_faces(faces, params["fall"])[returns].all()
 
 
 def test_the_skirt_turns_down_to_the_sill_on_the_live_bake():
@@ -944,11 +993,11 @@ def test_the_skirt_turns_down_to_the_sill_on_the_live_bake():
     from skinning.rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins
     from skinning.skin import parameters, substrate
 
-    parts = substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN})
+    parts = build.stamped(substrate.from_obj(LIVE, metadata={FACADE: RAINSCREEN}))
     params = parameters.load_validated()
     group_cornices(parts)
     group_caps(parts, classifier(params))
-    spec = next(s for s in skins(params) if s["name"] == "Cladding")
+    spec = _spec(params, parts, "Cladding")
     skin = _skin_from(spec, parts)
 
     # the skirt lies on the parapet's inner face offset, x = 8.5 + 0.085
@@ -1072,14 +1121,14 @@ def test_dissolving_collinear_vertices_moves_no_outline(path):
     from skinning.skin.clean import clean
     from skinning.skin.offset import Faces, _owner
 
-    parts = substrate.from_obj(path, metadata={FACADE: RAINSCREEN})
+    parts = build.stamped(substrate.from_obj(path, metadata={FACADE: RAINSCREEN}))
     params = parameters.load_validated()
     group_cornices(parts)
     group_caps(parts, classifier(params))
     body = substrate.union(parts)
     faces = Faces(body, parts, _owner(body, parts), classifier(params))
 
-    for spec in skins(params):
+    for spec in skins(params, faces):
         if not covered(spec, faces):
             continue
         skin = _skin_from(spec, parts)
@@ -1144,12 +1193,12 @@ def test_the_deck_bake_reads_and_skins():
     back on 2026-08-26 — nothing inside the headhouse, and every parapet's ledge
     and coping carried.
     """
-    from skinning.pipeline import _skin_from, covered
+    from skinning.pipeline import _skin_from, covered, prepare
     from skinning.rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins
     from skinning.skin import parameters, substrate
     from skinning.skin.measure import buried, intersects
 
-    parts = substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN})
+    parts = build.stamped(substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN}))
     assert len(parts) == 42          # 35 objects, six taper bodies in one of them
     params = parameters.load_validated()
     group_cornices(parts)
@@ -1160,16 +1209,29 @@ def test_the_deck_bake_reads_and_skins():
     assert body.metadata["flaps_dropped"] == 2
 
     built = {}
-    for spec in skins(params):
+    faces = prepare(parts, params)
+    for spec in skins(params, faces):
+        # the brick is the one skin this bake does not pose: its cornice is
+        # `Cornice-Deck9-N`, on the mitoyen elevation, so the masonry here is
+        # the firewall's and `covered` skips the other
+        if not covered(spec, faces):
+            assert spec["name"] == "Masonry-Brick"
+            continue
         skin = _skin_from(spec, parts)
         built[spec["name"]] = skin
         assert not intersects(skin, skin), f"{spec['name']} folds through itself"
         assert not intersects(skin, body), f"{spec['name']} crosses the substrate"
         assert not buried(parts, skin), f"{spec['name']} has a sample inside a part"
-    assert set(built) == {"Membrane", "Cladding", "Masonry"}
+    assert set(built) == {
+        "Membrane-Deck9", "Membrane-Headhouse", "Cladding", "Masonry-Firewall",
+    }
 
-    # nothing inside the headhouse: that deck is its floor, not a roof
-    tri = built["Membrane"].triangles
+    # nothing inside the headhouse: that deck is its floor, not a roof. Asked of
+    # both membranes -- the headhouse's roof is the one over that room, and the
+    # deck's is the one whose slab is its floor
+    tri = np.concatenate([
+        built["Membrane-Deck9"].triangles, built["Membrane-Headhouse"].triangles
+    ])
     room = np.all(
         (tri >= (8.51, 2.86, 10.9)) & (tri <= (13.09, 7.11, 14.0)), axis=(1, 2)
     )
@@ -1218,11 +1280,11 @@ def test_the_cladding_skirt_stops_at_its_drip_all_round_the_deck():
     from skinning.rules import FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins
     from skinning.skin import parameters, substrate
 
-    parts = substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN})
+    parts = build.stamped(substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN}))
     params = parameters.load_validated()
     group_cornices(parts)
     group_caps(parts, classifier(params))
-    spec = next(s for s in skins(params) if s["name"] == "Cladding")
+    spec = _spec(params, parts, "Cladding")
     skin = _skin_from(spec, parts)
     out, drop = spec["distance"], spec["drop"]
     tri = skin.triangles
@@ -1289,7 +1351,7 @@ def test_the_deck_s_inner_corners_are_the_enclosure_continuing():
     from skinning.skin import parameters, substrate
     from skinning.skin.offset import Faces
 
-    parts = substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN})
+    parts = build.stamped(substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN}))
     params = parameters.load_validated()
     group_cornices(parts)
     group_caps(parts, classifier(params))
@@ -1339,7 +1401,7 @@ def test_the_scupper_hole_holds_the_reveal_at_bottom_and_sides_and_not_at_the_to
     Both scuppers, because they are one detail mirrored and defects here have
     read correctly on one and not the other before.
     """
-    from skinning.pipeline import _skin_from
+    from skinning.pipeline import _skin_from, prepare
     from skinning.rules import (
         FACADE, RAINSCREEN, _opening, classifier, group_caps, group_cornices, skins,
     )
@@ -1347,11 +1409,11 @@ def test_the_scupper_hole_holds_the_reveal_at_bottom_and_sides_and_not_at_the_to
     from skinning.skin import parameters, substrate
     from skinning.skin.offset import Faces
 
-    parts = substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN})
+    parts = build.stamped(substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN}))
     params = parameters.load_validated()
     group_cornices(parts)
     group_caps(parts, classifier(params))
-    spec = next(s for s in skins(params) if s["name"] == "Cladding")
+    spec = _spec(params, parts, "Cladding")
     skin = _skin_from(spec, parts)
     reveal, out = params["reveal"], spec["distance"]
 
@@ -1441,13 +1503,13 @@ def test_a_cornice_end_in_a_clad_elevation_is_left_to_that_elevation(monkeypatch
     from skinning.skin.offset import Faces, _plane_ids
     from skinning import rules
 
-    parts = substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN})
+    parts = build.stamped(substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN}))
     params = parameters.load_validated()
     group_cornices(parts)
     group_caps(parts, classifier(params))
     body = substrate.union(parts)
     faces = Faces(body, parts, _owner(body, parts), classifier(params))
-    spec = next(s for s in skins(params) if s["name"] == "Cladding")
+    spec = next(s for s in skins(params, faces) if s["name"] == "Cladding")
     covers = spec["keep"](faces)
     ids, _ = _plane_ids(body)
 
@@ -1504,7 +1566,7 @@ def test_the_skirt_over_a_cornice_runs_to_the_cornice_s_bottom():
     still holds its 18 mm under the same soffit, so the two systems meet in the
     joint rather than in each other.
     """
-    from skinning.pipeline import _skin_from
+    from skinning.pipeline import _skin_from, prepare
     from skinning.rules import (
         CORNICE, FACADE, RAINSCREEN, classifier, group_caps, group_cornices, skins, wrapped,
     )
@@ -1514,14 +1576,14 @@ def test_the_skirt_over_a_cornice_runs_to_the_cornice_s_bottom():
 
     params = parameters.load_validated()
     for path in (DECK, REPO / "deck9-parapets-caps-cornices-clt-insulation-unit7-walls.obj"):
-        parts = substrate.from_obj(path, metadata={FACADE: RAINSCREEN})
+        parts = build.stamped(substrate.from_obj(path, metadata={FACADE: RAINSCREEN}))
         group_cornices(parts)
         group_caps(parts, classifier(params))
         named = {p.metadata["name"]: p for p in parts}
         soffit = named["Cornice-Deck9-N"].bounds[0][2]        # 12.736
         assert soffit == pytest.approx(12.736, abs=1e-6)
 
-        spec = {s["name"]: s for s in skins(params)}
+        spec = {s["name"]: s for s in skins(params, prepare(parts, params))}
         cladding = _skin_from(spec["Cladding"], parts)
         # the band on the cornice's own plane, 85 mm out from its outer face
         band = cladding.vertices[np.abs(cladding.vertices[:, 1] + 0.245) < 1e-6]
@@ -1539,11 +1601,14 @@ def test_the_skirt_over_a_cornice_runs_to_the_cornice_s_bottom():
         covers = spec["Cladding"]["keep"](faces)
         cornice = faces.tagged(CORNICE, True)
         assert not (covers & cornice & (faces.normals[:, 2] > 1e-6)).any()
-        assert wrapped(faces, spec["Membrane"]["keep"](faces)).sum() == 0
+        # ...of every membrane zone: one roof or two, none of them wraps a band
+        for zone in (n for n in spec if n.startswith("Membrane")):
+            assert wrapped(faces, spec[zone]["keep"](faces)).sum() == 0
 
         # the masonry still stops `reveal` under the same soffit -- one plane,
-        # two skins, two answers, because they are two systems
-        masonry = _skin_from(spec["Masonry"], parts)
+        # two skins, two answers, because they are two systems. The cornice on
+        # both these bakes is `Cornice-Deck9-N`, so the masonry is the firewall's
+        masonry = _skin_from(spec["Masonry-Firewall"], parts)
         assert masonry.vertices[:, 2].max() == pytest.approx(
             soffit - params["reveal"], abs=1e-6
         )
@@ -1570,11 +1635,11 @@ def test_one_plane_cannot_be_both_a_joint_and_an_arris(monkeypatch):
     from skinning import pipeline
     from skinning import rules
 
-    parts = substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN})
+    parts = build.stamped(substrate.from_obj(DECK, metadata={FACADE: RAINSCREEN}))
     params = parameters.load_validated()
     group_cornices(parts)
     group_caps(parts, classifier(params))
-    spec = next(s for s in skins(params) if s["name"] == "Masonry")
+    spec = _spec(params, parts, "Masonry-Firewall")
 
     # the masonry holds the joint under `Cornice-Deck9-N`; say it also stops
     # flush there, which is the two-cornices-at-one-level condition in miniature
@@ -1609,7 +1674,7 @@ def test_the_whole_building_reads_and_skins():
     it error the solve spread over the whole building. See `planar_offset`'s
     torn-edge rule; what is pinned here is that all three residuals are clean.
     """
-    from skinning.pipeline import _skin_from
+    from skinning.pipeline import _skin_from, prepare
     from skinning.rules import (
         FACADE, RAINSCREEN, UNSURVEYED, classifier, group_caps, group_cornices,
         skins, wall_faces,
@@ -1642,7 +1707,7 @@ def test_the_whole_building_reads_and_skins():
     assert not (on_join & (exterior | interior)).any()
 
     built = {}
-    for spec in skins(params):
+    for spec in skins(params, faces):
         skin = _skin_from(spec, parts)
         built[spec["name"]] = skin
         assert not (spec["keep"](faces) & on_join).any(), (
@@ -1653,11 +1718,16 @@ def test_the_whole_building_reads_and_skins():
         # the level chain at z = 6.75 is what this would fail on: it pinned the
         # residual in millimetres, five orders above anything else here
         assert skin.metadata["offset_residual"] < 1e-9, spec["name"]
-    assert set(built) == {"Membrane", "Cladding", "Masonry"}
+    assert set(built) == {
+        "Membrane-Deck9", "Membrane-Headhouse", "Membrane-Unit8",
+        "Cladding", "Masonry-Brick", "Masonry-Firewall",
+    }
 
     # ...and the tear that made it solvable is reported rather than silent, at
-    # the two points where the two sheets meet
-    for name in ("Membrane", "Masonry"):
+    # the two points where the two sheets meet. The `z = 6.75` pinch is on the
+    # court elevation, which the deck 9 membrane is the one to reach, and on the
+    # firewall's own wall
+    for name in ("Membrane-Deck9", "Masonry-Firewall"):
         torn = built[name].metadata["torn"]
         assert len(torn) == 8, name
         pinch = {v for edge in torn for v in edge if sum(v in e for e in torn) == 4}
@@ -1794,7 +1864,7 @@ def test_the_floor_slabs_bury_the_bearing_ledges_and_join_no_wall():
     assert not (cheeks & slab).any()
 
     built = {}
-    for spec in skins(params):
+    for spec in skins(params, faces):
         skin = _skin_from(spec, parts)
         built[spec["name"]] = skin
         assert skin.metadata["offset_residual"] < 1e-9, spec["name"]
@@ -1802,4 +1872,7 @@ def test_the_floor_slabs_bury_the_bearing_ledges_and_join_no_wall():
         assert not spec["keep"](faces)[slab].any(), f"{spec['name']} covers a slab"
         assert not intersects(skin, skin), f"{spec['name']} folds through itself"
         assert not buried(parts, skin), f"{spec['name']} has a sample inside a part"
-    assert set(built) == {"Membrane", "Cladding", "Masonry"}
+    assert set(built) == {
+        "Membrane-Deck9", "Membrane-Headhouse", "Membrane-Unit8",
+        "Cladding", "Masonry-Brick", "Masonry-Firewall",
+    }

@@ -11,13 +11,16 @@ caller integrates against. Everything below is a caller of that seam.
 from __future__ import annotations
 
 import json
+import re
 from itertools import combinations
 from pathlib import Path
 
 import trimesh
 
 from skinning import pipeline
-from skinning.rules import FACADE, RAINSCREEN, RULES, TOL, UNSURVEYED
+from skinning.rules import (
+    BLOCK, BRICK, FACADE, RAINSCREEN, ROOF_ZONE, RULES, TOL, UNSURVEYED,
+)
 from skinning.skin import (
     buried, clearance, intersects, parameters, separation, substrate, write_obj,
 )
@@ -85,10 +88,19 @@ def current_substrate() -> list:
     Every facade here is rainscreen — the sample has no street front, and indeed
     no -X-facing facade at all, so it cannot pose the brick condition. The stamp
     is applied anyway so the path that reads it is the one that runs.
+
+    The roof zone is stamped for the same reason and one stronger: the membrane
+    is authored `select: '*'`, one skin per zone, so a substrate that stamps none
+    builds no membrane at all — and `check_roofs` says so rather than letting it
+    happen quietly. This rig has one roof and it is not any building's, so it is
+    named for the rig. Stamped on every part rather than only on the roof: the
+    zone is read through the roof face set, so it is inert on a wall, and these
+    four are transcribed literals with no names to pick a roof out by.
     """
     parts = [substrate.polyhedron(*p) for p in (PART_1, PART_2, PART_3, PART_4)]
     for part in parts:
         part.metadata[FACADE] = RAINSCREEN
+        part.metadata[ROOF_ZONE] = "Rig"
     return parts
 
 
@@ -108,6 +120,29 @@ def current_substrate() -> list:
 # mistake, which is exactly why `rise` raises on both and why this is authored.
 UNSURVEYED_OBJECTS = ("L0-internaljoin-S", "L2-internaljoin-S", "L4-internaljoin-S")
 
+# Which roof a part belongs to, read off the `o` name: every roof layer in every
+# bake is `Roof_<zone>_<layer>`, so the zone is the middle token and no table has
+# to be kept in step with the exports. It is still authored rather than derived —
+# the name is a fact the modeller put there — and it is the whole of what
+# `Membrane`'s `select: '*'` fans out over. In the student-house it is one read
+# of the IFC spatial container instead.
+ROOF_OBJECT = re.compile(r"^Roof_([^_]+)_")
+
+# ...and which masonry clads a wall a cornice finishes — a third fact an OBJ
+# cannot carry, entering where they all do: the street front is brick and the
+# mitoyen elevation — the party wall, shared with the neighbouring building — is
+# block. Stamped on the whole elevation and not only on the corniced parapet,
+# because it is the wall's material and `check_facades` reads it; what selects
+# the masonry skin is the *host's* value, which is why `Parapet-Unit8-E` and
+# `Parapet-Deck9-N` are named here as well as matched by their walls' pattern.
+# The other bakes carry the same names, so one table stamps all five substrates.
+MASONRY_OBJECTS = (
+    ("-streetfront-", BRICK),
+    ("Parapet-Unit8-E", BRICK),
+    ("-mitoyen-", BLOCK),
+    ("Parapet-Deck9-N", BLOCK),
+)
+
 
 def stamped(parts: list) -> list:
     """The bake, with the authored facts the OBJ itself cannot carry.
@@ -126,11 +161,23 @@ def stamped(parts: list) -> list:
 
     Silent on a substrate that names none of them, which is every bake but the
     whole-building one: the tuple is a property of this rig's exports, not a
-    requirement on a substrate.
+    requirement on a substrate. The roof zone and the two masonries are the same
+    kind of fact and enter the same way — see `ROOF_OBJECT` and
+    `MASONRY_OBJECTS`. What is *not* silent is a roof with no zone on it or a
+    corniced wall with no masonry: `check_roofs` and `check_cladding` refuse
+    both, because either one would subtract a skin from the build without a
+    word.
     """
     for part in parts:
-        if part.metadata.get("object") in UNSURVEYED_OBJECTS:
+        name = str(part.metadata.get("object", ""))
+        if name in UNSURVEYED_OBJECTS:
             part.metadata[UNSURVEYED] = True
+        roof = ROOF_OBJECT.match(name)
+        if roof:
+            part.metadata[ROOF_ZONE] = roof.group(1)
+        for pattern, system in MASONRY_OBJECTS:
+            if pattern in name:
+                part.metadata[FACADE] = system
     return parts
 
 
@@ -368,8 +415,17 @@ def build(
     # different substrate. `display.reload()` is safe either way because it
     # reads the manifest, but the OBJ is what a person opens. Restricted to
     # names this module knows are skins, so nothing else in `build/` is touched
+    #
+    # ...which is a rule-set name, an authored skin name, and anything a fanned-
+    # out rule set may have written under it: `Membrane-Deck9.obj` is not named
+    # by RULES or by the parameter file at all, and the substrate that wrote it
+    # need not be the one being built now. The plain `{rule set}.obj` stays in
+    # the list because a build from before the split wrote one
     stale = list(BUILD_DIR.glob("Substrate_*.obj"))
-    stale += [BUILD_DIR / f"{name}.obj" for name in RULES]
+    for rules_name in RULES:
+        stale.append(BUILD_DIR / f"{rules_name}.obj")
+        stale += BUILD_DIR.glob(f"{rules_name}-*.obj")
+    stale += [BUILD_DIR / f"{spec['name']}.obj" for spec in params["skins"]]
     for old in stale:
         if old.exists() and not any(name == old.stem for name, _, _, _ in named):
             old.unlink()

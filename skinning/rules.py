@@ -68,8 +68,6 @@ CORNICE = "cornice"  # stamped by group_cornices; the cladding stops below one
 # brick on the street front, block on the firewall — stays authored on the part
 # like every other cladding system. See `group_cornices` and `masonry_faces`
 TOP_CORNICE = "top_cornice"
-RAINSCREEN = "rainscreen"
-BRICK = "brick"
 # A wall the substrate cannot yet say the outside of, and which therefore takes
 # no skin at all. Authored, like `FACADE`, and for the stronger version of the
 # same reason: where a material is a design decision no shape implies, this is a
@@ -87,7 +85,32 @@ BRICK = "brick"
 # without a word.
 UNSURVEYED = "unsurveyed"
 
-CLADDING_SYSTEMS = (RAINSCREEN,)  # every system that claims facades; see check_facades
+# Which roof a membrane zone covers. Authored on the roof parts alone — every
+# parapet, coping and cheek follows from the climb election, which is geometry —
+# and authored rather than derived for the same reason `FACADE` is: a roof's
+# identity is a fact about how the building is organised, not about its shape.
+# The connected components of the roof face set do come out as the three roofs
+# here (measured 2026-08-28: 7, 7 and 5 faces, each electing only its own four
+# parapets), but a component has no name to author a skin against, and a roof
+# that arrived in two pieces would silently become two zones. Here the reader is
+# `build.stamped`, off the `o` group name; in the student-house it is one read of
+# the IFC spatial container.
+ROOF_ZONE = "roof_zone"
+
+RAINSCREEN = "rainscreen"
+BRICK = "brick"
+BLOCK = "block"
+# Every system that claims facades; see `check_facades`. The two masonries are
+# in it because a wall stamped `brick` is no longer stamped `rainscreen`, and an
+# exterior facade claimed by nothing at all is the silent omission that check
+# exists to stop
+CLADDING_SYSTEMS = (RAINSCREEN, BRICK, BLOCK)
+# ...and the ones a cornice selects between. A corniced wall is clad on its own
+# account (`masonry_faces`), and which masonry it takes is the material — brick
+# on the street front, block on the firewall. A corniced wall stamped with
+# anything else is a substrate the cornice rule cannot answer for, and
+# `check_cladding` says so rather than dropping the wall from every skin
+MASONRY_SYSTEMS = (BRICK, BLOCK)
 
 def _upward(normals):
     """Faces that face up at all: the tops of walls, and roof surfaces.
@@ -621,7 +644,41 @@ def _grow_coplanar(faces, seed, candidates):
         grown |= added
 
 
-def wall_faces(faces, fall):
+def _derived(faces, key, compute):
+    """One derivation, computed once per `Faces` and handed back as a copy.
+
+    `wall_faces`, `_rules` and `_opening` are pure functions of the substrate,
+    they are the expensive ones — `rise` walks every element's stack,
+    `_under_cover` casts a ray off every roof face — and with one skin per roof
+    and two masonries they are asked for over and over: every skin's
+    `facade_offsets` evaluates every *other* skin's `keep`, so a six-skin build
+    ran each of them about thirty times. Measured on the whole-building bake:
+    **2m14s** for the six skins without this, against 41s for the three-skin
+    build they replaced, and **55.8s** with it — the remaining difference being
+    six skins to solve, clean and write where there were three. The printed
+    report and every OBJ are identical with it and without it, on all five
+    substrates: nothing about the geometry changed, only how often it was
+    re-derived. Found on review, 2026-08-28.
+
+    The memo lives on the `Faces` instance because that is exactly its scope:
+    `Faces` is built after `group_cornices` and `group_caps` have re-stamped the
+    parts, and it already caches `roles`, `elements` and `element_of` on the same
+    footing. A caller that re-stamps metadata must build a new `Faces` — which
+    was already true of `roles` and is why nothing here does it.
+
+    **The value is copied out**, so a caller that writes into a mask it was given
+    cannot corrupt what the next caller reads. A bool array of a few hundred
+    faces costs microseconds to copy and a raycast costs milliseconds, so the
+    copy is free and the alternative is a class of bug that would be silent.
+    """
+    memo = faces.__dict__.setdefault("_derived", {})
+    if key not in memo:
+        memo[key] = compute()
+    value = memo[key]
+    return tuple(part.copy() for part in value) if isinstance(value, tuple) else value.copy()
+
+
+def _wall_faces(faces, fall):
     """Every wall's exterior and interior faces, read off its own top.
 
     A wall's top falls toward its interior, so the face under the high edge is
@@ -703,6 +760,11 @@ def wall_faces(faces, fall):
     return outside, _grow_coplanar(faces, interior, ends & ~outside)
 
 
+def wall_faces(faces, fall):
+    """`_wall_faces`, derived once per substrate. See `_derived`."""
+    return _derived(faces, ("wall_faces", float(fall)), lambda: _wall_faces(faces, fall))
+
+
 def _under_cover(faces, mask) -> np.ndarray:
     """Faces with substrate over them — the ones that cannot see the sky.
 
@@ -748,7 +810,7 @@ def _under_cover(faces, mask) -> np.ndarray:
     return covered
 
 
-def _rules(faces, fall):
+def _rules_of(faces, fall):
     """The whole face classification, derived once from the substrate.
 
     Which face of a wall the roof runs into decides how the membrane treats that
@@ -796,6 +858,24 @@ def _rules(faces, fall):
     # roof where the sky is over it and a floor where the building is
     roof = upward & faces.of_role(substrate.ROOF)
     roof &= ~_under_cover(faces, roof)
+    return exterior, interior, roof, _climbed(faces, interior, roof)
+
+
+def _rules(faces, fall):
+    """`_rules_of`, derived once per substrate. See `_derived`."""
+    return _derived(faces, ("_rules", float(fall)), lambda: _rules_of(faces, fall))
+
+
+def _climbed(faces, interior, roof) -> np.ndarray:
+    """The walls this roof runs into — the ones a membrane over it climbs.
+
+    Split out of `_rules` so that a **zone** can be asked the same question of
+    its own roof alone: `membrane_faces` covers one roof, and the walls it
+    climbs are the ones *that* roof runs into, not the ones any roof does.
+    Measured on the whole-building bake 2026-08-28: the three zones elect four
+    parapets each and no element twice, so asking per zone partitions what
+    asking once selected.
+    """
     meets = faces.touching(roof)
     # elected per ELEMENT, not per body: the face that touches the roof belongs
     # to the inner leaf, and the top the membrane then carries over belongs to
@@ -819,12 +899,11 @@ def _rules(faces, fall):
     # the first substrate that puts an exposed cornice top beside the coping of
     # a wall no roof reaches. Do not narrow `cladding_faces` to match this
     # instead: there the second half is load-bearing today
-    ledge = upward & faces.of_role(substrate.WALL)
-    climbed = np.isin(element, np.unique(element[(interior | ledge) & meets]))
-    return exterior, interior, roof, climbed
+    ledge = _upward(faces.normals) & faces.of_role(substrate.WALL)
+    return np.isin(element, np.unique(element[(interior | ledge) & meets]))
 
 
-def _opening(faces):
+def _opening_of(faces):
     """The cheeks and the floor of an opening cut through a wall.
 
     A slot cut through a wall — a scupper — leaves two vertical faces looking
@@ -1013,13 +1092,33 @@ def _opening(faces):
     return cheeks, floor
 
 
-def membrane_faces(faces, fall):
-    """Membrane: the roof, the interior faces it climbs, and those walls' tops.
+def _opening(faces):
+    """`_opening_of`, derived once per substrate. See `_derived`."""
+    return _derived(faces, ("_opening",), lambda: _opening_of(faces))
+
+
+def membrane_faces(faces, fall, zone):
+    """Membrane: one roof, the interior faces it climbs, and those walls' tops.
 
     It carries over the top rather than stopping at it, and the cladding takes
     that same top as its coping — see `cladding_faces`. The overlap is intended.
+
+    **One roof, not every roof** (Duncan, 2026-08-28). A building has a membrane
+    per roof and each is laid, warranted and measured on its own, so `zone` names
+    which — the value `build.stamped` put on the roof parts, and the value the
+    parameter file's `select: '*'` fans this rule set out over. Everything else
+    follows from it: the walls are the ones *this* roof runs into, and their
+    tops and cheeks come with them.
+
+    It is a partition rather than a narrowing, and that is measured rather than
+    assumed: on the whole-building bake the three zones select between them
+    exactly the 156 faces the one skin selected, **no face twice**, and the three
+    surfaces they offset sum to 237.3814 m² — the single membrane's area to the
+    last figure it printed. Nothing moved; the sheet was cut up.
     """
-    exterior, interior, roof, climbed = _rules(faces, fall)
+    exterior, interior, roof, _ = _rules(faces, fall)
+    roof = roof & faces.tagged(ROOF_ZONE, zone)
+    climbed = _climbed(faces, interior, roof)
     # ...and the cheeks of any opening cut through a wall it covers. They lie
     # *across* their wall's fall, so `wall_faces` calls them ends and neither
     # exterior nor interior could ever reach them: the membrane used to arrive
@@ -1075,13 +1174,23 @@ def facades_of(faces, system, fall):
     A brick street front and a rainscreen headhouse can face the same way and sit
     in different planes, so neither a compass direction nor a named plane can
     separate them — but the material can, and it is authored anyway.
+
+    Its one caller is now `check_facades`, and that is the whole of what the tag
+    claims. No skin is defined by it: the rainscreen is the residue
+    (`cladding_faces`) and a masonry takes the material off the **corniced host**
+    and grows (`masonry_faces`). The difference is the corner — this is per part,
+    so it hands a brick wall's ends to the brick and a rainscreen wall's ends to
+    the rainscreen, where an end belongs to the elevation it lands in and not to
+    the wall that presents it. That is right for asking *"is this wall's material
+    a system anyone builds"* and wrong for asking *"which skin covers this
+    face"*, which is why only the first question is asked here.
     """
     exterior, _ = wall_faces(faces, fall)
     return exterior & faces.tagged(FACADE, system)
 
 
-def masonry_faces(faces, fall):
-    """Masonry: every exterior facade of a wall a cornice finishes.
+def masonry_faces(faces, fall, system=None):
+    """Masonry: every exterior facade of a wall this masonry's cornice finishes.
 
     Duncan, 2026-08-26: *"A vertical exterior wall with a cornice at the top
     (excludes scupper cornices) is clad with a separate skin at a seeded
@@ -1123,26 +1232,35 @@ def masonry_faces(faces, fall):
     wall, *"the ends of the bricks will be exposed on both ends and not covered
     by metal cladding"*.
 
-    What this does **not** say is which masonry. Brick on a street front and
-    block on a firewall are two allowances and therefore two skins, and which a
-    wall takes is a material — authored on the part like every other cladding
-    system, never derived.
+    **Which masonry is the material, and it selects the host** — `system`, the
+    `FACADE` value of the corniced wall itself. Brick on a street front and block
+    on a firewall are two allowances and therefore two skins, and no property of
+    a wall's shape implies either. The whole-building bake poses both, which is
+    the condition `check_cladding` was written to name and this argument is the
+    answer to it (Duncan, 2026-08-28): `Parapet-Unit8-E` is stamped `brick` and
+    `Parapet-Deck9-N` `block`, and the two grown sets are 13 and 33 of the 46
+    faces the unfiltered rule claims — a partition, no face in both.
 
-    That join is **not made here, because nothing yet has two sides to join**:
-    every part of every substrate is stamped one system, and intersecting with
-    `Faces.tagged(FACADE, ...)` would empty this skin rather than select within
-    it. So the cornice alone selects the wall, and the material will select
-    *between* masonry skins the day a second allowance exists. Until then the
-    hole that leaves is guarded rather than left open — `check_cladding` raises
-    if the corniced walls of one substrate do not all carry the same system,
-    which is exactly the moment this predicate stops being enough (found on
-    review, 2026-08-26).
+    It is the **host's** material that selects, not each face's, and that is the
+    growth's own argument read again. A wall's end at a corner is a face on the
+    neighbouring elevation and is clad in whatever clads that elevation, so a
+    grown return carries the tag of a part clad in something else: 20 of the
+    firewall's 33 faces are ends of `L*-alleyback-W`, `L*-courtfacing-E` and
+    `Lobby-*`, every one of them stamped `rainscreen`. Filtering per face would
+    drop exactly those and leave them claimed by nobody.
+
+    `system=None` is **every** corniced wall whatever clads it, which is the set
+    `cladding_faces` subtracts and `check_cladding` reads: the rainscreen stops
+    where any masonry starts, without having to know how many masonries there
+    are.
     """
     exterior, _ = wall_faces(faces, fall)
     seed = np.zeros(len(faces.owner), dtype=bool)
     for index, part in enumerate(faces.parts):
         outward = part.metadata.get(TOP_CORNICE)
         if outward is None:
+            continue
+        if system is not None and part.metadata.get(FACADE) != system:
             continue
         seed |= (
             exterior
@@ -1223,6 +1341,13 @@ def facade_offsets(faces, fall, mine, keep, others):
 
     elsewhere = exterior & ~covers
     ids, _ = _plane_ids(faces.body)
+    # collected per plane before anything is written, the way `skin_offsets`
+    # collects, and for the same reason: two **neighbours** can name one plane.
+    # The loop used to assign as it went, so the last sibling in the list won
+    # and nothing said so -- tolerable while there were two other skins and one
+    # of them clad no facade, and not tolerable now there are five, two of them
+    # masonries at two allowances. Found on review, 2026-08-28
+    want: dict[int, float] = {}
     for other, distance in others:
         theirs = np.unique(ids[other(faces) & elsewhere])
         if not len(theirs):
@@ -1238,9 +1363,23 @@ def facade_offsets(faces, fall, mine, keep, others):
         # move by `mine` by definition -- a plane carrying one of those and a
         # neighbour's facade too still splits, and still raises, which is the
         # decision described above
-        offsets[np.isin(ids, theirs) & ~covers] = (
-            float(distance) if distance <= mine else 0.0
-        )
+        value = float(distance) if distance <= mine else 0.0
+        for plane in theirs.tolist():
+            if want.get(plane, value) != value:
+                on = ids == plane
+                raise ValueError(
+                    f"plane {np.round(faces.normals[on][0], 6).tolist()} at "
+                    f"{np.round(faces.centres[on][0], 4).tolist()} carries the facades "
+                    f"of two neighbouring cladding systems, which want {want[plane]} "
+                    f"and {value} m of it — one surface cannot be mitred onto two, so "
+                    f"decide which system finishes it rather than letting the order of "
+                    f"the skins decide"
+                )
+            want[plane] = value
+
+    for value in set(want.values()):
+        planes = [plane for plane, mitre in want.items() if mitre == value]
+        offsets[np.isin(ids, planes) & ~covers] = value
     return offsets
 
 
@@ -1461,6 +1600,39 @@ def check_facades(faces, fall, systems=CLADDING_SYSTEMS):
         )
 
 
+def check_roofs(faces, fall):
+    """Every roof face carrying the zone that says which membrane covers it.
+
+    The membrane is one skin per roof and `ROOF_ZONE` is what says which, so an
+    unstamped roof part is a roof with no membrane over it — and a silent one:
+    the fan-out in `skins` enumerates the values it *finds*, so a missing stamp
+    subtracts a zone from the build rather than failing it. That is the
+    silent-omission failure `check_facades` exists to stop, said about roofs, and
+    it is a fact about the **reader** rather than about the geometry: in this rig
+    `build.stamped` reads the `o` group name, in the student-house it is one read
+    of the IFC.
+
+    Asked of the *faces* the membrane would cover rather than of every part
+    classified `ROOF`, because one slab is a roof where the sky is over it and a
+    floor where the building is — see `_under_cover`. A floor slab wants no zone
+    and is not asked for one.
+    """
+    _, _, roof, _ = _rules(faces, fall)
+    bare = roof & ~np.array(
+        [part.metadata.get(ROOF_ZONE) is not None for part in faces.parts]
+    )[faces.owner]
+    if bare.any():
+        loose = sorted(
+            str(faces.parts[o].metadata.get("name", int(o) + 1))
+            for o in set(faces.owner[bare].tolist())
+        )
+        raise ValueError(
+            f"{int(bare.sum())} roof faces on part(s) {loose} carry no {ROOF_ZONE!r} — "
+            f"the membrane is one skin per roof and nothing says which roof this is, "
+            f"so it would be left with no membrane over it and nothing would say so"
+        )
+
+
 def check_cladding(faces, fall):
     """Every facade skinned by exactly one cladding skin, or raise.
 
@@ -1487,27 +1659,81 @@ def check_cladding(faces, fall):
     two-facade fixture in the tests poses a facade tagged for a system no skin
     builds, which is a legitimate thing to assert about the tag and a failure to
     assert about the skins.
+
+    Since 2026-08-28 there are **two** masonry skins, and three claims rather
+    than one. Every corniced wall carries a material one of them is built for;
+    no two of them claim one face; and a wall stamped with a masonry material is
+    reached by that masonry — the last being the claim the rainscreen stopped
+    being able to make when it became the residue.
     """
     exterior, _ = wall_faces(faces, fall)
     cladding = cladding_faces(faces, fall)
     masonry = masonry_faces(faces, fall)
 
-    # one masonry skin is one allowance, and `masonry_faces` selects on the
-    # cornice alone because no substrate yet carries two masonry systems to
-    # choose between. The day one does — the student-house has two corniced
-    # walls, brick at 0.150 and the firewall's block at 0.140 + 0.020 — both
-    # would land in this one skin at one offset, and `check_facades` would keep
-    # passing because neither tag is wrong. So the condition that makes the
-    # cornice insufficient is named here rather than discovered as geometry
-    systems = {
-        faces.parts[o].metadata.get(FACADE) for o in set(faces.owner[masonry].tolist())
-    }
-    if len(systems) > 1:
-        raise ValueError(
-            f"the walls a cornice finishes carry {sorted(map(str, systems))} — one "
-            f"masonry skin is one allowance, so a substrate posing two needs a skin "
-            f"each, selected on {FACADE!r} as well as on the cornice"
-        )
+    # one masonry skin is one allowance, and until 2026-08-28 `masonry_faces`
+    # selected on the cornice alone, because no substrate carried two masonry
+    # systems to choose between. The whole-building bake does — brick on the
+    # street front, the firewall's block on the mitoyen elevation — and the raise
+    # that stood here for that day is now the selector: `masonry_faces(system)`
+    # takes the material off the corniced host. What is left to check is that
+    # every such host names a masonry there is a skin for. An unstamped one is
+    # the silent-omission failure again: it would fall out of every masonry skin
+    # and, being corniced, out of the cladding too
+    for index, part in enumerate(faces.parts):
+        if part.metadata.get(TOP_CORNICE) is None:
+            continue
+        system = part.metadata.get(FACADE)
+        if system not in MASONRY_SYSTEMS:
+            raise ValueError(
+                f"{part.metadata.get('name', index + 1)} is finished by a cornice, so "
+                f"it is clad on its own account, but its {FACADE!r} is {system!r} and "
+                f"not one of {list(MASONRY_SYSTEMS)} — a corniced wall needs a masonry "
+                f"skin to select, and this one would be claimed by no skin at all"
+            )
+
+    # ...and that no face is claimed by two of them. Each is grown from its own
+    # hosts, and two elevations that ran into one another along a shared plane
+    # would be claimed twice — which one skin cannot see, and which is a surface
+    # asked for two allowances
+    mine = {system: masonry_faces(faces, fall, system) for system in MASONRY_SYSTEMS}
+    for one, other in ((s, t) for s in MASONRY_SYSTEMS for t in MASONRY_SYSTEMS if s < t):
+        both = mine[one] & mine[other]
+        if both.any():
+            raise ValueError(
+                f"{int(both.sum())} facade faces are claimed by the {one!r} and "
+                f"{other!r} masonry skins at once — two masonry systems have grown "
+                f"into one another along a shared plane, and one surface cannot take "
+                f"two allowances"
+            )
+    # What is deliberately **not** checked is that the per-system sets add up to
+    # the unfiltered one, and it took a review to see why: they cannot fail to.
+    # `_grow_coplanar` is a reachability closure over a fixed adjacency, so
+    # growing the union of the seeds is growing each and taking the union, and
+    # the loop above has already refused any host whose material is not one of
+    # `MASONRY_SYSTEMS`. A check that cannot fire is worse than none — it looks
+    # maintained — so what stands here instead is the sentence saying why.
+    # Found on review, 2026-08-28
+
+    # ...and a wall stamped with a masonry material is clad in it. This is the
+    # one claim the rainscreen stopped being able to make when it became the
+    # residue (see `cladding_faces`): a `brick` wall the cornice rule never
+    # reaches used to be claimed by neither skin and refused, where now the
+    # cladding takes it and nothing says so. The tag is an authored fact about
+    # the wall, so a wall whose material no skin honours is a substrate the
+    # rules cannot answer for -- most likely a cornice that is missing or is not
+    # flush with the top it finishes
+    for index, part in enumerate(faces.parts):
+        system = part.metadata.get(FACADE)
+        if system not in MASONRY_SYSTEMS:
+            continue
+        theirs = exterior & (faces.owner == index)
+        if theirs.any() and not (theirs & mine[system]).any():
+            raise ValueError(
+                f"{part.metadata.get('name', index + 1)} is stamped {system!r} but no "
+                f"face of it is claimed by that masonry skin, so it would be clad as "
+                f"rainscreen — `masonry_faces` reaches a facade from the cornice that "
+                f"finishes its wall, and this one is not reached by any"
+            )
 
     for mask, trouble in (
         (cladding & masonry, "claimed by both the cladding and the masonry skin"),
@@ -1528,7 +1754,25 @@ def check_cladding(faces, fall):
 
 
 def cladding_faces(faces, fall):
-    """Cladding: every rainscreen facade, plus every wall top it wraps over.
+    """Cladding: every facade no masonry claims, plus every wall top it wraps over.
+
+    **The rainscreen is the residue**, and it has to be. This read
+    `facades_of(faces, RAINSCREEN, fall)` while every part of every substrate was
+    stamped `rainscreen` and the two readings were identical; the day a wall is
+    stamped `brick` they part company at the corners. A wall's end is a face on
+    the neighbouring elevation, clad in whatever clads *that* elevation, and a
+    per-part tag cannot say so — so stamping the street front `brick` took its 20
+    return-ends out of `facades_of(RAINSCREEN)` and left them claimed by nobody,
+    7.795 m² of facade that `check_cladding` then refused as *"claimed by
+    neither"*. Reading the residue instead restores the cladding to exactly what
+    it was: 591.5588 m², 138 triangles, one fold, measured both ways on the
+    whole-building bake 2026-08-28. On a substrate where everything is rainscreen
+    it changes nothing at all, which is why the other four are bit-identical.
+
+    The `FACADE` tag has not stopped mattering — it is what selects *between*
+    masonry skins (`masonry_faces`) and what `check_facades` reads — but it is no
+    longer what defines this skin. What defines this skin is that it clads what
+    nothing else does.
 
     "Every wall top" includes the ones the membrane has already carried over, so
     a parapet coping belongs to **both** skins. That is deliberate (Duncan's
@@ -1579,7 +1823,7 @@ def cladding_faces(faces, fall):
     # parapet and out across the ledge, under the membrane -- which is not
     # somewhere a rainscreen goes. Duncan, 2026-08-27; the test is below
     cornice = faces.tagged(CORNICE, True)
-    _, _, roof, _ = _rules(faces, fall)
+    exterior, _, roof, _ = _rules(faces, fall)
     tops = _upward(faces.normals) & faces.of_role(substrate.WALL)
     # a ledge is `_rules`' own sentence read the other way round: an upward face
     # of a wall that is **thicker below the roof than above it**. Both halves are
@@ -1602,7 +1846,7 @@ def cladding_faces(faces, fall):
     ledges = _grow_coplanar(faces, tops & under & faces.touching(roof), tops)
     cheeks, floor = _opening(faces)
     base = (
-        (facades_of(faces, RAINSCREEN, fall) & ~masonry_faces(faces, fall))
+        (exterior & ~masonry_faces(faces, fall))
         | (tops & ~ledges)
         | (cheeks & faces.of_role(substrate.WALL))
     ) & ~cornice & ~floor
@@ -1650,19 +1894,29 @@ def cladding_laps(faces, fall):
     return interior
 
 
-# The face rules, keyed by skin name. Code, not numbers — this is the half of a
-# skin spec that cannot go in a parameter file, and the half `skinning/skin/` never learns.
+# The face rules, keyed by rule-set name. Code, not numbers — this is the half of
+# a skin spec that cannot go in a parameter file, and the half `skinning/skin/` never learns.
 # Two predicates, not four: `keep` is what the skin covers and `lap` is what it
 # may continue onto. The skirt/flange pair that used to sit here was one rule
 # split in two by hand — see `membrane_laps`.
+#
+# **`select` is the metadata key a rule set is instantiated on**, and it is what
+# lets one rule set be several skins. A membrane covers one roof and a masonry
+# clads one elevation's material, so each is a rule set plus a value: the
+# parameter file authors that value, and `skins` binds it into `keep` as it binds
+# `fall`. `None` is a rule set that is one skin however many of anything the
+# substrate has -- the rainscreen is the residue and there is one of it. Only
+# `keep` is bound: what a skin may lap **onto** is a fact about the receiving
+# face, not about which instance is doing the lapping, and the membrane's laps
+# came out bit-identical per zone with the candidate set left whole.
 RULES = {
-    "Membrane": {"keep": membrane_faces, "lap": membrane_laps},
-    "Cladding": {"keep": cladding_faces, "lap": cladding_laps},
+    "Membrane": {"keep": membrane_faces, "lap": membrane_laps, "select": ROOF_ZONE},
+    "Cladding": {"keep": cladding_faces, "lap": cladding_laps, "select": None},
     # `lap: None` -- a skin that genuinely stops where it ends. Masonry is
     # abstracted as a surface here and what it does at a termination is a
     # thickness question, deferred with the thickness. `skins()` reads the None
     # and leaves `drop` and `out` unread, so both are authored zero
-    "Masonry": {"keep": masonry_faces, "lap": None},
+    "Masonry": {"keep": masonry_faces, "lap": None, "select": FACADE},
 }
 
 
@@ -1676,6 +1930,21 @@ def classifier(params: dict):
     at the call site.
     """
     return partial(substrate.classify, **params["classify"])
+
+
+def _instance(predicate, value):
+    """One instance of a rule set: `predicate` with its `select` value supplied.
+
+    Bound **positionally**, so a rule set names the argument for what it is — the
+    roof zone a membrane covers, the material a masonry clads — rather than after
+    the metadata key `skins` read it from. What comes back has the
+    `(faces, fall)` signature every rule set has, which is what `_surveyed` and
+    everything downstream of it expect.
+    """
+    def keep(faces, fall):
+        return predicate(faces, fall, value)
+
+    return keep
 
 
 def _surveyed(predicate, fall):
@@ -1703,16 +1972,153 @@ def _surveyed(predicate, fall):
     return keep
 
 
-def skins(params: dict | None = None) -> tuple[dict, ...]:
-    """The skin specs: the authored numbers joined to `RULES` by name.
+# The parameter-file value that fans a rule set out over the substrate instead of
+# binding one instance of it. `select: '*'` says "one skin per value of this rule
+# set's key that the substrate actually carries" — three roofs here, one on the
+# rig — which is how three membranes are authored without authoring the numbers
+# three times. Three entries repeating one allowance would collide in
+# `check_seeds` as equal seeds, and rightly: they are one system on three roofs,
+# not three systems. A masonry, by contrast, binds a value: brick and block are
+# two allowances and so two entries, each with its own numbers.
+FANOUT = "*"
+
+
+def check_skins(params: dict | None = None) -> tuple[tuple[dict, dict], ...]:
+    """The authored skins read against `RULES`, with no substrate in sight.
+
+    Every raise the join can make, and none of the geometry it would otherwise
+    have to run first. `pipeline.run` calls this **before** `prepare`, because
+    `prepare` re-stamps `metadata["object"]` on the caller's parts and a
+    parameter file that fails the join should not have mutated a substrate on
+    its way to raising. `skins` then calls it again with the substrate in hand.
+
+    The join is a loud seam in both directions. A skin naming no rule set cannot
+    be built, and a rule set no skin names would otherwise sit there looking
+    maintained while emitting nothing — the silent-omission failure
+    `check_facades` exists to stop, one layer up.
+    """
+    params = parameters.resolve(params)
+    authored = [entry["name"] for entry in params["skins"]]
+    if len(set(authored)) != len(authored):
+        raise parameters.ParameterError(
+            f"parameter skins: duplicate name(s) in {authored} — a name is what the "
+            f"emitted mesh is called, so it has to identify exactly one skin"
+        )
+    stray = sorted({entry["rules"] for entry in params["skins"]} - set(RULES))
+    if stray:
+        raise parameters.ParameterError(
+            f"parameter skins.rules: {stray} name no rule set in RULES "
+            f"({sorted(RULES)}) — a skin's numbers cannot be built without its face "
+            f"rules"
+        )
+    unbuilt = [name for name in RULES if name not in {e["rules"] for e in params["skins"]}]
+    if unbuilt:
+        raise parameters.ParameterError(
+            f"parameter skins.rules: rule set(s) {unbuilt} are defined in RULES but "
+            f"named by no skin in the parameter file, so they would emit nothing"
+        )
+
+    pairs = []
+    for entry in params["skins"]:
+        rules = RULES[entry["rules"]]
+        # a rule set that instantiates on a tag needs a value to instantiate on,
+        # and one that does not cannot be given one. Both directions are the same
+        # mistake -- the file and the table disagreeing about what a skin is --
+        # and neither shows up as anything but a wrong selection later
+        if rules["select"] is None and entry["select"] is not None:
+            raise parameters.ParameterError(
+                f"parameter skins.{entry['name']}.select={entry['select']!r}: rule set "
+                f"{entry['rules']!r} takes no selector, so there is nothing for that "
+                f"value to select — write null"
+            )
+        if rules["select"] is not None and entry["select"] is None:
+            raise parameters.ParameterError(
+                f"parameter skins.{entry['name']}.select: rule set {entry['rules']!r} "
+                f"is instantiated per {rules['select']!r}, so a skin of it has to say "
+                f"which — a value, or {FANOUT!r} for one skin per value the substrate "
+                f"carries"
+            )
+        # a rule set may say `"lap": None` -- a skin that genuinely stops where it
+        # ends. `drop` and `out` are then unread, so the check below applies only
+        # to a skin that does lap: both zero would leave it stopping dead on every
+        # arris it reaches, which is the same thing said in two places
+        if rules["lap"] is not None and float(entry["drop"]) == float(entry["out"]) == 0.0:
+            raise parameters.ParameterError(
+                f"parameter skins.{entry['name']}: both drop and out are zero, so the "
+                f"skin has no lap in any direction and would stop dead on every arris "
+                f"it reaches — set one of them, or set the rule set's `lap` to None"
+            )
+        pairs.append((entry, rules))
+    return tuple(pairs)
+
+
+def _instances(pairs, faces):
+    """`(name, entry, rules, value)` per skin this substrate poses.
+
+    One per authored entry, except where the entry fans out: `select: '*'` is one
+    skin per value of the rule set's key that this substrate carries, named
+    `<entry>-<value>`. That is the only place the substrate decides how many
+    skins there are, and it is deliberate — a membrane is per roof, and how many
+    roofs there are is a fact about the building rather than about the numbers.
+    Sorted, so the build order of the zones is the same on every run.
+
+    A fan-out that finds **nothing** raises rather than quietly building no skin
+    of that rule set at all. On a substrate whose reader forgot to stamp, that is
+    the difference between a build that is short a membrane and one that says so.
+    """
+    instances = []
+    for entry, rules in pairs:
+        if entry["select"] != FANOUT:
+            instances.append((entry["name"], entry, rules, entry["select"]))
+            continue
+        if faces is None:
+            raise parameters.ParameterError(
+                f"parameter skins.{entry['name']}.select={FANOUT!r} is one skin per "
+                f"{rules['select']!r} the substrate carries, so it cannot be resolved "
+                f"without one — call `pipeline.run`, or pass `faces` to `skins`"
+            )
+        found = sorted(
+            {
+                value
+                for part in faces.parts
+                if (value := part.metadata.get(rules["select"])) is not None
+            }
+        )
+        if not found:
+            raise parameters.ParameterError(
+                f"parameter skins.{entry['name']}.select={FANOUT!r}: no part of this "
+                f"substrate carries {rules['select']!r}, so this rule set would build "
+                f"nothing — the reader that stamps it has not run, or has no answer"
+            )
+        instances += [(f"{entry['name']}-{value}", entry, rules, value) for value in found]
+
+    named = [name for name, *_ in instances]
+    if len(set(named)) != len(named):
+        raise parameters.ParameterError(
+            f"skins: {sorted(name for name in named if named.count(name) > 1)} is "
+            f"claimed by two skins once the fan-out is expanded — a skin's name is "
+            f"its filename, so rename the entry rather than the substrate's tag"
+        )
+    return instances
+
+
+def skins(params: dict | None = None, faces=None) -> tuple[dict, ...]:
+    """The skin specs: the authored numbers joined to `RULES`, over this substrate.
 
     One spec per skin, holding exactly what `skin_over` takes plus `name`,
     `display` and `close` — the last two are read by `build()`, not by the
     offset: one says how Blender shows the skin and the other how wide a tear
-    `skinning/skin/clean.py` may gusset. The predicates come out already bound to the authored `fall`, and
-    the classifier to the authored thresholds, so what `skinning/skin/` receives still has
-    the `Faces -> bool[nfaces]` and `part -> role` signatures it expects — the
+    `skinning/skin/clean.py` may gusset. The predicates come out already bound to
+    the authored `fall` and to this skin's own `select` value, and the classifier
+    to the authored thresholds, so what `skinning/skin/` receives still has the
+    `Faces -> bool[nfaces]` and `part -> role` signatures it expects — the
     parameter layer stops at this function and no geometry code sees a knob.
+
+    `faces` is what a fanned-out entry is expanded over (`select: '*'`, see
+    `_instances`); it may be left out entirely where nothing fans out, which is
+    every what-if that authors one skin per rule set. It is **not** used for
+    anything else: no geometry is read here, and the substrate cannot change a
+    number.
 
     `params` defaults to reading `skin-parameters.yaml`, the same way the
     student-house's loaders default their paths. It is an *argument* rather than
@@ -1720,34 +2126,14 @@ def skins(params: dict | None = None) -> tuple[dict, ...]:
     passed in at the call, which is the whole point of a full diffable copy.
 
     On migration this is where `topo["skin"]` arrives.
-
-    The name join is a loud seam, in both directions. A skin authored with no
-    rule set cannot be built, and a rule set no skin authors would otherwise sit
-    there looking maintained while emitting nothing — the silent-omission failure
-    `check_facades` exists to stop, one layer up.
     """
     params = parameters.resolve(params)
     fall = params["fall"]
     classify = classifier(params)
+    instances = _instances(check_skins(params), faces)
 
-    authored = [spec["name"] for spec in params["skins"]]
-    if len(set(authored)) != len(authored):
-        raise parameters.ParameterError(
-            f"parameter skins: duplicate name(s) in {authored} — a name is the join "
-            f"to RULES, so it has to identify exactly one skin"
-        )
-    stray = [name for name in authored if name not in RULES]
-    if stray:
-        raise parameters.ParameterError(
-            f"parameter skins: {stray} name no rule set in RULES ({sorted(RULES)}) — "
-            f"a skin's numbers cannot be built without its face rules"
-        )
-    unbuilt = [name for name in RULES if name not in authored]
-    if unbuilt:
-        raise parameters.ParameterError(
-            f"parameter skins: rule set(s) {unbuilt} are defined in RULES but named by "
-            f"no skin in the parameter file, so they would emit nothing"
-        )
+    def selected(predicate, value):
+        return _surveyed(predicate if value is None else _instance(predicate, value), fall)
 
     # every skin's own `keep`, bound, so each spec can be handed the *others* --
     # `facade_offsets` needs them to know which system dresses the facade it
@@ -1755,47 +2141,38 @@ def skins(params: dict | None = None) -> tuple[dict, ...]:
     # learns nothing but a predicate and a distance. `reveal` rides alongside it
     # into `skin_offsets`, which composes the two: a reveal is about the
     # substrate and needs no sibling at all
+    #
+    # ...and it is built over the **instances**, not the authored entries: two
+    # masonries meeting at a corner are each other's neighbouring system, and a
+    # fanned-out membrane's zones are each other's too
     bound = {
-        spec["name"]: (_surveyed(RULES[spec["name"]]["keep"], fall), spec["distance"])
-        for spec in params["skins"]
+        name: (selected(rules["keep"], value), entry["distance"])
+        for name, entry, rules, value in instances
     }
 
     specs = []
-    for spec in params["skins"]:
-        rules = RULES[spec["name"]]
-        # a rule set may say `"lap": None` -- a skin that genuinely stops where it
-        # ends. `drop` and `out` are then unread, so the check below applies only
-        # to a skin that does lap: both zero would leave it stopping dead on every
-        # arris it reaches, which is the same thing said in two places
-        if rules["lap"] is not None and float(spec["drop"]) == float(spec["out"]) == 0.0:
-            raise parameters.ParameterError(
-                f"parameter skins.{spec['name']}: both drop and out are zero, so the "
-                f"skin has no lap in any direction and would stop dead on every arris "
-                f"it reaches — set one of them, or set the rule set's `lap` to None"
-            )
+    for name, entry, rules, value in instances:
         specs.append(
             {
-                "name": spec["name"],
-                "distance": spec["distance"],
-                "drop": spec["drop"],
-                "out": spec["out"],
-                "base": spec["base"],
-                "close": spec["close"],
-                "display": spec["display"],
-                "keep": bound[spec["name"]][0],
+                "name": name,
+                "distance": entry["distance"],
+                "drop": entry["drop"],
+                "out": entry["out"],
+                "base": entry["base"],
+                "close": entry["close"],
+                "display": entry["display"],
+                "keep": bound[name][0],
                 "offsets": partial(
                     skin_offsets,
                     fall=fall,
-                    mine=spec["distance"],
+                    mine=entry["distance"],
                     reveal=params["reveal"],
-                    keep=bound[spec["name"]][0],
+                    keep=bound[name][0],
                     others=tuple(
-                        pair for name, pair in bound.items() if name != spec["name"]
+                        pair for other, pair in bound.items() if other != name
                     ),
                 ),
-                "lap": None
-                if rules["lap"] is None
-                else _surveyed(rules["lap"], fall),
+                "lap": None if rules["lap"] is None else _surveyed(rules["lap"], fall),
                 "classify": classify,
             }
         )

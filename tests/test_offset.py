@@ -12,6 +12,33 @@ PARAMS = parameters.load_validated()
 FALL = PARAMS["fall"]
 
 
+ZONE = "Fixture"  # a synthetic substrate has one roof, and it has to be named:
+# the membrane is authored `select: '*'`, one skin per `ROOF_ZONE` the substrate
+# carries, so a fixture that stamps none poses no membrane at all
+
+
+def _skins(parts, body=None):
+    """The skin specs over this substrate.
+
+    `skins` takes the `Faces` view as well as the numbers since 2026-08-28: the
+    membrane is authored `select: '*'`, one skin per roof zone, and only a
+    substrate can say how many that is. The rig stamps its own zone in
+    `build.current_substrate`; a fixture here stamps one through `_zoned`.
+    """
+    from skinning.rules import skins
+
+    return skins(PARAMS, _faces(parts, body))
+
+
+def _zoned(parts, zone=ZONE):
+    """`parts`, each stamped with the roof zone its membrane is named for."""
+    from skinning.rules import ROOF_ZONE
+
+    for part in parts:
+        part.metadata[ROOF_ZONE] = zone
+    return parts
+
+
 def _faces(parts, body=None):
     """`Faces` over the union of `parts`, with the authored classifier bound."""
     from skinning.rules import classifier
@@ -339,6 +366,46 @@ def _facing_wall(x0, x1, y0, y1, high, low):
     )
 
 
+def test_two_neighbouring_systems_cannot_both_claim_one_plane():
+    """The mitre is per plane, and two siblings cannot both name one.
+
+    `facade_offsets` assigned as it went until 2026-08-28, once per sibling skin
+    with no conflict test, so where one plane carried the facades of two
+    *different* neighbouring systems the last one in the list won and nothing
+    said so. That was tolerable while there were two siblings and one of them
+    clad no facade; it stopped being tolerable with six skins, two of them
+    masonries at two allowances.
+
+    No substrate here poses it — every OBJ is unchanged by the guard — so the
+    condition is posed directly, the same way the reveal-and-flush collision is:
+    two `others` naming one wall's facade at two distances. Found on review.
+    """
+    from skinning.rules import FACADE, RAINSCREEN, facade_offsets, wall_faces
+
+    ours, theirs = (
+        _facing_wall(0.0, 0.4, 0.0, 6.0, 3.0, 2.99),
+        _facing_wall(3.0, 3.4, 0.0, 6.0, 3.0, 2.99),
+    )
+    parts = _zoned([ours, theirs])
+    for part in parts:
+        part.metadata[FACADE] = RAINSCREEN
+    faces = _faces(parts)
+    exterior, _ = wall_faces(faces, FALL)
+    mine, neighbour = exterior & (faces.owner == 0), exterior & (faces.owner == 1)
+    assert mine.any() and neighbour.any()
+
+    # both siblings dress the neighbour's facade, and disagree about it
+    others = ((lambda f: neighbour, 0.085), (lambda f: neighbour, 0.150))
+    with pytest.raises(ValueError, match="two neighbouring cladding systems"):
+        facade_offsets(faces, FALL, 0.2, lambda f: mine, others)
+
+    # ...and agreeing is not a conflict: the same plane, the same answer
+    agreed = ((lambda f: neighbour, 0.085), (lambda f: neighbour, 0.085))
+    offsets = facade_offsets(faces, FALL, 0.2, lambda f: mine, agreed)
+    assert (offsets[neighbour] == 0.085).all()
+    assert (offsets[mine] == 0.2).all()
+
+
 def test_a_facade_s_cladding_system_comes_from_the_part_not_its_position():
     """Two facades facing the same way, at different setbacks, clad differently.
 
@@ -432,9 +499,10 @@ def test_the_masonry_runs_the_whole_face_below_a_cornice_not_one_lift():
     review, 2026-08-26 — the live bake cannot pose it, because its wall is one
     lift and its cap plate is coplanar with the cornice rather than the wall.
     """
-    from skinning.pipeline import _skin_from
+    from skinning.pipeline import _skin_from, covered
     from skinning.rules import (
-        FACADE, RAINSCREEN, TOP_CORNICE, cladding_faces, classifier, group_caps, group_cornices, masonry_faces, skins,
+        BRICK, FACADE, RAINSCREEN, TOP_CORNICE, cladding_faces, classifier, group_caps,
+        group_cornices, masonry_faces, skins,
     )
     from skinning.skin.offset import _owner
     from skinning.skin import parameters, substrate
@@ -444,10 +512,14 @@ def test_the_masonry_runs_the_whole_face_below_a_cornice_not_one_lift():
     panel = _stacked_box(0.0, 0.4, 0.0, 6.0, 0.0, 3.0)
     parapet = _stacked_box(0.0, 0.4, 0.0, 6.0, 3.0, 4.0, ztop=3.97)
     cornice = _stacked_box(-0.17, 0.0, 0.0, 6.0, 3.9, 4.0)
-    parts = [panel, parapet, cornice]
+    parts = _zoned([panel, parapet, cornice])
     for part, name in zip(parts, ("panel", "parapet", "cornice")):
-        part.metadata[FACADE] = RAINSCREEN
         part.metadata["name"] = name
+    # the wall the cornice finishes is clad in a masonry, and says which: the
+    # material is what selects between masonry skins. The band itself is clad by
+    # neither and carries no material, as `build.stamped` stamps none on one
+    panel.metadata[FACADE] = parapet.metadata[FACADE] = BRICK
+    cornice.metadata[FACADE] = RAINSCREEN
 
     group_cornices(parts)
     group_caps(parts, classifier(params))
@@ -463,11 +535,13 @@ def test_the_masonry_runs_the_whole_face_below_a_cornice_not_one_lift():
     assert not (masonry & cladding_faces(faces, params["fall"])).any()
 
     # ...and it builds, which is the point: one plane, one offset
-    for spec in skins(params):
+    for spec in skins(params, faces):
+        if not covered(spec, faces):
+            continue
         skin = _skin_from(spec, parts)
         assert skin.metadata["offset_residual"] < 1e-9
     masonry_skin = _skin_from(
-        next(s for s in skins(params) if s["name"] == "Masonry"), parts
+        next(s for s in skins(params, faces) if s["name"] == "Masonry-Brick"), parts
     )
     # the whole facade, ground to cornice underside, at the masonry allowance --
     # and its top stops `reveal` under the soffit rather than its own 150 mm,
@@ -497,26 +571,48 @@ def test_a_wall_corniced_on_two_faces_is_refused():
     assert wall.metadata[TOP_CORNICE] == (-1.0, 0.0, 0.0)
 
 
-def test_two_masonry_systems_on_one_substrate_are_refused():
-    """One masonry skin is one allowance. The student-house has two corniced
-    walls — brick and the firewall's block — and `masonry_faces` selects on the
-    cornice alone, so both would land in one skin at one offset while
-    `check_facades` kept passing, neither tag being wrong. Name the condition
-    that makes the cornice insufficient rather than meet it as geometry."""
-    from skinning.rules import BRICK, FACADE, RAINSCREEN, TOP_CORNICE, check_cladding
+def test_two_masonry_systems_on_one_substrate_are_two_skins():
+    """One masonry skin is one allowance, and a substrate posing two gets two.
+
+    This pinned a **raise** until 2026-08-28: `masonry_faces` selected on the
+    cornice alone, so brick and the firewall's block would have landed in one
+    skin at one offset while `check_facades` kept passing, neither tag being
+    wrong. The whole-building bake poses exactly that, so the condition the
+    raise named is now met rather than refused — the material on the corniced
+    wall selects which masonry claims it, and the two sets are disjoint.
+
+    What is still refused is a corniced wall whose material names no masonry
+    skin at all. That wall is clad on its own account by the cornice rule and by
+    nothing else, so it would fall out of every skin — including the rainscreen,
+    which subtracts the whole corniced set before taking the residue.
+    """
+    from skinning.rules import (
+        BLOCK, BRICK, FACADE, RAINSCREEN, TOP_CORNICE, check_cladding, masonry_faces,
+    )
 
     one = _facing_wall(0.0, 0.4, 0.0, 6.0, 3.0, 2.99)
     two = _facing_wall(3.0, 3.4, 1.0, 4.0, 4.0, 3.99)
-    for part, system in ((one, BRICK), (two, RAINSCREEN)):
+    for part, system in ((one, BRICK), (two, BLOCK)):
         part.metadata[FACADE] = system
         part.metadata[TOP_CORNICE] = (-1.0, 0.0, 0.0)
 
     parts = [one, two]
-    with pytest.raises(ValueError, match="one masonry skin is one allowance"):
-        check_cladding(_faces(parts), FALL)
+    faces = _faces(parts)
+    check_cladding(faces, FALL)  # two systems, two skins, and it passes
 
-    two.metadata[FACADE] = BRICK  # ...one system, and it builds
-    check_cladding(_faces(parts), FALL)
+    brick = masonry_faces(faces, FALL, BRICK)
+    block = masonry_faces(faces, FALL, BLOCK)
+    assert brick.any() and block.any()
+    assert not (brick & block).any()
+    # ...and between them they are the whole of what the cornice rule claims
+    assert ((brick | block) == masonry_faces(faces, FALL)).all()
+    # each takes its own wall, the material and not the geometry deciding
+    assert {parts[o].metadata[FACADE] for o in faces.owner[brick]} == {BRICK}
+    assert {parts[o].metadata[FACADE] for o in faces.owner[block]} == {BLOCK}
+
+    two.metadata[FACADE] = RAINSCREEN  # ...a corniced wall no masonry claims
+    with pytest.raises(ValueError, match="finished by a cornice"):
+        check_cladding(_faces(parts), FALL)
 
 
 def test_a_facade_no_cladding_skin_covers_is_refused():
@@ -531,6 +627,12 @@ def test_a_facade_no_cladding_skin_covers_is_refused():
 
     Stamping the wall the way `group_cornices` stamps one a cornice finishes is
     what puts it back in a skin — the same fixture, read by the other check.
+
+    The wording of the refusal moved on 2026-08-28 and the claim did not. The
+    rainscreen became the residue, so "claimed by neither" can no longer catch
+    this: the cladding would take a brick wall and say nothing. What catches it
+    instead is the tag read against the skins — a wall stamped with a masonry
+    material and reached by no masonry skin.
     """
     from skinning.rules import BRICK, FACADE, TOP_CORNICE, check_cladding, check_facades
 
@@ -542,7 +644,7 @@ def test_a_facade_no_cladding_skin_covers_is_refused():
     # the tag is happy: brick is a declared system and this wall carries it
     check_facades(faces, FALL, systems=(BRICK,))
     # the skins are not: no rule set in RULES claims a brick-tagged facade
-    with pytest.raises(ValueError, match="claimed by neither cladding skin"):
+    with pytest.raises(ValueError, match="stamped 'brick' but no face of it"):
         check_cladding(faces, FALL)
 
     front.metadata[TOP_CORNICE] = (-1.0, 0.0, 0.0)
@@ -581,17 +683,24 @@ def test_build_does_not_emit_the_substrate_unless_asked():
     # every skin the rig poses, which is not every skin authored: the masonry
     # needs a wall a cornice finishes and the rig has no cornice. `build` skips
     # it and says so -- see `build.covered`
-    assert set(roles) == {"Membrane", "Cladding"}
-    assert {s["name"] for s in skins()} - set(roles) == {"Masonry"}
+    assert set(roles) == {"Membrane-Rig", "Cladding"}
+    assert {s["name"] for s in _skins(parts)} - set(roles) == {
+        "Masonry-Brick", "Masonry-Firewall",
+    }
     assert set(roles.values()) == {"skin"}
     assert not list(build_module.BUILD_DIR.glob("Substrate_*.obj"))
 
     # a skin this run skipped must not leave last run's file in build/, holding
     # geometry offset from a different substrate. Found on review, 2026-08-26
-    stale = build_module.BUILD_DIR / "Masonry.obj"
-    stale.write_text("# left by an earlier bake that posed a cornice\n")
-    build(parts)
-    assert not stale.exists()
+    #
+    # ...and that reaches a name **no** parameter file and no rule set spells:
+    # a fanned-out rule set names its skins after the substrate's own zones, so
+    # a bake with other roofs in it writes files this run has never heard of
+    for name in ("Masonry-Brick.obj", "Membrane-Deck9.obj", "Masonry.obj"):
+        stale = build_module.BUILD_DIR / name
+        stale.write_text("# left by an earlier bake, of another substrate\n")
+        build(parts)
+        assert not stale.exists(), name
 
     opted_in = build(parts, emit_substrate=True)
     kinds = {e["role"] for e in opted_in}
@@ -646,7 +755,7 @@ def test_partial_skin_is_an_open_surface_with_constraints_intact():
 
     parts = current_substrate()
     body = trimesh.boolean.union(parts)
-    membrane = skins()[0]
+    membrane = _skins(parts)[0]
     surface = skin_over(parts, D, keep=membrane["keep"],
                         classify=membrane["classify"])
 
@@ -683,10 +792,10 @@ def test_a_drip_hangs_the_right_walls_to_the_right_depth():
     from skinning.rules import skins, wall_faces
     from skinning.skin.offset import _owner, _receivers
 
-    membrane = skins()[0]
-    drop = membrane["drop"]
     parts = current_substrate()
     body = trimesh.boolean.union(parts)
+    membrane = _skins(parts, body)[0]
+    drop = membrane["drop"]
     owner = _owner(body, parts)
     faces = _faces(parts, body)
 
@@ -730,7 +839,7 @@ def test_cladding_and_membrane_cover_complementary_walls_and_never_meet():
     parts = current_substrate()
     faces = _faces(parts)
 
-    membrane, cladding = skins()[:2]
+    membrane, cladding = _skins(parts)[:2]
     # the membrane climbs the interior walls and laps down the exterior; the
     # cladding does the reverse. The membrane may lap onto any vertical face,
     # so the discriminating direction is the cladding's
@@ -765,7 +874,7 @@ def test_both_skins_cover_the_coping_and_stack_rather_than_collide():
 
     parts = current_substrate()
     faces = _faces(parts)
-    membrane, cladding = skins()[:2]
+    membrane, cladding = _skins(parts)[:2]
 
     shared = membrane["keep"](faces) & cladding["keep"](faces)
     assert shared.any(), "the coping should be claimed by both skins"
@@ -823,7 +932,7 @@ def test_the_cladding_is_cut_at_its_datum_rather_than_clamped_to_it():
     from skinning.rules import skins
 
     parts = current_substrate()
-    cladding = skins()[1]
+    cladding = _skins(parts)[1]
     assert cladding["base"] == 0.0
 
     whole = dict(cladding, base=None)
@@ -893,7 +1002,7 @@ def test_a_datum_above_the_whole_skin_is_refused_at_the_seam():
 
     parts = current_substrate()
     with pytest.raises(ValueError, match=r"base=100.0 leaves nothing"):
-        _skin_from(dict(skins()[1], base=100.0), parts)
+        _skin_from(dict(_skins(parts)[1], base=100.0), parts)
 
 
 def test_a_skin_with_no_datum_is_not_trimmed():
@@ -905,7 +1014,7 @@ def test_a_skin_with_no_datum_is_not_trimmed():
     from skinning.rules import skins
 
     parts = current_substrate()
-    membrane = skins()[0]
+    membrane = _skins(parts)[0]
     assert membrane["base"] is None
 
     low = _skin_from(dict(membrane, base=1.5), parts)
@@ -1760,6 +1869,80 @@ def _stepped_parapet_over_a_roof():
     return [lift, parapet, roof]
 
 
+def test_a_membrane_per_roof_partitions_the_one_that_covered_both():
+    """Two roofs, two membranes, and between them exactly what one skin covered.
+
+    The split is the whole of Duncan's 2026-08-28 request, and what has to be
+    true of it is that it moves nothing: each zone covers its own roof and the
+    walls *that* roof runs into, no face is covered twice, and the two sets
+    together are what the unzoned rule selected. Posed on two of the stepped
+    parapets rather than on a bake, because the property is about the rule and
+    not about any building — the whole-building bake then checks the same thing
+    with three roofs in it and every other rule running.
+    """
+    from skinning.rules import ROOF_ZONE, membrane_faces, skins
+
+    parts = _stepped_parapet_over_a_roof()
+    other = _stepped_parapet_over_a_roof()
+    for part in other:
+        part.apply_translation((10.0, 0.0, 0.0))
+        # a second building, not a second body of the first: `Faces.elements`
+        # groups on the object name, and one wall in two places 10 m apart is
+        # exactly what `classify` refuses
+        part.metadata["object"] += "2"
+    parts += other
+    faces = _faces(_zoned(parts, "A"))
+
+    # one zone over both roofs is the rule as it stood before the split
+    whole = membrane_faces(faces, FALL, "A")
+    assert whole.any()
+
+    for part in other:
+        part.metadata[ROOF_ZONE] = "B"
+    a = membrane_faces(faces, FALL, "A")
+    b = membrane_faces(faces, FALL, "B")
+    assert a.any() and b.any()
+    assert not (a & b).any(), "a face is covered by two membranes"
+    assert ((a | b) == whole).all(), "the two zones are not the one skin, cut up"
+
+    # ...and each stays on its own building: the walls a zone climbs are the
+    # ones its own roof runs into, not the ones any roof does
+    assert (faces.centres[a][:, 0] < 5.0).all()
+    assert (faces.centres[b][:, 0] > 5.0).all()
+
+    # the parameter file authors one membrane; the substrate says how many
+    # skins that is, and names them after the zones it carries
+    names = [spec["name"] for spec in skins(PARAMS, faces)]
+    assert [n for n in names if n.startswith("Membrane")] == [
+        "Membrane-A", "Membrane-B",
+    ]
+
+
+def test_a_roof_with_no_zone_is_refused():
+    """An unstamped roof is a roof with no membrane over it, and a silent one.
+
+    The fan-out enumerates the zones it *finds*, so a missing stamp subtracts a
+    skin from the build rather than failing it — the silent omission
+    `check_facades` exists to stop, said about roofs. `check_roofs` is asked of
+    the faces the membrane would cover, not of every part that classifies
+    `ROOF`, because a floor slab is a roof only where the sky is over it.
+    """
+    from skinning.rules import ROOF_ZONE, check_roofs, skins
+
+    parts = _zoned(_stepped_parapet_over_a_roof())
+    faces = _faces(parts)
+    check_roofs(faces, FALL)  # stamped, and it passes
+
+    for part in parts:
+        del part.metadata[ROOF_ZONE]
+    with pytest.raises(ValueError, match="carry no 'roof_zone'"):
+        check_roofs(faces, FALL)
+    # ...and the fan-out itself refuses a substrate that carries no zone at all,
+    # rather than building no membrane and saying nothing
+    with pytest.raises(parameters.ParameterError, match="would build nothing"):
+        skins(PARAMS, faces)
+
+
 def test_a_wall_top_the_roof_runs_into_is_not_a_coping():
     """"Every wall top" meant every upward face of a wall, and a ledge is one.
 
@@ -1777,14 +1960,15 @@ def test_a_wall_top_the_roof_runs_into_is_not_a_coping():
     """
     from skinning.rules import _upward, cladding_faces, cladding_laps, membrane_faces
 
-    parts = _stepped_parapet_over_a_roof()
+    parts = _zoned(_stepped_parapet_over_a_roof())
     faces = _faces(parts, body=substrate.union(parts))
     up = _upward(faces.normals)
     ledge = up & (np.abs(faces.centres[:, 2] - 1.0) < 1e-6) & (faces.centres[:, 0] < 0.42)
     coping = up & (faces.centres[:, 2] > 1.9)
     assert ledge.any() and coping.any(), "the fixture poses neither"
 
-    clad, membrane = cladding_faces(faces, FALL), membrane_faces(faces, FALL)
+    clad = cladding_faces(faces, FALL)
+    membrane = membrane_faces(faces, FALL, ZONE)
     assert not (ledge & ~membrane).any(), "the membrane left the ledge bare"
     assert not (ledge & clad).any(), "the rainscreen ran out across the ledge"
     assert not (coping & ~clad).any() and not (coping & ~membrane).any(), (
@@ -1880,7 +2064,7 @@ def test_an_unsurveyed_wall_takes_no_skin_and_stops_the_facade_growing_across():
     # ...and the side wall faces +x, so its own facade is nowhere near the
     # join plane and the face it shows there is an end
     side = _laid_to_fall((8, 0, 0), (8.4, 4, 2), axis=0, low="lo")
-    parts = [front, join, side]
+    parts = _zoned([front, join, side])
     for part in parts:
         part.metadata[FACADE] = RAINSCREEN
     join.metadata[UNSURVEYED] = True
@@ -1908,7 +2092,7 @@ def test_an_unsurveyed_wall_takes_no_skin_and_stops_the_facade_growing_across():
     assert (cladding_faces(faces, FALL) & mine).any(), (
         "the rule no longer claims a wall top, so this asserts nothing"
     )
-    for spec in skins(PARAMS):
+    for spec in skins(PARAMS, faces):
         assert not spec["keep"](faces)[mine].any(), spec["name"]
 
 

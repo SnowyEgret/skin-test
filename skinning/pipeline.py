@@ -33,7 +33,10 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from .rules import check_cladding, check_facades, classifier, group_caps, group_cornices, skins
+from .rules import (
+    check_cladding, check_facades, check_roofs, check_skins, classifier, group_caps,
+    group_cornices, skins,
+)
 from .skin import parameters, skin_over, substrate
 from .skin.clean import clean
 from .skin.offset import Faces, _owner
@@ -86,6 +89,7 @@ def prepare(parts: list, params: dict) -> Faces:
     faces = Faces(body, parts, _owner(body, parts), classifier(params))
     check_facades(faces, params["fall"])
     check_cladding(faces, params["fall"])
+    check_roofs(faces, params["fall"])
     return faces
 
 
@@ -114,12 +118,15 @@ def run(parts: list, params: dict) -> tuple[Faces, Iterator[dict]]:
     `parameters.load_validated()`; the student-house passes `topo["skin"]`.
     """
     params = _params(params)
-    # the name join before any geometry: `skins` is where a parameter file and
-    # `RULES` are checked against each other, and it must fail before `prepare`
-    # re-stamps `metadata["object"]` on the caller's parts
-    specs = skins(params)
+    # the name join before any geometry: `check_skins` is where a parameter file
+    # and `RULES` are checked against each other, and it must fail before
+    # `prepare` re-stamps `metadata["object"]` on the caller's parts
+    check_skins(params)
     faces = prepare(parts, params)
-    return faces, _each(specs, faces, parts)
+    # ...and the specs themselves after it, because a rule set may be authored
+    # `select: '*'` -- one skin per roof, and how many roofs there are is a fact
+    # about the substrate. Everything the file says is already checked above
+    return faces, _each(skins(params, faces), faces, parts)
 
 
 def _each(specs, faces, parts):

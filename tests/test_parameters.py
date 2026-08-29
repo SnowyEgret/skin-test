@@ -17,7 +17,15 @@ def test_the_committed_file_is_valid_and_non_degenerate():
     """The regression check on the file itself, not on a fixture."""
     params = _params()
     assert {"classify", "fall", "reveal", "skins"} == set(params)
-    assert [s["name"] for s in params["skins"]] == ["Membrane", "Cladding", "Masonry"]
+    assert [s["name"] for s in params["skins"]] == [
+        "Membrane", "Cladding", "Masonry-Brick", "Masonry-Firewall",
+    ]
+    # ...and the join to `RULES` is `rules`, not the name: two masonries at two
+    # allowances are one rule set, and the membrane is one entry per building
+    assert [s["rules"] for s in params["skins"]] == [
+        "Membrane", "Cladding", "Masonry", "Masonry",
+    ]
+    assert [s["select"] for s in params["skins"]] == ["*", None, "brick", "block"]
 
 
 def test_a_missing_knob_is_refused_by_name():
@@ -98,7 +106,7 @@ def test_a_skin_with_no_rule_set_cannot_be_built():
     from skinning.rules import skins
 
     params = _params()
-    params["skins"][0]["name"] = "Parapet"
+    params["skins"][0]["rules"] = "Parapet"
     with pytest.raises(parameters.ParameterError, match="no rule set"):
         skins(params)
 
@@ -113,6 +121,48 @@ def test_a_rule_set_no_skin_names_is_refused():
         skins(params)
 
 
+def test_a_skin_and_its_rule_set_must_agree_about_the_selector():
+    """`select` is the one field the file and `RULES` both have an opinion on.
+
+    A rule set that is instantiated per tag needs a value to instantiate on, and
+    one that is not cannot be given one. Both directions are the same mistake —
+    the file and the table disagreeing about what a skin *is* — and neither shows
+    up later as anything but a wrong selection.
+    """
+    from skinning.rules import check_skins
+
+    params = _params()
+    params["skins"][1]["select"] = "brick"  # ...the cladding takes no selector
+    with pytest.raises(parameters.ParameterError, match="takes no selector"):
+        check_skins(params)
+
+    params = _params()
+    params["skins"][0]["select"] = None  # ...the membrane is one per roof zone
+    with pytest.raises(parameters.ParameterError, match="has to say"):
+        check_skins(params)
+
+
+def test_a_fanned_out_name_cannot_collide_with_an_authored_one():
+    """A skin's name is its filename, and the fan-out invents names.
+
+    `select: '*'` names one skin per zone as `<entry>-<zone>`, so a second entry
+    spelling that name outright would have two skins writing one file — and the
+    file check cannot see it, because one of the two names does not exist until a
+    substrate is in hand.
+    """
+    from build import current_substrate
+    from skinning.pipeline import prepare
+    from skinning.rules import skins
+
+    params = _params()
+    params["skins"].append(dict(params["skins"][0], name="Membrane-Rig", select="Rig"))
+    check = parameters.validate(params)
+    faces = prepare(current_substrate(), check)
+
+    with pytest.raises(parameters.ParameterError, match="claimed by two skins"):
+        skins(check, faces)
+
+
 def test_a_skin_that_cannot_lap_in_any_direction_is_refused():
     """`drop` and `out` are the two directions a lap can take. With both zero a
     skin would stop dead on every arris it reaches, which is a skin nobody asked
@@ -123,7 +173,7 @@ def test_a_skin_that_cannot_lap_in_any_direction_is_refused():
     the direction off the substrate, so a skin no longer declares which way it
     continues -- only how far, and a distance of zero switches that way off.
     """
-    from skinning.rules import skins
+    from skinning.rules import check_skins, skins
 
     params = _params()
     params["skins"][0]["drop"] = 0.0
@@ -131,10 +181,12 @@ def test_a_skin_that_cannot_lap_in_any_direction_is_refused():
     with pytest.raises(parameters.ParameterError, match="no lap in any direction"):
         skins(params)
 
-    # either one alone is fine: the cladding has no turn-out and never did
+    # either one alone is fine: the cladding has no turn-out and never did.
+    # `check_skins` rather than `skins`, because the membrane is authored
+    # `select: '*'` and only a substrate can say how many skins that is
     params = _params()
     params["skins"][1]["out"] = 0.0
-    assert skins(params)
+    assert check_skins(params)
 
 
 
@@ -181,17 +233,21 @@ def test_the_authored_numbers_actually_reach_the_geometry():
     """A parameter file nothing reads is worse than a constant. Change the offset
     in a copy and the built skin has to move by exactly that much."""
     from build import current_substrate
-    from skinning.pipeline import _skin_from
+    from skinning.pipeline import _skin_from, prepare
     from skinning.rules import skins
 
     parts = current_substrate()
     params = _params()
-    membrane = skins(params)[0]
+    # the membrane fans out over the substrate's roof zones, so the specs are
+    # read with it in hand -- one skin here, the rig having one roof
+    faces = prepare(parts, params)
+    membrane = skins(params, faces)[0]
+    assert membrane["name"] == "Membrane-Rig"
 
     louder = copy.deepcopy(params)
     louder["skins"][0]["distance"] = 0.037  # still a non-degenerate seed
     parameters.check_seeds(louder)
-    moved = skins(louder)[0]
+    moved = skins(louder, faces)[0]
 
     assert moved["distance"] == 0.037
     a = _skin_from(membrane, parts)
